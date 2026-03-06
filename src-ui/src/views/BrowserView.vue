@@ -94,7 +94,7 @@ const containerWidth = ref(0)
 const GAP = 16 // 间距
 const MIN_ITEM_WIDTH = 160 // 最小宽度
 const PADDING = 32 // 左右 padding 总和
-const INFO_HEIGHT = 60 // 文件名等信息区域高度
+const INFO_HEIGHT = 80 // 文件名等信息区域高度（包含标签区域）
 
 // 计算每行显示的列数
 const gridColumns = computed(() => {

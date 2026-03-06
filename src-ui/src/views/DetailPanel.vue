@@ -6,14 +6,16 @@
     
     <template v-else>
       <!-- 文件预览 -->
-      <div class="preview">
+      <div class="preview" :class="{ 'video-preview': selectedFile.type === 'video' }">
         <img
           v-if="selectedFile.type === 'image'"
           :src="previewUrl"
           :alt="selectedFile.name"
+          class="preview-media"
         />
         <video
           v-else-if="selectedFile.type === 'video'"
+          ref="videoRef"
           :key="previewUrl"
           :src="previewUrl"
           controls
@@ -21,6 +23,8 @@
           crossorigin="anonymous"
           playsinline
           @error="handleVideoError"
+          @loadedmetadata="onVideoLoaded"
+          class="preview-media video-element"
         />
         <div v-else class="icon-preview">
           <el-icon :size="64">
@@ -59,14 +63,6 @@
       <div class="tags-section">
         <div class="section-header">
           <h4>标签</h4>
-          <el-button
-            type="primary"
-            link
-            :icon="Edit"
-            @click="showTagDialog = true"
-          >
-            编辑
-          </el-button>
         </div>
         
         <div class="tag-list">
@@ -75,26 +71,38 @@
             :key="tag.id"
             :color="tag.color"
             effect="dark"
+            closable
+            @close="confirmRemoveTag(tag)"
+            class="file-tag"
           >
             {{ tag.name }}
           </el-tag>
+          <el-button
+            type="primary"
+            link
+            :icon="Plus"
+            @click="showTagDialog = true"
+            class="add-tag-btn"
+          >
+            添加
+          </el-button>
           <span v-if="!fileTags.length" class="no-tags">无标签</span>
         </div>
       </div>
 
       <!-- 操作按钮 -->
       <div class="actions">
-        <el-button type="primary" @click="openFile">
+        <el-button type="primary" class="action-btn" @click="openFile">
           <el-icon><FolderOpened /></el-icon>
           打开文件
         </el-button>
-        <el-button @click="openFolder">
+        <el-button class="action-btn" @click="openFolder">
           <el-icon><Folder /></el-icon>
           打开所在文件夹
         </el-button>
-        <el-button type="danger" plain @click="deleteFile">
+        <el-button type="danger" plain class="action-btn" @click="deleteFile">
           <el-icon><Delete /></el-icon>
-          删除记录
+          删除文件
         </el-button>
       </div>
     </template>
@@ -128,7 +136,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Document, Headset, Folder, FolderOpened, Delete, Edit } from '@element-plus/icons-vue'
+import { Document, Headset, Folder, FolderOpened, Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { open } from '@tauri-apps/plugin-shell'
 import { invoke } from '@tauri-apps/api/core'
@@ -142,6 +150,15 @@ const tagStore = useTagStore()
 
 const showTagDialog = ref(false)
 const selectedTagIds = ref<number[]>([])
+const videoRef = ref<HTMLVideoElement | null>(null)
+const videoAspectRatio = ref(16 / 9)
+
+function onVideoLoaded(event: Event) {
+  const video = event.target as HTMLVideoElement
+  if (video.videoWidth && video.videoHeight) {
+    videoAspectRatio.value = video.videoWidth / video.videoHeight
+  }
+}
 
 const selectedFile = computed(() => {
   return fileStore.selectedFiles[0]
@@ -205,13 +222,18 @@ async function openFile() {
 async function openFolder() {
   if (!selectedFile.value) return
   try {
-    const folderPath = selectedFile.value.path.substring(0, selectedFile.value.path.lastIndexOf('\\') + 1)
-    // 使用Tauri后端打开文件夹
-    await invoke('open_folder', { path: folderPath })
+    // 获取文件夹路径（处理Windows和Unix路径）
+    const path = selectedFile.value.path
+    const lastSlash = path.lastIndexOf('\\') > path.lastIndexOf('/') ? path.lastIndexOf('\\') : path.lastIndexOf('/')
+    const folderPath = lastSlash > 0 ? path.substring(0, lastSlash) : path
+    // 使用Tauri后端打开文件夹并选中文件
+    await invoke('open_folder', { path: folderPath, filePath: selectedFile.value.path })
   } catch (error) {
     console.error('Failed to open folder:', error)
     // 降级到前端shell打开
-    const folderPath = selectedFile.value.path.substring(0, selectedFile.value.path.lastIndexOf('\\') + 1)
+    const path = selectedFile.value.path
+    const lastSlash = path.lastIndexOf('\\') > path.lastIndexOf('/') ? path.lastIndexOf('\\') : path.lastIndexOf('/')
+    const folderPath = lastSlash > 0 ? path.substring(0, lastSlash) : path
     await open(folderPath)
   }
 }
@@ -220,15 +242,41 @@ async function deleteFile() {
   if (!selectedFile.value) return
   
   try {
-    await ElMessageBox.confirm('确定要删除此文件记录吗？', '确认删除', {
-      confirmButtonText: '删除',
+    await ElMessageBox.confirm('确定要将此文件移至回收站吗？', '确认删除', {
+      confirmButtonText: '移至回收站',
       cancelButtonText: '取消',
       type: 'warning',
     })
     
     await fileApi.delete(selectedFile.value.id)
     fileStore.removeFile(selectedFile.value.id)
-    ElMessage.success('删除成功')
+    ElMessage.success('文件已移至回收站')
+  } catch (error) {
+    // 用户取消
+  }
+}
+
+async function confirmRemoveTag(tag: { id: number; name: string; color?: string }) {
+  if (!selectedFile.value) return
+  
+  try {
+    await ElMessageBox.confirm(`确定要移除标签 "${tag.name}" 吗？`, '确认移除', {
+      confirmButtonText: '移除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    
+    // 从当前标签列表中移除
+    const newTagIds = selectedFile.value.tag_ids.filter(id => id !== tag.id)
+    
+    await fileApi.updateTags(selectedFile.value.id, {
+      tag_ids: newTagIds,
+      mode: 'replace',
+    })
+    fileStore.updateFileTags(selectedFile.value.id, newTagIds)
+    // 刷新标签列表以更新 file_count
+    await tagStore.loadTags()
+    ElMessage.success('标签已移除')
   } catch (error) {
     // 用户取消
   }
@@ -280,11 +328,21 @@ async function saveTags() {
   overflow: hidden;
 }
 
-.preview img,
-.preview video {
+.preview.video-preview {
+  aspect-ratio: v-bind('videoAspectRatio');
+  max-height: 400px;
+}
+
+.preview-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.preview-media.video-element {
+  object-fit: contain;
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
 }
 
 .icon-preview {
@@ -356,6 +414,16 @@ async function saveTags() {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+.file-tag {
+  cursor: default;
+}
+
+.add-tag-btn {
+  padding: 0 8px;
+  height: 28px;
 }
 
 .no-tags {
@@ -370,7 +438,17 @@ async function saveTags() {
   gap: 8px;
 }
 
-.actions .el-button {
+.action-btn {
+  width: 100%;
+  min-width: 100%;
   justify-content: flex-start;
+  box-sizing: border-box;
+  margin: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.actions .el-button + .el-button {
+  margin-left: 0;
 }
 </style>

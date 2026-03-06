@@ -215,11 +215,92 @@ async def delete_file(
     file_id: int,
     repo: Repo = Depends(get_repo),
 ):
-    """删除文件记录"""
+    """删除文件（移至回收站）"""
+    import platform
+    import subprocess
+    from pathlib import Path
+    
     file = repo.get_file_by_id(file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     
+    # 将文件移至回收站
+    file_path = Path(file.path)
+    if file_path.exists():
+        try:
+            system = platform.system()
+            if system == "Windows":
+                # Windows: 使用 PowerShell 移至回收站
+                import ctypes
+                from ctypes import wintypes
+                
+                # SHFileOperation constants
+                FO_DELETE = 0x0003
+                FOF_ALLOWUNDO = 0x0040
+                FOF_NOCONFIRMATION = 0x0010
+                FOF_SILENT = 0x0004
+                
+                class SHFILEOPSTRUCT(ctypes.Structure):
+                    _fields_ = [
+                        ("hwnd", wintypes.HWND),
+                        ("wFunc", wintypes.UINT),
+                        ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR),
+                        ("fFlags", wintypes.WORD),
+                        ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", wintypes.LPVOID),
+                        ("lpszProgressTitle", wintypes.LPCWSTR),
+                    ]
+                
+                shell32 = ctypes.windll.shell32
+                SHFileOperationW = shell32.SHFileOperationW
+                SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCT)]
+                SHFileOperationW.restype = wintypes.INT
+                
+                # 路径需要以双 null 结尾
+                path = str(file_path) + '\x00'
+                
+                op = SHFILEOPSTRUCT()
+                op.hwnd = None
+                op.wFunc = FO_DELETE
+                op.pFrom = path
+                op.pTo = None
+                op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
+                op.fAnyOperationsAborted = False
+                op.hNameMappings = None
+                op.lpszProgressTitle = None
+                
+                result = SHFileOperationW(ctypes.byref(op))
+                if result != 0:
+                    raise Exception(f"SHFileOperation failed with code {result}")
+                    
+            elif system == "Darwin":  # macOS
+                # macOS: 使用 osascript 移至废纸篓
+                script = f'tell application "Finder" to delete POSIX file "{file_path}"'
+                subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
+                
+            else:  # Linux
+                # Linux: 尝试使用 gio trash 或 trash-cli
+                try:
+                    subprocess.run(["gio", "trash", str(file_path)], check=True, capture_output=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    try:
+                        subprocess.run(["trash-put", str(file_path)], check=True, capture_output=True)
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        # 如果没有回收站工具，直接删除
+                        file_path.unlink()
+                        
+        except Exception as e:
+            # 如果移至回收站失败，记录错误但仍删除数据库记录
+            print(f"Warning: Failed to move file to recycle bin: {e}")
+            # 尝试直接删除文件
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as delete_error:
+                print(f"Warning: Failed to delete file: {delete_error}")
+    
+    # 删除数据库记录
     repo.delete_files([file_id])
     repo.session.commit()
     return {"success": True}

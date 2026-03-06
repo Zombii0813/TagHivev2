@@ -97,29 +97,64 @@ async fn open_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_folder(path: String) -> Result<(), String> {
+async fn open_folder(path: String, file_path: Option<String>) -> Result<(), String> {
     use std::process::Command;
     
-    log::info!("open_folder called: {}", path);
+    log::info!("open_folder called: {}, file: {:?}", path, file_path);
     
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+        // 如果提供了文件路径，使用 /select 参数打开并选中文件
+        if let Some(file) = file_path {
+            // 确保路径使用反斜杠（Windows标准格式）
+            let file_normalized = file.replace('/', "\\");
+            log::info!("Opening folder with file selection: {}", file_normalized);
+            Command::new("explorer")
+                .args(["/select,", &file_normalized])
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        } else {
+            let path_normalized = path.replace('/', "\\");
+            Command::new("explorer")
+                .arg(&path_normalized)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        }
     }
     
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+        // macOS: 使用 -R 参数在 Finder 中显示文件
+        if let Some(file) = file_path {
+            Command::new("open")
+                .args(["-R", &file])
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        } else {
+            Command::new("open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        }
     }
     
     #[cfg(target_os = "linux")]
     {
+        // Linux: 尝试使用 dbus-send 或其他工具显示文件
+        if let Some(file) = file_path {
+            // 尝试使用 xdg-open 打开文件夹，然后使用 dbus 选中文件
+            let _ = Command::new("dbus-send")
+                .args([
+                    "--session",
+                    "--dest=org.freedesktop.FileManager1",
+                    "--type=method_call",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems",
+                    format!("array:string:{}", file).as_str(),
+                    "string:"
+                ])
+                .spawn();
+        }
         Command::new("xdg-open")
             .arg(&path)
             .spawn()

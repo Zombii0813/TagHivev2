@@ -41,7 +41,7 @@
         </span>
       </div>
     </div>
-    <div v-if="file.tag_ids.length" class="tags-indicator">
+    <div class="tags-indicator">
       <span
         v-for="tagId in file.tag_ids.slice(0, 3)"
         :key="tagId"
@@ -254,6 +254,8 @@ function getTagColor(tagId: number): string {
   display: flex;
   gap: 4px;
   margin-top: 8px;
+  min-height: 8px;
+  align-items: center;
 }
 
 .tag-dot {
