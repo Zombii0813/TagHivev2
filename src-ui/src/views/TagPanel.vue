@@ -12,6 +12,30 @@
       </el-button>
     </div>
 
+    <!-- 过滤状态提示 -->
+    <div class="filter-status" :class="{ active: tagStore.hasSelection }">
+      <el-alert
+        :title="tagStore.hasSelection ? `已选择 ${tagStore.selectedTagIds.size} 个标签过滤` : '点击标签进行过滤'"
+        :type="tagStore.hasSelection ? 'info' : 'info'"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          <el-button
+            v-if="tagStore.hasSelection"
+            type="primary"
+            link
+            size="small"
+            :icon="Close"
+            @click="clearFilter"
+          >
+            清除过滤
+          </el-button>
+          <span v-else class="filter-hint">支持多选 (Ctrl+点击)</span>
+        </template>
+      </el-alert>
+    </div>
+
     <div class="tag-list" v-loading="tagStore.isLoading">
       <div
         v-for="tag in tagStore.tags"
@@ -54,26 +78,91 @@
         <el-button type="primary" @click="createTag">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 标签右键菜单 -->
+    <el-popover
+      :visible="contextMenuVisible"
+      :virtual-ref="contextMenuTrigger"
+      virtual-triggering
+      trigger="contextmenu"
+      placement="bottom-start"
+      :width="150"
+      @update:visible="onContextMenuVisibleChange"
+    >
+      <div class="context-menu">
+        <div class="context-menu-item" @click="editTag">
+          <el-icon><Edit /></el-icon>
+          <span>编辑标签</span>
+        </div>
+        <div class="context-menu-item delete" @click="confirmDeleteTag">
+          <el-icon><Delete /></el-icon>
+          <span>删除标签</span>
+        </div>
+      </div>
+    </el-popover>
+
+    <!-- 编辑标签对话框 -->
+    <el-dialog
+      v-model="showEditDialog"
+      title="编辑标签"
+      width="400px"
+    >
+      <el-form :model="editingTag" label-width="80px">
+        <el-form-item label="名称">
+          <el-input v-model="editingTag.name" placeholder="输入标签名称" />
+        </el-form-item>
+        <el-form-item label="颜色">
+          <el-color-picker v-model="editingTag.color" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input
+            v-model="editingTag.description"
+            type="textarea"
+            placeholder="可选描述"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveTagEdit">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, onMounted, nextTick } from 'vue'
+import { Plus, Close, Edit, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
+import { useAppStore } from '../stores/app'
 import type { Tag } from '../types'
 
 const tagStore = useTagStore()
 const fileStore = useFileStore()
+const appStore = useAppStore()
 
 const showCreateDialog = ref(false)
+const showEditDialog = ref(false)
 const newTag = ref({
   name: '',
   color: '#409EFF',
   description: '',
 })
+
+const editingTag = ref<Tag & { description?: string }>({
+  id: 0,
+  name: '',
+  color: '#409EFF',
+  description: '',
+  created_at: '',
+  file_count: 0,
+})
+
+const contextMenuVisible = ref(false)
+const contextMenuTrigger = ref<HTMLElement>()
+const selectedTag = ref<Tag | null>(null)
 
 onMounted(() => {
   tagStore.loadTags()
@@ -81,14 +170,44 @@ onMounted(() => {
 
 function handleTagClick(tagId: number, event: MouseEvent) {
   const multi = event.ctrlKey || event.metaKey
+  
+  // 检查是否点击的是已选中的标签
+  if (tagStore.selectedTagIds.has(tagId) && !multi) {
+    // 如果是已选中的标签且没有按多选键，则取消选择
+    tagStore.clearSelection()
+    // 重新搜索当前工作区的文件
+    if (appStore.currentWorkspace) {
+      fileStore.search({ root: appStore.currentWorkspace })
+    } else {
+      fileStore.search({})
+    }
+    return
+  }
+  
   tagStore.selectTag(tagId, multi)
   
   // 更新文件搜索
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
+      root: appStore.currentWorkspace || undefined,
       tags: Array.from(tagStore.selectedTagIds),
       match_all_tags: false,
     })
+  } else {
+    // 如果没有选中任何标签，搜索当前工作区
+    if (appStore.currentWorkspace) {
+      fileStore.search({ root: appStore.currentWorkspace })
+    } else {
+      fileStore.search({})
+    }
+  }
+}
+
+function clearFilter() {
+  tagStore.clearSelection()
+  // 重新搜索当前工作区的文件
+  if (appStore.currentWorkspace) {
+    fileStore.search({ root: appStore.currentWorkspace })
   } else {
     fileStore.search({})
   }
@@ -114,9 +233,94 @@ async function createTag() {
   }
 }
 
-function handleContextMenu(tag: Tag, event: MouseEvent) {
-  // 可以实现右键菜单
-  console.log('Context menu for tag:', tag)
+async function handleContextMenu(tag: Tag, event: MouseEvent) {
+  selectedTag.value = tag
+  
+  // 创建虚拟触发元素
+  const trigger = document.createElement('div')
+  trigger.style.position = 'fixed'
+  trigger.style.left = event.clientX + 'px'
+  trigger.style.top = event.clientY + 'px'
+  document.body.appendChild(trigger)
+  contextMenuTrigger.value = trigger as HTMLElement
+  
+  contextMenuVisible.value = true
+  
+  // 清理
+  await nextTick()
+  setTimeout(() => {
+    if (trigger.parentNode) {
+      document.body.removeChild(trigger)
+    }
+  }, 100)
+}
+
+function onContextMenuVisibleChange(val: boolean) {
+  contextMenuVisible.value = val
+}
+
+function editTag() {
+  if (!selectedTag.value) return
+  
+  editingTag.value = { ...selectedTag.value }
+  contextMenuVisible.value = false
+  showEditDialog.value = true
+}
+
+async function saveTagEdit() {
+  if (!editingTag.value.name.trim()) {
+    ElMessage.warning('请输入标签名称')
+    return
+  }
+  
+  try {
+    await tagStore.updateTag(editingTag.value.id, {
+      name: editingTag.value.name,
+      color: editingTag.value.color,
+      description: editingTag.value.description,
+    })
+    ElMessage.success('标签更新成功')
+    showEditDialog.value = false
+  } catch (error) {
+    ElMessage.error('标签更新失败')
+  }
+}
+
+async function confirmDeleteTag() {
+  if (!selectedTag.value) return
+  
+  const tag = selectedTag.value
+  contextMenuVisible.value = false
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除标签 "${tag.name}" 吗？${tag.file_count > 0 ? `该标签已关联 ${tag.file_count} 个文件。` : ''}`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    
+    await tagStore.deleteTag(tag.id)
+    
+    // 如果该标签正在被过滤，清除过滤
+    if (tagStore.selectedTagIds.has(tag.id)) {
+      tagStore.clearSelection()
+      if (appStore.currentWorkspace) {
+        fileStore.search({ root: appStore.currentWorkspace })
+      } else {
+        fileStore.search({})
+      }
+    }
+    
+    ElMessage.success('标签删除成功')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('标签删除失败')
+    }
+  }
 }
 </script>
 
@@ -141,6 +345,21 @@ function handleContextMenu(tag: Tag, event: MouseEvent) {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-secondary);
+}
+
+.filter-status {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.filter-status :deep(.el-alert) {
+  padding: 8px 12px;
+}
+
+.filter-status .filter-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }
 
 .tag-list {
@@ -188,5 +407,30 @@ function handleContextMenu(tag: Tag, event: MouseEvent) {
   background: var(--color-bg-tertiary);
   padding: 2px 6px;
   border-radius: 10px;
+}
+
+.context-menu {
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.context-menu-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.context-menu-item.delete {
+  color: var(--color-danger);
+}
+
+.context-menu-item.delete:hover {
+  background-color: var(--color-danger-light);
 }
 </style>

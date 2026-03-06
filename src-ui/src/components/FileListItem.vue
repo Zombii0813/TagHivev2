@@ -18,12 +18,12 @@
     
     <div class="tags">
       <span
-        v-for="tagId in file.tag_ids"
-        :key="tagId"
+        v-for="tag in tagsInfo"
+        :key="tag.id"
         class="tag-chip"
-        :style="{ backgroundColor: getTagColor(tagId) + '20', color: getTagColor(tagId) }"
+        :style="{ backgroundColor: tag.color + '20', color: tag.color }"
       >
-        {{ getTagName(tagId) }}
+        {{ tag.name }}
       </span>
     </div>
     
@@ -38,6 +38,7 @@
 import { Picture, Document, VideoCamera, Headset, Folder } from '@element-plus/icons-vue'
 import { useTagStore } from '../stores/tags'
 import type { FileItem } from '../types'
+import { computed } from 'vue'
 
 const props = defineProps<{
   file: FileItem
@@ -45,6 +46,18 @@ const props = defineProps<{
 }>()
 
 const tagStore = useTagStore()
+
+// 缓存标签信息，避免重复计算
+const tagsInfo = computed(() => {
+  return props.file.tag_ids.map(tagId => {
+    const tag = tagStore.getTagById(tagId)
+    return {
+      id: tagId,
+      name: tag?.name || 'Unknown',
+      color: tag?.color || '#ccc'
+    }
+  })
+})
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -57,16 +70,6 @@ function formatSize(bytes: number): string {
 function formatDate(timestamp: number | undefined): string {
   if (!timestamp) return '-'
   return new Date(timestamp * 1000).toLocaleDateString()
-}
-
-function getTagColor(tagId: number): string {
-  const tag = tagStore.getTagById(tagId)
-  return tag?.color || '#ccc'
-}
-
-function getTagName(tagId: number): string {
-  const tag = tagStore.getTagById(tagId)
-  return tag?.name || 'Unknown'
 }
 </script>
 

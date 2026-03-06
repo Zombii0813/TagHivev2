@@ -69,32 +69,32 @@ export const useAppStore = defineStore('app', () => {
     if (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       setTheme('dark')
     }
+
+    // 监听系统主题变化
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (e: MediaQueryListEvent) => {
+      if (!localStorage.getItem('taghive-theme')) {
+        setTheme(e.matches ? 'dark' : 'light')
+      }
+    }
+    
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange)
+    } else {
+      // 兼容旧浏览器
+      mediaQuery.addListener(handleChange)
+    }
   }
 
   async function selectFolder() {
     console.log('[app.ts] selectFolder called')
-    console.log('[app.ts] invoke function:', invoke)
-    console.log('[app.ts] typeof invoke:', typeof invoke)
-    
-    // 尝试使用全局 Tauri 对象作为回退
-    let invokeFn = invoke
-    if (typeof invoke !== 'function' && typeof window !== 'undefined' && (window as any).__TAURI__) {
-      console.log('[app.ts] Using global __TAURI__ object')
-      invokeFn = (window as any).__TAURI__.core.invoke
-    }
-    
-    if (typeof invokeFn !== 'function') {
-      console.error('[app.ts] invoke is not a function!')
-      throw new Error('invoke is not available')
-    }
     
     try {
-      console.log('[app.ts] invoking select_folder command')
-      const selected = await invokeFn('select_folder')
+      const selected = await invoke<string | null>('select_folder')
       console.log('[app.ts] select_folder returned:', selected)
       if (selected) {
-        setWorkspace(selected as string)
-        return selected as string
+        setWorkspace(selected)
+        return selected
       }
     } catch (error) {
       console.error('[app.ts] Failed to select folder:', error)

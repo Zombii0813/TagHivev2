@@ -104,6 +104,89 @@
 
 .tag-chip:hover {
   filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+/* 过渡动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-enter-from {
+  transform: translateX(-20px);
+  opacity: 0;
+}
+
+.slide-leave-to {
+  transform: translateX(20px);
+  opacity: 0;
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top: 2px solid var(--color-accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 脉冲动画 */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* 缩放动画 */
+.scale-enter-active,
+.scale-leave-active {
+  transition: transform 0.2s ease;
+}
+
+.scale-enter-from,
+.scale-leave-to {
+  transform: scale(0.95);
+  opacity: 0;
+}
+
+/* 文件卡片动画 */
+.file-card {
+  transition: all 0.2s ease;
+}
+
+.file-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.2);
+}
+
+.file-card.selected {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
 }
 
 /* 虚拟滚动 */
@@ -113,4 +196,92 @@
 
 .vue-recycle-scroller__item-wrapper {
   height: 100%;
+}
+
+/* 响应式断点 */
+@media (max-width: 1200px) {
+  :root {
+    --sidebar-width: 240px;
+    --detail-panel-width: 280px;
+  }
+}
+
+@media (max-width: 992px) {
+  :root {
+    --sidebar-width: 220px;
+    --detail-panel-width: 260px;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 200px;
+    --detail-panel-width: 240px;
+  }
+  
+  .main-layout {
+    flex-direction: column;
+  }
+  
+  .sidebar {
+    width: 100% !important;
+    height: auto;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+  
+  .sidebar-header {
+    border-bottom: none;
+    border-right: 1px solid var(--color-border);
+  }
+  
+  .content-area {
+    flex: 1;
+  }
+  
+  .toolbar-right {
+    gap: 8px;
+  }
+  
+  .scroller-container {
+    height: calc(100vh - var(--header-height) - 60px);
+  }
+}
+
+@media (max-width: 576px) {
+  :root {
+    --header-height: 44px;
+  }
+  
+  .toolbar-left {
+    gap: 8px;
+  }
+  
+  .search-bar {
+    width: 160px;
+  }
+  
+  .grid-view {
+    padding: 8px;
+  }
+  
+  .file-card {
+    padding: 8px;
+  }
+  
+  .scroller-container {
+    height: calc(100vh - var(--header-height) - 56px);
+  }
+}
+
+@media (max-width: 400px) {
+  .search-bar {
+    width: 120px;
+  }
+  
+  .toolbar-right .el-button-group {
+    display: none;
+  }
 }

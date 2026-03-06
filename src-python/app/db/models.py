@@ -32,6 +32,8 @@ class File(Base):
         Index("idx_files_name", "name"),  # 按文件名搜索
         Index("idx_files_path", "path"),  # 按路径查找
         Index("idx_files_modified_at", "modified_at"),  # 按修改时间排序
+        Index("idx_files_size", "size"),  # 按文件大小排序
+        Index("idx_files_updated_at", "updated_at"),  # 按更新时间排序
     )
 
 
@@ -47,6 +49,11 @@ class Tag(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     files = relationship("File", secondary="file_tags", back_populates="tags")
+
+    # 数据库索引优化 - 提升标签查询性能
+    __table_args__ = (
+        Index("idx_tags_name", "name"),  # 按标签名称搜索
+    )
 
 
 class FileTag(Base):

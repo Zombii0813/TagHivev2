@@ -14,8 +14,13 @@
         />
         <video
           v-else-if="selectedFile.type === 'video'"
+          :key="previewUrl"
           :src="previewUrl"
           controls
+          preload="metadata"
+          crossorigin="anonymous"
+          playsinline
+          @error="handleVideoError"
         />
         <div v-else class="icon-preview">
           <el-icon :size="64">
@@ -126,9 +131,11 @@ import { computed, ref, watch } from 'vue'
 import { Document, Headset, Folder, FolderOpened, Delete, Edit } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { open } from '@tauri-apps/plugin-shell'
+import { invoke } from '@tauri-apps/api/core'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import { fileApi } from '../api/files'
+import { thumbnailApi } from '../api/thumbnails'
 
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -142,13 +149,27 @@ const selectedFile = computed(() => {
 
 const previewUrl = computed(() => {
   if (!selectedFile.value) return ''
-  return `file://${selectedFile.value.path}`
+  // 图片使用缩略图API
+  if (selectedFile.value.type === 'image') {
+    return thumbnailApi.getThumbnailUrl(selectedFile.value.id, 'large')
+  }
+  // 视频使用原始文件URL
+  if (selectedFile.value.type === 'video') {
+    return thumbnailApi.getFileUrl(selectedFile.value.id)
+  }
+  return ''
 })
 
 const fileTags = computed(() => {
   if (!selectedFile.value) return []
   return tagStore.getTagsByIds(selectedFile.value.tag_ids)
 })
+
+function handleVideoError(event: Event) {
+  const video = event.target as HTMLVideoElement
+  console.error('Video error:', video.error)
+  ElMessage.error('视频加载失败，请检查文件是否存在')
+}
 
 watch(() => selectedFile.value, (file) => {
   if (file) {
@@ -170,15 +191,28 @@ function formatDate(timestamp: number | undefined): string {
 }
 
 async function openFile() {
-  if (selectedFile.value) {
+  if (!selectedFile.value) return
+  try {
+    // 使用Tauri后端打开文件
+    await invoke('open_file', { path: selectedFile.value.path })
+  } catch (error) {
+    console.error('Failed to open file:', error)
+    // 降级到前端shell打开
     await open(selectedFile.value.path)
   }
 }
 
 async function openFolder() {
-  if (selectedFile.value) {
-    const path = selectedFile.value.path.substring(0, selectedFile.value.path.lastIndexOf('\\') + 1)
-    await open(path)
+  if (!selectedFile.value) return
+  try {
+    const folderPath = selectedFile.value.path.substring(0, selectedFile.value.path.lastIndexOf('\\') + 1)
+    // 使用Tauri后端打开文件夹
+    await invoke('open_folder', { path: folderPath })
+  } catch (error) {
+    console.error('Failed to open folder:', error)
+    // 降级到前端shell打开
+    const folderPath = selectedFile.value.path.substring(0, selectedFile.value.path.lastIndexOf('\\') + 1)
+    await open(folderPath)
   }
 }
 
@@ -209,6 +243,8 @@ async function saveTags() {
       mode: 'replace',
     })
     fileStore.updateFileTags(selectedFile.value.id, selectedTagIds.value)
+    // 刷新标签列表以更新 file_count
+    await tagStore.loadTags()
     showTagDialog.value = false
     ElMessage.success('标签更新成功')
   } catch (error) {

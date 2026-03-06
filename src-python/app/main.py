@@ -82,7 +82,7 @@ def main():
     logger.info(f"Starting TagHive Sidecar on {host}:{port}")
     
     uvicorn.run(
-        "app.main:app",
+        "app.main:socket_app",
         host=host,
         port=port,
         reload=settings.debug,

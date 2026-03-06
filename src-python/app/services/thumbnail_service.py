@@ -15,12 +15,12 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
-# 缩略图配置
-DEFAULT_QUALITY = 80
+# 缩略图配置 - 统一使用正方形尺寸，保持所有缩略图大小一致
+DEFAULT_QUALITY = 85
 THUMBNAIL_SIZES = {
-    "small": (100, 100),
-    "medium": (200, 200),
-    "large": (400, 400),
+    "small": (120, 120),
+    "medium": (240, 240),
+    "large": (480, 480),
 }
 
 
@@ -82,27 +82,48 @@ class ThumbnailService:
             return None
     
     def _generate_image_thumbnail(
-        self, 
-        source: Path, 
+        self,
+        source: Path,
         target: Path,
         size: str
     ) -> Optional[str]:
-        """生成图片缩略图"""
+        """生成图片缩略图 - 统一为正方形，保持清晰度"""
         try:
             with Image.open(source) as img:
                 # 转换为 RGB（处理透明图片）
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
                 
-                # 计算缩略图尺寸
+                # 获取目标尺寸（正方形）
                 target_size = THUMBNAIL_SIZES.get(size, THUMBNAIL_SIZES["medium"])
-                img.thumbnail(target_size, Image.Resampling.LANCZOS)
+                target_width, target_height = target_size
+                
+                # 使用高质量缩放，保持原始宽高比
+                img.thumbnail((target_width * 2, target_height * 2), Image.Resampling.LANCZOS)
+                
+                # 创建正方形画布，使用黑色背景填充
+                final_img = Image.new("RGB", target_size, (32, 32, 32))
+                
+                # 计算居中位置
+                img_width, img_height = img.size
+                scale = min(target_width / img_width, target_height / img_height)
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                
+                # 高质量缩放
+                if new_width != img_width or new_height != img_height:
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # 粘贴到居中位置
+                offset_x = (target_width - new_width) // 2
+                offset_y = (target_height - new_height) // 2
+                final_img.paste(img, (offset_x, offset_y))
                 
                 # 保存
                 if self._is_webp_supported():
-                    img.save(target, "WEBP", quality=DEFAULT_QUALITY)
+                    final_img.save(target, "WEBP", quality=DEFAULT_QUALITY)
                 else:
-                    img.save(target, "JPEG", quality=DEFAULT_QUALITY)
+                    final_img.save(target, "JPEG", quality=DEFAULT_QUALITY)
                 
                 return f"file://{target}"
                 
@@ -111,24 +132,36 @@ class ThumbnailService:
             return None
     
     def _generate_video_thumbnail(
-        self, 
-        source: Path, 
+        self,
+        source: Path,
         target: Path,
         size: str
     ) -> Optional[str]:
-        """生成视频缩略图（使用 FFmpeg）"""
+        """生成视频缩略图（使用 FFmpeg）- 统一为正方形"""
         import subprocess
         
         try:
             target_size = THUMBNAIL_SIZES.get(size, THUMBNAIL_SIZES["medium"])
+            target_width, target_height = target_size
             
-            # 使用 FFmpeg 提取第一帧
+            # 使用 FFmpeg 提取第一帧，保持宽高比并填充到正方形
+            # scale=iw*min(w/iw\,h/ih):ih*min(w/iw\,h/ih) - 保持比例缩放
+            # pad=w:h:(ow-iw)/2:(oh-ih)/2 - 填充到目标尺寸并居中
+            vf_filter = (
+                f"scale='iw*min({target_width}/iw\,{target_height}/ih):"
+                f"ih*min({target_width}/iw\,{target_height}/ih)':"
+                f"force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:({target_width}-iw)/2:({target_height}-ih)/2:black"
+            )
+            
             cmd = [
                 "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
                 "-i", str(source),
                 "-ss", "00:00:01",  # 第1秒
                 "-vframes", "1",
-                "-vf", f"scale={target_size[0]}:{target_size[1]}:force_original_aspect_ratio=decrease",
+                "-vf", vf_filter,
                 "-y",
                 str(target)
             ]

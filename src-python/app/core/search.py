@@ -12,7 +12,7 @@ class SearchQuery:
         text: 搜索文本，支持通配符和 FTS5 语法
         root: 限制搜索路径前缀
         types: 文件类型元组，如 ('image', 'video')
-        tags: 标签名称元组
+        tags: 标签 ID 元组，如 (1, 2, 3)
         match_all_tags: 是否要求匹配所有标签（默认 OR）
         sort_by: 排序字段 ('name', 'size', 'type', 'created_at', 'updated_at', 'modified_at')
         sort_desc: 是否降序
@@ -21,7 +21,7 @@ class SearchQuery:
     text: str | None = None
     root: str | None = None
     types: tuple[str, ...] = ()
-    tags: tuple[str, ...] = ()
+    tags: tuple[int, ...] = ()
     match_all_tags: bool = False
     sort_by: str | None = None
     sort_desc: bool = False

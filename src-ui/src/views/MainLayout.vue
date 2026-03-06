@@ -9,7 +9,9 @@
         </h1>
       </div>
       
-      <TagPanel />
+      <div class="sidebar-content">
+        <TagPanel />
+      </div>
     </aside>
 
     <!-- 主内容区 -->
@@ -18,6 +20,7 @@
       <header class="toolbar">
         <div class="toolbar-left">
           <el-button
+            v-if="!isMobile"
             :icon="appStore.sidebarCollapsed ? Expand : Fold"
             circle
             @click="appStore.toggleSidebar()"
@@ -31,11 +34,13 @@
               :type="fileStore.viewMode === 'grid' ? 'primary' : ''"
               :icon="Grid"
               @click="fileStore.viewMode = 'grid'"
+              :title="'网格视图'"
             />
             <el-button
               :type="fileStore.viewMode === 'list' ? 'primary' : ''"
               :icon="List"
               @click="fileStore.viewMode = 'list'"
+              :title="'列表视图'"
             />
           </el-button-group>
           
@@ -43,9 +48,16 @@
             :icon="appStore.detailPanelVisible ? ArrowRight : ArrowLeft"
             circle
             @click="appStore.toggleDetailPanel()"
+            :title="appStore.detailPanelVisible ? '隐藏详情' : '显示详情'"
           />
           
-          <el-button :icon="Setting" circle @click="$router.push('/settings')" />
+          <el-button 
+            :icon="appStore.isDark ? Sunny : Moon" 
+            circle 
+            @click="appStore.toggleTheme()"
+            :title="appStore.isDark ? '切换到浅色模式' : '切换到深色模式'" 
+          />
+          <el-button :icon="Setting" circle @click="$router.push('/settings')" :title="'设置'" />
         </div>
       </header>
 
@@ -56,7 +68,10 @@
     </main>
 
     <!-- 详情面板 -->
-    <DetailPanel v-if="appStore.detailPanelVisible" />
+    <DetailPanel v-if="appStore.detailPanelVisible && !isMobile" />
+    
+    <!-- 批量操作面板 -->
+    <BatchOperations />
   </div>
 </template>
 
@@ -70,6 +85,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Setting,
+  Sunny,
+  Moon,
 } from '@element-plus/icons-vue'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
@@ -77,9 +94,28 @@ import TagPanel from './TagPanel.vue'
 import SearchBar from '../components/SearchBar.vue'
 import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
+import BatchOperations from '../components/BatchOperations.vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
+
+// 检测是否为移动设备
+const isMobile = ref(false)
+
+// 计算属性：根据屏幕宽度判断是否为移动设备
+const checkIsMobile = () => {
+  isMobile.value = window.innerWidth < 768
+}
+
+onMounted(() => {
+  checkIsMobile()
+  window.addEventListener('resize', checkIsMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkIsMobile)
+})
 </script>
 
 <style scoped>
@@ -97,6 +133,29 @@ const fileStore = useFileStore()
   border-right: 1px solid var(--color-border);
   background: var(--color-bg-secondary);
   transition: width 0.3s ease;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* 移动设备适配 */
+@media (max-width: 768px) {
+  .sidebar {
+    flex-direction: row;
+    height: 60px;
+  }
+  
+  .sidebar-content {
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  
+  .sidebar.collapsed {
+    width: 100% !important;
+  }
 }
 
 .sidebar.collapsed {

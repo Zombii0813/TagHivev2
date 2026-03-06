@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
+from pathlib import Path
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..core.indexer import FileMeta
 from ..core.search import SearchQuery, SearchResult
 from ..core.tag_manager import TagSpec
+from ..core.cache import SearchCache
 from .models import File, FileTag, FileSearch, Tag
 
 # 批量操作默认批次大小
@@ -24,11 +26,22 @@ class Repo:
     """
     
     session: Session
+    
+    def __post_init__(self):
+        """初始化后设置搜索缓存"""
+        self._search_cache = SearchCache()
+    
+    def clear_search_cache(self):
+        """清除搜索缓存"""
+        self._search_cache.clear()
 
     # ========== 文件操作 ==========
 
     def upsert_file(self, meta: FileMeta, existing_id: int | None = None) -> File:
         """插入或更新单个文件"""
+        # 统一使用 POSIX 路径格式
+        path_str = meta.path.as_posix()
+        
         existing = None
         if existing_id is not None:
             existing = self.session.execute(
@@ -36,12 +49,12 @@ class Repo:
             ).scalar_one_or_none()
         if existing is None:
             existing = self.session.execute(
-                select(File).where(File.path == str(meta.path))
+                select(File).where(File.path == path_str)
             ).scalar_one_or_none()
 
         if existing is None:
             file_row = File(
-                path=str(meta.path),
+                path=path_str,
                 name=meta.name,
                 ext=meta.ext,
                 size=meta.size,
@@ -50,6 +63,8 @@ class Repo:
                 modified_at=meta.modified_at,
             )
             self.session.add(file_row)
+            # 清除缓存
+            self.clear_search_cache()
             return file_row
 
         existing.name = meta.name  # type: ignore[assignment]
@@ -59,6 +74,8 @@ class Repo:
         existing.hash = meta.sha256  # type: ignore[assignment]
         existing.modified_at = meta.modified_at  # type: ignore[assignment]
         existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
+        # 清除缓存
+        self.clear_search_cache()
         return existing
 
     def bulk_upsert_files(
@@ -79,12 +96,15 @@ class Repo:
             results.extend(self._process_batch(batch))
             self.session.commit()
         
+        # 清除缓存
+        self.clear_search_cache()
         return results
 
     def _process_batch(self, batch: list[FileMeta]) -> list[File]:
         """处理一批文件元数据"""
         results: list[File] = []
-        paths = [str(m.path) for m in batch]
+        # 统一使用 POSIX 路径格式
+        paths = [m.path.as_posix() for m in batch]
         
         existing_files = {
             f.path: f
@@ -94,7 +114,7 @@ class Repo:
         }
         
         for meta in batch:
-            path_str = str(meta.path)
+            path_str = meta.path.as_posix()
             if path_str in existing_files:
                 file_row = existing_files[path_str]
                 file_row.name = meta.name  # type: ignore[assignment]
@@ -130,7 +150,9 @@ class Repo:
 
     def get_file_by_path(self, path: str) -> File | None:
         """通过路径获取文件"""
-        return self.session.execute(select(File).where(File.path == path)).scalar_one_or_none()
+        # 统一使用 POSIX 路径格式
+        posix_path = Path(path).as_posix()
+        return self.session.execute(select(File).where(File.path == posix_path)).scalar_one_or_none()
 
     def get_file_by_id(self, file_id: int) -> File | None:
         """通过 ID 获取文件"""
@@ -150,12 +172,37 @@ class Repo:
             return
         self.session.execute(delete(FileTag).where(FileTag.file_id.in_(file_ids)))
         self.session.execute(delete(File).where(File.id.in_(file_ids)))
+        # 清除缓存
+        self.clear_search_cache()
 
     # ========== 标签操作 ==========
 
     def list_tags(self) -> list[Tag]:
         """获取所有标签列表"""
-        return list(self.session.execute(select(Tag)).scalars())
+        # 获取所有标签
+        stmt = select(Tag)
+        tags = list(self.session.execute(stmt).scalars())
+        
+        # 批量获取每个标签的文件数量
+        if tags:
+            tag_ids = [tag.id for tag in tags]
+            count_stmt = (
+                select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
+                .where(FileTag.tag_id.in_(tag_ids))
+                .group_by(FileTag.tag_id)
+            )
+            count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
+            
+            # 将文件数量设置到标签对象上（用于序列化）
+            for tag in tags:
+                tag._file_count = count_results.get(tag.id, 0)
+        
+        return tags
+    
+    def get_tag_file_count(self, tag_id: int) -> int:
+        """获取标签关联的文件数量"""
+        stmt = select(func.count(FileTag.file_id)).where(FileTag.tag_id == tag_id)
+        return self.session.execute(stmt).scalar() or 0
 
     def get_tag_by_name(self, name: str) -> Tag | None:
         """通过名称获取标签"""
@@ -165,6 +212,8 @@ class Repo:
         """创建新标签"""
         tag = Tag(name=spec.name, color=spec.color, description=spec.description)
         self.session.add(tag)
+        # 清除缓存
+        self.clear_search_cache()
         return tag
 
     def get_or_create_tag(self, spec: TagSpec) -> Tag:
@@ -180,15 +229,22 @@ class Repo:
         tag = self.session.execute(select(Tag).where(Tag.id == tag_id)).scalar_one_or_none()
         if tag is not None:
             self.session.delete(tag)
+        # 清除缓存
+        self.clear_search_cache()
 
     # ========== 文件-标签关联操作 ==========
 
     def attach_tags(self, file_row: File, tags: Iterable[Tag]) -> None:
         """为文件添加标签（跳过已存在的）"""
         existing = {tag.id for tag in file_row.tags}
+        added = False
         for tag in tags:
             if tag.id not in existing:
                 file_row.tags.append(tag)
+                added = True
+        if added:
+            # 清除缓存
+            self.clear_search_cache()
 
     def attach_tags_to_files(
         self, file_ids: Iterable[int], tag_ids: Iterable[int], batch_size: int = DEFAULT_BATCH_SIZE
@@ -221,20 +277,32 @@ class Repo:
         
         if new_associations:
             self.session.execute(FileTag.__table__.insert(), new_associations)
+            # 清除缓存
+            self.clear_search_cache()
 
     def detach_all_tags(self, file_row: File) -> None:
         """移除文件的所有标签"""
-        file_row.tags.clear()
+        if file_row.tags:
+            file_row.tags.clear()
+            # 清除缓存
+            self.clear_search_cache()
 
     def remove_tag_from_file(self, file_row: File, tag: Tag) -> None:
         """从文件移除单个标签"""
         if tag in file_row.tags:
             file_row.tags.remove(tag)
+            # 清除缓存
+            self.clear_search_cache()
 
     # ========== 搜索功能 ==========
 
     def search(self, query: SearchQuery, limit: int | None = None) -> list[SearchResult]:
         """文件搜索 - 支持多种搜索条件"""
+        # 检查缓存
+        cached_results = self._search_cache.get(query)
+        if cached_results:
+            return cached_results
+
         stmt = select(File)
 
         # 文本搜索
@@ -252,22 +320,24 @@ class Repo:
 
         # 路径前缀过滤
         if query.root:
-            root = query.root.rstrip("/\\") + "%"
-            stmt = stmt.where(File.path.like(root))
+            # 统一使用 POSIX 路径格式进行匹配
+            root_posix = Path(query.root).as_posix()
+            root_pattern = root_posix.rstrip("/") + "/%"
+            stmt = stmt.where(File.path.like(root_pattern))
 
         # 文件类型过滤
         if query.types:
             stmt = stmt.where(File.type.in_(query.types))
 
-        # 标签过滤
+        # 标签过滤（使用标签 ID）
         if query.tags:
             stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
                 Tag, Tag.id == FileTag.tag_id
             )
-            stmt = stmt.where(Tag.name.in_(query.tags))
+            stmt = stmt.where(Tag.id.in_(query.tags))
             if query.match_all_tags:
                 stmt = stmt.group_by(File.id).having(
-                    func.count(func.distinct(Tag.name)) == len(query.tags)
+                    func.count(func.distinct(Tag.id)) == len(query.tags)
                 )
             else:
                 stmt = stmt.distinct()
@@ -286,7 +356,7 @@ class Repo:
         if limit is not None:
             stmt = stmt.limit(limit)
 
-        return [
+        results = [
             SearchResult(
                 file_id=int(row.id),
                 path=str(row.path),
@@ -295,6 +365,10 @@ class Repo:
             )
             for row in self.session.execute(stmt).scalars()
         ]
+
+        # 缓存结果
+        self._search_cache.set(query, results)
+        return results
 
     def _has_fts5(self) -> bool:
         """检查 FTS5 扩展是否可用"""

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List
+from mimetypes import guess_type
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_session, Repo
@@ -44,17 +46,13 @@ def get_repo(db: Session = Depends(get_db)) -> Repo:
 
 # ========== 文件相关 API ==========
 
-@router.get("/files", response_model=SearchResultDTO)
-async def search_files(
-    query: SearchQueryDTO,
-    repo: Repo = Depends(get_repo),
-):
-    """搜索文件"""
+def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
+    """构建搜索结果"""
     search_query = SearchQuery(
         text=query.text,
         root=query.root,
         types=tuple(query.types) if query.types else (),
-        tags=tuple(str(t) for t in query.tags) if query.tags else (),
+        tags=tuple(query.tags) if query.tags else (),
         match_all_tags=query.match_all_tags,
         sort_by=query.sort_by,
         sort_desc=query.sort_desc,
@@ -95,6 +93,24 @@ async def search_files(
         total=total,
         has_more=end < total,
     )
+
+
+@router.get("/files", response_model=SearchResultDTO)
+async def search_files_get(
+    query: SearchQueryDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """搜索文件 (GET)"""
+    return _build_search_result(query, repo)
+
+
+@router.post("/files", response_model=SearchResultDTO)
+async def search_files_post(
+    query: SearchQueryDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """搜索文件 (POST)"""
+    return _build_search_result(query, repo)
 
 
 @router.get("/files/{file_id}", response_model=FileDTO)
@@ -152,6 +168,48 @@ async def update_file_tags(
     return {"success": True}
 
 
+@router.get("/files/{file_id}/preview")
+async def get_file_preview(
+    file_id: int,
+    repo: Repo = Depends(get_repo),
+):
+    """获取文件预览（用于视频播放）"""
+    file = repo.get_file_by_id(file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(file.path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    # 猜测 MIME 类型
+    mime_type, _ = guess_type(file.path)
+    
+    # 根据文件扩展名设置默认 MIME 类型
+    if not mime_type:
+        ext = file.ext.lower() if file.ext else ''
+        mime_mapping = {
+            '.mp4': 'video/mp4',
+            '.webm': 'video/webm',
+            '.ogg': 'video/ogg',
+            '.mov': 'video/quicktime',
+            '.avi': 'video/x-msvideo',
+            '.mkv': 'video/x-matroska',
+            '.flv': 'video/x-flv',
+        }
+        mime_type = mime_mapping.get(ext, 'application/octet-stream')
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type=mime_type,
+        filename=file.name,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+
 @router.delete("/files/{file_id}")
 async def delete_file(
     file_id: int,
@@ -177,7 +235,8 @@ async def list_tags(
     tags = repo.list_tags()
     result = []
     for tag in tags:
-        file_count = len(tag.files)
+        # 使用动态属性 _file_count（由 list_tags 方法设置）
+        file_count = getattr(tag, '_file_count', 0)
         result.append(TagDTO(
             id=tag.id,
             name=tag.name,

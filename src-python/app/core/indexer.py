@@ -52,14 +52,14 @@ def build_file_meta_from_entry(
 
 
 def iter_files(root: Path) -> Iterable[Path]:
-    stack = [root]
+    stack = [str(root)]
     while stack:
         current = stack.pop()
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
                     if entry.is_dir(follow_symlinks=False):
-                        stack.append(Path(entry.path))
+                        stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
                         yield Path(entry.path)
         except OSError:
@@ -67,14 +67,14 @@ def iter_files(root: Path) -> Iterable[Path]:
 
 
 def iter_file_entries(root: Path) -> Iterable[os.DirEntry]:
-    stack = [root]
+    stack = [str(root)]
     while stack:
         current = stack.pop()
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
                     if entry.is_dir(follow_symlinks=False):
-                        stack.append(Path(entry.path))
+                        stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
                         yield entry
         except OSError:

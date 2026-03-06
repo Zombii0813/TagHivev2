@@ -1,15 +1,10 @@
-use std::process::Stdio;
 use std::sync::Arc;
 use tauri::async_runtime::Mutex;
-use tauri::{Manager, Runtime, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tauri::{Manager, State};
 
-pub mod sidecar;
-
+mod sidecar;
 use sidecar::PythonSidecar;
 
-/// 应用状态
 pub struct AppState {
     pub sidecar: Arc<Mutex<Option<PythonSidecar>>>,
 }
@@ -22,31 +17,26 @@ impl AppState {
     }
 }
 
-/// 启动 Python Sidecar
 #[tauri::command]
-pub async fn start_sidecar(
+async fn cmd_start_sidecar(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<u16, String> {
     let mut sidecar_guard = state.sidecar.lock().await;
     
     if let Some(ref sidecar) = *sidecar_guard {
-        // 如果已经启动，返回当前端口
         return Ok(sidecar.port);
     }
     
-    // 创建新的 sidecar
     let sidecar = PythonSidecar::start(&app).map_err(|e| e.to_string())?;
     let port = sidecar.port;
-    
     *sidecar_guard = Some(sidecar);
     
     Ok(port)
 }
 
-/// 停止 Python Sidecar
 #[tauri::command]
-pub async fn stop_sidecar(state: State<'_, AppState>) -> Result<(), String> {
+async fn cmd_stop_sidecar(state: State<'_, AppState>) -> Result<(), String> {
     let mut sidecar_guard = state.sidecar.lock().await;
     
     if let Some(sidecar) = sidecar_guard.take() {
@@ -56,25 +46,89 @@ pub async fn stop_sidecar(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// 选择文件夹
 #[tauri::command]
-pub async fn select_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn select_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     
     log::info!("select_folder called");
     
-    let folder = app
-        .dialog()
+    let folder = app.dialog()
         .file()
-        .pick_folder()
-        .await;
+        .blocking_pick_folder();
     
-    log::info!("folder selected: {:?}", folder);
+    let result = folder.map(|p| p.into_path().map(|path| path.to_string_lossy().to_string()).ok())
+        .flatten();
+    log::info!("folder selected: {:?}", result);
     
-    Ok(folder.map(|p| p.to_string()))
+    Ok(result)
 }
 
-/// 运行应用
+#[tauri::command]
+async fn open_file(path: String) -> Result<(), String> {
+    use std::process::Command;
+    
+    log::info!("open_file called: {}", path);
+    
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    use std::process::Command;
+    
+    log::info!("open_folder called: {}", path);
+    
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -82,17 +136,27 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
-            start_sidecar,
-            stop_sidecar,
+            cmd_start_sidecar,
+            cmd_stop_sidecar,
             select_folder,
+            open_file,
+            open_folder,
         ])
         .setup(|app| {
-            // 应用启动时自动启动 sidecar
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state: State<'_, AppState> = app_handle.state();
-                if let Err(e) = start_sidecar(state, app_handle).await {
-                    eprintln!("Failed to start sidecar: {}", e);
+                let mut sidecar_guard = state.sidecar.lock().await;
+                
+                if sidecar_guard.is_none() {
+                    match PythonSidecar::start(&app_handle) {
+                        Ok(sidecar) => {
+                            *sidecar_guard = Some(sidecar);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to start sidecar: {}", e);
+                        }
+                    }
                 }
             });
             

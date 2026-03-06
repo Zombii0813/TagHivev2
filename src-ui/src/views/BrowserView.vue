@@ -11,38 +11,51 @@
 
     <!-- 文件列表 -->
     <template v-else>
-      <RecycleScroller
-        v-if="fileStore.viewMode === 'grid'"
-        class="scroller grid-view"
-        :items="fileStore.files"
-        :item-size="200"
-        :grid-items="gridItems"
-        key-field="id"
-        v-slot="{ item }"
-      >
-        <FileCard
-          :file="item"
-          :selected="fileStore.selectedIds.has(item.id)"
-          @click="handleFileClick(item.id, $event)"
-          @dblclick="handleFileDblClick(item)"
-        />
-      </RecycleScroller>
+      <div ref="scrollerRef" class="scroller-container">
+        <!-- Grid 模式 - 使用 CSS Grid 布局 -->
+        <RecycleScroller
+          v-if="fileStore.viewMode === 'grid'"
+          class="scroller grid-view"
+          :items="gridRows"
+          :item-size="gridItemHeight"
+          key-field="rowIndex"
+          v-slot="{ item: row }"
+        >
+          <div class="grid-row" :style="gridRowStyle">
+            <div
+              v-for="file in row.files"
+              :key="file.id"
+              class="grid-cell"
+              :style="gridCellStyle"
+            >
+              <FileCard
+                :file="file"
+                :selected="fileStore.selectedIds.has(file.id)"
+                :size="gridItemWidth"
+                @click="handleFileClick(file.id, $event)"
+                @dblclick="handleFileDblClick(file)"
+              />
+            </div>
+          </div>
+        </RecycleScroller>
 
-      <RecycleScroller
-        v-else
-        class="scroller list-view"
-        :items="fileStore.files"
-        :item-size="60"
-        key-field="id"
-        v-slot="{ item }"
-      >
-        <FileListItem
-          :file="item"
-          :selected="fileStore.selectedIds.has(item.id)"
-          @click="handleFileClick(item.id, $event)"
-          @dblclick="handleFileDblClick(item)"
-        />
-      </RecycleScroller>
+        <RecycleScroller
+          v-else
+          class="scroller list-view"
+          :items="fileStore.files"
+          :item-size="60"
+          key-field="id"
+          v-slot="{ item }"
+        >
+          <FileListItem
+            ref="fileListItemRefs"
+            :file="item"
+            :selected="fileStore.selectedIds.has(item.id)"
+            @click="handleFileClick(item.id, $event)"
+            @dblclick="handleFileDblClick(item)"
+          />
+        </RecycleScroller>
+      </div>
 
       <!-- 加载更多 -->
       <div v-if="fileStore.hasMore" class="load-more">
@@ -58,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, watch, ref, onUnmounted } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { useAppStore } from '../stores/app'
@@ -67,14 +80,96 @@ import FileCard from '../components/FileCard.vue'
 import FileListItem from '../components/FileListItem.vue'
 import type { FileItem } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
+import { wsClient } from '../api/websocket'
+import { ElMessage } from 'element-plus'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
 
-// 根据容器宽度计算网格列数
-const gridItems = computed(() => {
-  // 默认每行4个
-  return 4
+const scrollerRef = ref<HTMLElement | null>(null)
+const fileListItemRefs = ref<InstanceType<typeof FileListItem>[]>([])
+const containerWidth = ref(0)
+
+// Grid 布局配置
+const GAP = 16 // 间距
+const MIN_ITEM_WIDTH = 160 // 最小宽度
+const PADDING = 32 // 左右 padding 总和
+const INFO_HEIGHT = 60 // 文件名等信息区域高度
+
+// 计算每行显示的列数
+const gridColumns = computed(() => {
+  if (containerWidth.value === 0) return 4
+  const availableWidth = containerWidth.value - PADDING
+  const columns = Math.floor((availableWidth + GAP) / (MIN_ITEM_WIDTH + GAP))
+  return Math.max(columns, 2) // 最少显示 2 列
+})
+
+// 计算每个 grid item 的宽度
+const gridItemWidth = computed(() => {
+  if (containerWidth.value === 0) return MIN_ITEM_WIDTH
+  const availableWidth = containerWidth.value - PADDING
+  // 计算每个 item 的宽度
+  const itemWidth = (availableWidth - (gridColumns.value - 1) * GAP) / gridColumns.value
+  return Math.max(itemWidth, MIN_ITEM_WIDTH)
+})
+
+// 计算每个 grid item 的高度
+const gridItemHeight = computed(() => {
+  return gridItemWidth.value + INFO_HEIGHT
+})
+
+// 将文件列表按行分组
+interface GridRow {
+  rowIndex: number
+  files: FileItem[]
+}
+
+const gridRows = computed<GridRow[]>(() => {
+  const rows: GridRow[] = []
+  const files = fileStore.files
+  const columns = gridColumns.value
+  
+  for (let i = 0; i < files.length; i += columns) {
+    rows.push({
+      rowIndex: Math.floor(i / columns),
+      files: files.slice(i, i + columns)
+    })
+  }
+  
+  return rows
+})
+
+// Grid 行样式
+const gridRowStyle = computed(() => ({
+  display: 'flex',
+  gap: `${GAP}px`,
+  padding: `0 ${PADDING / 2}px`,
+  height: `${gridItemHeight.value}px`
+}))
+
+// Grid 单元格样式
+const gridCellStyle = computed(() => ({
+  flex: '0 0 auto',
+  width: `${gridItemWidth.value}px`
+}))
+
+// 监听容器宽度变化
+function updateContainerWidth() {
+  if (scrollerRef.value) {
+    containerWidth.value = scrollerRef.value.clientWidth
+  }
+}
+
+onMounted(() => {
+  updateContainerWidth()
+  window.addEventListener('resize', updateContainerWidth)
+  if (appStore.currentWorkspace) {
+    fileStore.search({ root: appStore.currentWorkspace })
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateContainerWidth)
 })
 
 // 监听工作区变化
@@ -84,19 +179,30 @@ watch(() => appStore.currentWorkspace, (newPath) => {
   }
 })
 
-onMounted(() => {
-  if (appStore.currentWorkspace) {
-    fileStore.search({ root: appStore.currentWorkspace })
-  }
-})
-
 async function selectWorkspace() {
   console.log('[BrowserView] selectWorkspace called')
   try {
     const path = await appStore.selectFolder()
     console.log('[BrowserView] selectFolder returned:', path)
     if (path) {
-      fileStore.search({ root: path })
+      // 连接 WebSocket
+      wsClient.connect()
+      
+      // 订阅扫描完成事件
+      const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
+        ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
+        // 扫描完成后刷新文件列表
+        fileStore.search({ root: path })
+        unsubscribeCompleted()
+      })
+      
+      const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
+        ElMessage.error(`扫描失败: ${error.message}`)
+        unsubscribeError()
+      })
+      
+      // 开始扫描
+      wsClient.startScan(path)
     }
   } catch (error) {
     console.error('[BrowserView] Error in selectWorkspace:', error)
@@ -141,12 +247,35 @@ async function handleFileDblClick(file: FileItem) {
   justify-content: center;
 }
 
+.scroller-container {
+  height: 100%;
+  width: 100%;
+}
+
 .scroller {
   height: 100%;
 }
 
 .grid-view {
-  padding: 16px;
+  padding: 16px 0;
+}
+
+/* 确保 RecycleScroller 的 item view 占满宽度 */
+.grid-view :deep(.vue-recycle-scroller__item-view) {
+  width: 100% !important;
+  position: absolute !important;
+  left: 0 !important;
+}
+
+/* Grid 行容器 */
+.grid-row {
+  box-sizing: border-box;
+  align-items: flex-start;
+}
+
+/* Grid 单元格 */
+.grid-cell {
+  box-sizing: border-box;
 }
 
 .list-view {

@@ -131,6 +131,12 @@ export const useFileStore = defineStore('files', () => {
     }
   }
 
+  function updateBatchFileTags(fileIds: number[], tagIds: number[]) {
+    fileIds.forEach(fileId => {
+      updateFileTags(fileId, tagIds)
+    })
+  }
+
   function removeFile(fileId: number) {
     const index = files.value.findIndex(f => f.id === fileId)
     if (index !== -1) {
@@ -138,6 +144,12 @@ export const useFileStore = defineStore('files', () => {
       selectedIds.value.delete(fileId)
       totalCount.value--
     }
+  }
+
+  function removeBatchFiles(fileIds: number[]) {
+    fileIds.forEach(fileId => {
+      removeFile(fileId)
+    })
   }
 
   return {
@@ -163,6 +175,8 @@ export const useFileStore = defineStore('files', () => {
     toggleViewMode,
     setSortBy,
     updateFileTags,
+    updateBatchFileTags,
     removeFile,
+    removeBatchFiles,
   }
 })

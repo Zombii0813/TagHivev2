@@ -71,8 +71,25 @@ const currentWorkspace = computed(() => appStore.currentWorkspace || '')
 async function selectWorkspace() {
   const path = await appStore.selectFolder()
   if (path) {
-    fileStore.search({ root: path })
-    ElMessage.success('工作区已更新')
+    // 连接 WebSocket
+    wsClient.connect()
+    
+    // 订阅扫描完成事件
+    const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
+      ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
+      // 扫描完成后刷新文件列表
+      fileStore.search({ root: path })
+      unsubscribeCompleted()
+    })
+    
+    const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
+      ElMessage.error(`扫描失败: ${error.message}`)
+      unsubscribeError()
+    })
+    
+    // 开始扫描
+    wsClient.startScan(path)
+    ElMessage.success('工作区已更新，开始扫描...')
   }
 }
 
