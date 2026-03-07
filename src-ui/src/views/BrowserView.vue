@@ -78,7 +78,7 @@ import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import FileCard from '../components/FileCard.vue'
 import FileListItem from '../components/FileListItem.vue'
-import type { FileItem } from '../types'
+import type { FileSummary } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
@@ -121,7 +121,7 @@ const gridItemHeight = computed(() => {
 // 将文件列表按行分组
 interface GridRow {
   rowIndex: number
-  files: FileItem[]
+  files: FileSummary[]
 }
 
 const gridRows = computed<GridRow[]>(() => {
@@ -224,7 +224,7 @@ function handleFileClick(fileId: number, event: MouseEvent) {
   }
 }
 
-async function handleFileDblClick(file: FileItem) {
+async function handleFileDblClick(file: FileSummary) {
   // 打开文件
   try {
     await open(file.path)

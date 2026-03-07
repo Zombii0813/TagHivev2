@@ -115,6 +115,11 @@ export interface ScanProgressEvent {
   path: string
 }
 
+export interface ScanCompletedEvent {
+  path: string
+  total: number
+}
+
 // 缩略图
 export interface ThumbnailRequest {
   file_id: number

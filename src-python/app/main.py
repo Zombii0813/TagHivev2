@@ -14,10 +14,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
 
-from .api import router
-from .api.websocket import sio
-from .db import init_db
-from .config import settings
+from app.api import router
+from app.api.websocket import sio
+from app.db import init_db
+from app.config import settings
 
 # 配置日志
 logging.basicConfig(
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     init_db(Path(settings.db_path))
     
     # 启动文件监控服务
-    from .services.watch_service import WatchService
+    from app.services.watch_service import WatchService
     app.state.watch_service = WatchService()
     
     logger.info("TagHive Sidecar started successfully")
@@ -81,11 +81,13 @@ def main():
     
     logger.info(f"Starting TagHive Sidecar on {host}:{port}")
     
+    # 禁用 reload 功能，避免 watchfiles 监控日志文件导致循环
+    # sidecar 进程不需要热重载功能
     uvicorn.run(
         "app.main:socket_app",
         host=host,
         port=port,
-        reload=settings.debug,
+        reload=False,
         log_level="info",
     )
 

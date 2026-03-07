@@ -106,9 +106,3 @@ class WebSocketClient {
 }
 
 export const wsClient = new WebSocketClient()
-
-// 类型补充
-interface ScanCompletedEvent {
-  path: string
-  total: number
-}

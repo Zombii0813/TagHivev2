@@ -36,7 +36,9 @@
     "icon": [
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": [
+      "resources/*"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "标签化文件管理器",

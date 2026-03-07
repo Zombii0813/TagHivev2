@@ -1,11 +1,11 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import type { FileItem, SearchQuery, SearchResult } from '../types'
+import type { FileSummary, SearchQuery } from '../types'
 import { fileApi } from '../api/files'
 
 export const useFileStore = defineStore('files', () => {
   // State
-  const files = ref<FileItem[]>([])
+  const files = ref<FileSummary[]>([])
   const selectedIds = ref<Set<number>>(new Set())
   const searchQuery = ref<SearchQuery>({})
   const totalCount = ref(0)

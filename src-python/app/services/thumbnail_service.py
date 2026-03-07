@@ -7,6 +7,8 @@ from pathlib import Path
 import hashlib
 import logging
 import os
+import subprocess
+import sys
 from typing import Optional
 
 from PIL import Image
@@ -138,7 +140,6 @@ class ThumbnailService:
         size: str
     ) -> Optional[str]:
         """生成视频缩略图（使用 FFmpeg）- 统一为正方形"""
-        import subprocess
         
         try:
             target_size = THUMBNAIL_SIZES.get(size, THUMBNAIL_SIZES["medium"])
@@ -166,11 +167,17 @@ class ThumbnailService:
                 str(target)
             ]
             
+            # Windows: 隐藏控制台窗口
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                creationflags=creationflags
             )
             
             if result.returncode == 0 and target.exists():

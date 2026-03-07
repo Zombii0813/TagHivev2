@@ -95,7 +95,7 @@ import SearchBar from '../components/SearchBar.vue'
 import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()

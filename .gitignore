@@ -52,6 +52,10 @@ dist/
 build/
 out/
 
+# PyInstaller bundled sidecar
+src-tauri/resources/taghive-sidecar.exe
+src-tauri/resources/taghive-sidecar
+
 # Test coverage
 .coverage
 htmlcov/
@@ -62,3 +66,6 @@ htmlcov/
 *.tmp
 *.temp
 *.cache
+.taghive/
+taghive-sidecar.spec
+config.json

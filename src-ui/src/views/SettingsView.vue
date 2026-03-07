@@ -31,6 +31,10 @@
           <el-icon><Refresh /></el-icon>
           重新扫描工作区
         </el-button>
+        <el-button @click="openLogViewer">
+          <el-icon><Document /></el-icon>
+          查看日志
+        </el-button>
       </el-form-item>
     </el-form>
     
@@ -47,16 +51,20 @@
         <p>已扫描 {{ scanCount }} 个文件</p>
       </div>
     </el-dialog>
+    
+    <!-- 日志查看器 -->
+    <LogViewer ref="logViewerRef" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { wsClient } from '../api/websocket'
+import LogViewer from '../components/LogViewer.vue'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
@@ -65,8 +73,13 @@ const scanning = ref(false)
 const scanProgress = ref(0)
 const scanCount = ref(0)
 const scanStatus = ref('')
+const logViewerRef = ref<InstanceType<typeof LogViewer>>()
 
 const currentWorkspace = computed(() => appStore.currentWorkspace || '')
+
+function openLogViewer() {
+  logViewerRef.value?.open()
+}
 
 async function selectWorkspace() {
   const path = await appStore.selectFolder()
