@@ -61,6 +61,7 @@ class Repo:
                 type=meta.type,
                 hash=meta.sha256,
                 modified_at=meta.modified_at,
+                duration=meta.duration,
             )
             self.session.add(file_row)
             # 清除缓存
@@ -73,6 +74,7 @@ class Repo:
         existing.type = meta.type  # type: ignore[assignment]
         existing.hash = meta.sha256  # type: ignore[assignment]
         existing.modified_at = meta.modified_at  # type: ignore[assignment]
+        existing.duration = meta.duration  # type: ignore[assignment]
         existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
         # 清除缓存
         self.clear_search_cache()

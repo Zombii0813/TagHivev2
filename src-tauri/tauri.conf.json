@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "identifier": "com.taghive.app",
   "build": {
-    "beforeDevCommand": "cd src-ui && npm run dev",
-    "beforeBuildCommand": "cd src-ui && npm run build",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../src-ui/dist"
   },

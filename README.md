@@ -58,10 +58,9 @@ pip install -r requirements.txt
 
 ### 方式一：使用 Tauri 运行（推荐）
 
-Tauri 会自动启动 Python Sidecar 和前端开发服务器：
+项目根目录终端运行，Tauri 会自动启动 Python Sidecar 和前端开发服务器：
 
 ```bash
-cd src-tauri
 cargo tauri dev
 ```
 

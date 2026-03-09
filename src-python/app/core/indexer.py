@@ -18,6 +18,7 @@ class FileMeta:
     type: str
     sha256: str | None
     modified_at: float | None
+    duration: float | None = None
 
 
 def build_file_meta(path: Path, include_hash: bool = False) -> FileMeta:

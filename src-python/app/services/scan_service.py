@@ -9,8 +9,9 @@ from typing import Callable, List, Tuple, Set
 
 from sqlalchemy.orm import Session
 
-from ..core.indexer import build_file_meta_from_entry, iter_file_entries
+from ..core.indexer import build_file_meta_from_entry, iter_file_entries, FileMeta
 from ..db.repo import Repo
+from ..utils.media_info import extract_duration, is_media_file
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,24 @@ class ScanService:
         entry, existing_id = task
         try:
             meta = build_file_meta_from_entry(entry)
+            
+            # 如果是媒体文件，提取时长
+            path = Path(entry.path)
+            if is_media_file(path):
+                duration = extract_duration(path)
+                if duration is not None:
+                    # 创建新的 FileMeta 包含时长
+                    meta = FileMeta(
+                        path=meta.path,
+                        name=meta.name,
+                        ext=meta.ext,
+                        size=meta.size,
+                        type=meta.type,
+                        sha256=meta.sha256,
+                        modified_at=meta.modified_at,
+                        duration=duration,
+                    )
+            
             return meta, existing_id
         except Exception:
             # 跳过无法处理的文件

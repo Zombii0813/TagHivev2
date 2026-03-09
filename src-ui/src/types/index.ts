@@ -66,6 +66,7 @@ export interface FileSummary {
   type: string
   size: number
   modified_at?: number
+  duration?: number
   tag_ids: number[]
 }
 

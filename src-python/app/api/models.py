@@ -34,6 +34,7 @@ class FileSummaryDTO(BaseModel):
     type: str
     size: int
     modified_at: Optional[float] = None
+    duration: Optional[float] = None
     tag_ids: List[int] = []
 
 

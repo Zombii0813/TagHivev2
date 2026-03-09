@@ -57,14 +57,10 @@
         </RecycleScroller>
       </div>
 
-      <!-- 加载更多 -->
-      <div v-if="fileStore.hasMore" class="load-more">
-        <el-button
-          :loading="fileStore.isLoading"
-          @click="fileStore.loadMore()"
-        >
-          加载更多
-        </el-button>
+      <!-- 加载更多提示 -->
+      <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
+        <el-icon class="loading-icon"><Loading /></el-icon>
+        <span>加载中...</span>
       </div>
     </template>
   </div>
@@ -82,6 +78,11 @@ import type { FileSummary } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
+
+// 滚动加载配置
+const SCROLL_THRESHOLD = 100 // 距离底部多少像素时触发加载
+
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
@@ -160,9 +161,29 @@ function updateContainerWidth() {
   }
 }
 
+// 处理滚动事件，实现无限滚动加载
+function handleScroll(event: Event) {
+  const target = event.target as HTMLElement
+  if (!target) return
+
+  const { scrollTop, scrollHeight, clientHeight } = target
+  const distanceToBottom = scrollHeight - scrollTop - clientHeight
+
+  // 当距离底部小于阈值时，加载更多
+  if (distanceToBottom < SCROLL_THRESHOLD && fileStore.hasMore && !fileStore.isLoading) {
+    fileStore.loadMore()
+  }
+}
+
 onMounted(() => {
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
+  
+  // 添加滚动监听
+  if (scrollerRef.value) {
+    scrollerRef.value.addEventListener('scroll', handleScroll)
+  }
+  
   if (appStore.currentWorkspace) {
     fileStore.search({ root: appStore.currentWorkspace })
   }
@@ -170,6 +191,11 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateContainerWidth)
+  
+  // 移除滚动监听
+  if (scrollerRef.value) {
+    scrollerRef.value.removeEventListener('scroll', handleScroll)
+  }
 })
 
 // 监听工作区变化
@@ -285,5 +311,24 @@ async function handleFileDblClick(file: FileSummary) {
 .load-more {
   padding: 16px;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.loading-icon {
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

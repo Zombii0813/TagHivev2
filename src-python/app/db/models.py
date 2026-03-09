@@ -21,6 +21,7 @@ class File(Base):
     type = Column(Text, nullable=False)
     hash = Column(Text, nullable=True)
     modified_at = Column(Float, nullable=True)
+    duration = Column(Float, nullable=True)  # 视频/音频时长（秒）
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -33,6 +34,7 @@ class File(Base):
         Index("idx_files_path", "path"),  # 按路径查找
         Index("idx_files_modified_at", "modified_at"),  # 按修改时间排序
         Index("idx_files_size", "size"),  # 按文件大小排序
+        Index("idx_files_duration", "duration"),  # 按时长排序
         Index("idx_files_updated_at", "updated_at"),  # 按更新时间排序
     )
 

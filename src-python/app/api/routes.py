@@ -63,9 +63,10 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
     all_results = repo.search(search_query)
     total = len(all_results)
     
-    # 分页
+    # 分页 - 默认每次加载 500 条，支持最大 10000 条
+    limit = query.limit or 500
     start = query.offset
-    end = start + (query.limit or 100)
+    end = start + limit
     page_results = all_results[start:end]
     
     # 转换为 DTO
@@ -85,6 +86,7 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
                 type=f.type,
                 size=f.size,
                 modified_at=f.modified_at,
+                duration=f.duration,
                 tag_ids=tag_ids,
             ))
     

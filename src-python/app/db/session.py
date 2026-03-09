@@ -51,12 +51,26 @@ def init_db(db_path: Path) -> None:
 def _ensure_schema() -> None:
     """确保数据库 schema 兼容性
     
-    检查并添加缺失的列（如 modified_at），用于数据库升级。
+    检查并添加缺失的列和索引，用于数据库升级。
     """
     session = SessionLocal()
     try:
         connection = session.connection()
-        connection.execute(text("ALTER TABLE files ADD COLUMN modified_at FLOAT"))
+        # 添加 modified_at 列（如果缺失）
+        try:
+            connection.execute(text("ALTER TABLE files ADD COLUMN modified_at FLOAT"))
+        except Exception:
+            pass
+        # 添加 duration 列（如果缺失）
+        try:
+            connection.execute(text("ALTER TABLE files ADD COLUMN duration FLOAT"))
+        except Exception:
+            pass
+        # 添加 duration 索引（如果不存在）
+        try:
+            connection.execute(text("CREATE INDEX idx_files_duration ON files(duration)"))
+        except Exception:
+            pass
         session.commit()
     except Exception:
         session.rollback()
