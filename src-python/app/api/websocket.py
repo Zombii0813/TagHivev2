@@ -160,29 +160,88 @@ async def start_scan(sid: str, data: dict):
         await sio.emit("scan_error", {"message": f"Path not found: {workspace_path}"}, room=sid)
         return
     
-    async def scan_with_progress():
+    # 创建进度队列和事件
+    progress_queue: asyncio.Queue = asyncio.Queue()
+    scan_completed_event = asyncio.Event()
+    scan_result = {"total": 0, "error": None}
+    
+    async def progress_sender():
+        """异步发送进度更新"""
+        while not scan_completed_event.is_set():
+            try:
+                # 使用 timeout 避免阻塞
+                progress_data = await asyncio.wait_for(
+                    progress_queue.get(), 
+                    timeout=0.1
+                )
+                await sio.emit("scan_progress", progress_data, room=sid)
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"Progress sender error: {e}")
+    
+    def scan_worker():
+        """在后台线程中执行扫描"""
         session = get_session()
         try:
             service = ScanService(session)
             
-            def on_progress(count: int):
-                asyncio.create_task(sio.emit("scan_progress", {
-                    "count": count,
-                    "path": workspace_path,
-                }, room=sid))
+            def on_progress(count: int, total: int, percentage: int, current_file: str):
+                """同步进度回调，将数据放入队列"""
+                try:
+                    # 使用 asyncio.run_coroutine_threadsafe 在线程安全地将数据放入队列
+                    asyncio.run_coroutine_threadsafe(
+                        progress_queue.put({
+                            "count": count,
+                            "total": total,
+                            "percentage": percentage,
+                            "path": workspace_path,
+                            "current_file": current_file,
+                        }),
+                        loop
+                    )
+                except Exception as e:
+                    logger.error(f"Progress callback error: {e}")
             
             total = service.scan_workspace(path, on_progress=on_progress)
-            
-            await sio.emit("scan_completed", {
-                "path": workspace_path,
-                "total": total,
-            }, room=sid)
+            scan_result["total"] = total
         except Exception as e:
             logger.error(f"Scan error: {e}")
-            await sio.emit("scan_error", {"message": str(e)}, room=sid)
+            scan_result["error"] = str(e)
         finally:
             session.close()
+            scan_completed_event.set()
     
-    # 在后台运行扫描
-    asyncio.create_task(scan_with_progress())
+    # 获取当前事件循环
+    loop = asyncio.get_event_loop()
+    
+    # 启动进度发送任务
+    progress_task = asyncio.create_task(progress_sender())
+    
+    # 在后台线程中运行扫描
+    scan_task = asyncio.create_task(asyncio.to_thread(scan_worker))
+    
     await sio.emit("scan_started", {"path": workspace_path}, room=sid)
+    
+    # 等待扫描完成
+    try:
+        await scan_task
+        
+        # 等待进度发送完成
+        await asyncio.sleep(0.5)  # 给进度发送一点时间
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+        
+        if scan_result["error"]:
+            await sio.emit("scan_error", {"message": scan_result["error"]}, room=sid)
+        else:
+            await sio.emit("scan_completed", {
+                "path": workspace_path,
+                "total": scan_result["total"],
+            }, room=sid)
+    except Exception as e:
+        logger.error(f"Scan task error: {e}")
+        await sio.emit("scan_error", {"message": str(e)}, room=sid)

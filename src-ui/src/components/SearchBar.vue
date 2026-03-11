@@ -55,9 +55,24 @@ function handleTypeFilter(type: string) {
 .search-bar {
   display: flex;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
+  max-width: 400px;
 }
 
 .search-bar .el-input {
-  width: 300px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 响应式：小屏幕时隐藏类型筛选按钮文字 */
+@media (max-width: 640px) {
+  .search-bar .el-button {
+    padding: 8px;
+  }
+  
+  .search-bar .el-button span {
+    display: none;
+  }
 }
 </style>

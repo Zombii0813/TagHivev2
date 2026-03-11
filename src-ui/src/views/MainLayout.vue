@@ -29,6 +29,16 @@
         </div>
         
         <div class="toolbar-right">
+          <!-- 重新扫描按钮 -->
+          <el-button
+            :icon="Refresh"
+            circle
+            @click="handleRescan"
+            :loading="fileStore.isScanning"
+            :disabled="!appStore.currentWorkspace"
+            :title="'重新扫描工作区'"
+          />
+          
           <!-- 排序下拉菜单 -->
           <el-dropdown @command="handleSortCommand" trigger="click">
             <el-button :title="'排序'">
@@ -68,17 +78,27 @@
             </template>
           </el-dropdown>
 
+          <!-- 文件夹浏览模式切换 -->
+          <el-button
+            :type="fileStore.browseMode === 'folder' ? 'primary' : ''"
+            :icon="Folder"
+            circle
+            @click="toggleBrowseMode"
+            :title="fileStore.browseMode === 'folder' ? '切换到全部文件模式' : '切换到文件夹浏览模式'"
+          />
+
+          <!-- 视图模式切换 -->
           <el-button-group>
             <el-button
               :type="fileStore.viewMode === 'grid' ? 'primary' : ''"
               :icon="Grid"
-              @click="fileStore.viewMode = 'grid'"
+              @click="fileStore.setViewMode('grid')"
               :title="'网格视图'"
             />
             <el-button
               :type="fileStore.viewMode === 'list' ? 'primary' : ''"
               :icon="List"
-              @click="fileStore.viewMode = 'list'"
+              @click="fileStore.setViewMode('list')"
               :title="'列表视图'"
             />
           </el-button-group>
@@ -108,7 +128,22 @@
       <!-- 底部状态栏 -->
       <footer class="status-bar">
         <div class="status-bar-left">
-          <span v-if="fileStore.isLoading" class="status-text">
+          <!-- 扫描进度显示 -->
+          <div v-if="fileStore.isScanning" class="scan-progress-container">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span class="scan-text">扫描中</span>
+            <el-progress 
+              :percentage="fileStore.scanProgress" 
+              :show-text="false"
+              :stroke-width="4"
+              class="scan-progress-bar"
+            />
+            <span class="scan-count">{{ fileStore.scanCount }} / {{ fileStore.scanTotal }}</span>
+            <span v-if="fileStore.scanCurrentFile" class="scan-file" :title="fileStore.scanCurrentFile">
+              {{ truncateFileName(fileStore.scanCurrentFile) }}
+            </span>
+          </div>
+          <span v-else-if="fileStore.isLoading" class="status-text">
             <el-icon class="loading-icon"><Loading /></el-icon> 加载中...
           </span>
         </div>
@@ -148,7 +183,11 @@ import {
   SortUp,
   SortDown,
   Loading,
+  Refresh,
+  Folder,
+  Files,
 } from '@element-plus/icons-vue'
+
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import TagPanel from './TagPanel.vue'
@@ -157,6 +196,9 @@ import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
+import { wsClient } from '../api/websocket'
+import { ElMessage } from 'element-plus'
+import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
@@ -227,6 +269,91 @@ const getSortLabel = () => {
   }
   const fieldLabel = fieldLabels[currentField] || currentField
   return currentDesc ? `${fieldLabel}降序` : `${fieldLabel}升序`
+}
+
+// 处理重新扫描
+const handleRescan = () => {
+  if (!appStore.currentWorkspace) {
+    ElMessage.warning('请先选择工作区')
+    return
+  }
+  
+  // 连接 WebSocket
+  wsClient.connect()
+  
+  // 开始扫描
+  fileStore.startScanning()
+  wsClient.startScan(appStore.currentWorkspace)
+  ElMessage.success('开始扫描工作区...')
+}
+
+// 扫描事件处理 - 使用变量跟踪是否已显示提示
+let scanCompletedShown = false
+let scanErrorShown = false
+
+onMounted(() => {
+  checkIsMobile()
+  window.addEventListener('resize', checkIsMobile)
+  
+  // 订阅扫描事件
+  wsClient.connect()
+  
+  wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
+    fileStore.updateScanProgress(data.count, data.total, data.percentage, data.current_file)
+  })
+  
+  wsClient.on<ScanCompletedEvent>('scan_completed', (data) => {
+    // 避免重复显示提示
+    if (scanCompletedShown) return
+    scanCompletedShown = true
+    
+    fileStore.completeScanning()
+    ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
+    // 刷新文件列表
+    if (appStore.currentWorkspace) {
+      fileStore.search({ root: appStore.currentWorkspace })
+    }
+    
+    // 重置标志，允许下次扫描显示提示
+    setTimeout(() => {
+      scanCompletedShown = false
+    }, 1000)
+  })
+  
+  wsClient.on<{ message: string }>('scan_error', (error) => {
+    // 避免重复显示提示
+    if (scanErrorShown) return
+    scanErrorShown = true
+    
+    fileStore.resetScanning()
+    ElMessage.error(`扫描失败: ${error.message}`)
+    
+    // 重置标志
+    setTimeout(() => {
+      scanErrorShown = false
+    }, 1000)
+  })
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkIsMobile)
+})
+
+// 截断文件名显示
+const truncateFileName = (path: string, maxLength: number = 30): string => {
+  if (path.length <= maxLength) return path
+  const fileName = path.split('/').pop() || path.split('\\').pop() || path
+  if (fileName.length <= maxLength) return fileName
+  return fileName.substring(0, maxLength - 3) + '...'
+}
+
+// 切换浏览模式
+const toggleBrowseMode = () => {
+  if (fileStore.browseMode === 'folder') {
+    fileStore.setBrowseMode('all')
+  } else {
+    fileStore.setBrowseMode('folder')
+  }
 }
 </script>
 
@@ -300,6 +427,8 @@ const getSortLabel = () => {
   flex-direction: column;
   min-width: 0;
   background: var(--color-bg-primary);
+  /* 确保主内容区有足够宽度，不被右侧面板过度压缩 */
+  min-width: 600px;
 }
 
 .toolbar {
@@ -312,6 +441,8 @@ const getSortLabel = () => {
   background: var(--color-bg-secondary);
   min-width: 0;
   flex-shrink: 0;
+  overflow: hidden;
+  gap: 8px;
 }
 
 .toolbar-left,
@@ -324,6 +455,16 @@ const getSortLabel = () => {
 
 .toolbar-right {
   flex-wrap: nowrap;
+  flex-shrink: 0;
+  /* 右侧按钮组允许收缩 */
+  min-width: 0;
+}
+
+.toolbar-left {
+  /* 左侧区域可以收缩 */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* 排序按钮样式 */
@@ -341,22 +482,71 @@ const getSortLabel = () => {
   white-space: nowrap;
 }
 
-/* 响应式：小屏幕时隐藏排序文字 */
-@media (max-width: 900px) {
+/* 按钮标签样式 */
+.btn-label {
+  margin-left: 4px;
+  font-size: 13px;
+}
+
+/* 响应式断点：中等屏幕 - 隐藏排序文字 */
+@media (max-width: 1100px) {
   .sort-label {
     display: none;
   }
 }
 
-/* 响应式：更小的屏幕时调整间距 */
+/* 响应式断点：较小屏幕 - 进一步压缩 */
+@media (max-width: 900px) {
+  .toolbar {
+    padding: 0 12px;
+    gap: 6px;
+  }
+  
+  .toolbar-left,
+  .toolbar-right {
+    gap: 6px;
+  }
+}
+
+/* 响应式断点：小屏幕 - 最小间距 */
 @media (max-width: 768px) {
   .toolbar {
     padding: 0 8px;
+    gap: 4px;
   }
   
   .toolbar-left,
   .toolbar-right {
     gap: 4px;
+  }
+  
+  /* 隐藏搜索栏的占位空间 */
+  .toolbar-left :deep(.search-bar) {
+    max-width: 200px;
+  }
+}
+
+/* 响应式断点：超小屏幕 - 隐藏部分按钮文字 */
+@media (max-width: 640px) {
+  .toolbar-left :deep(.search-bar) {
+    max-width: 150px;
+  }
+}
+
+/* 响应式断点：极窄屏幕 - 只保留图标 */
+@media (max-width: 560px) {
+  .toolbar {
+    padding: 0 6px;
+    gap: 2px;
+  }
+  
+  .toolbar-left,
+  .toolbar-right {
+    gap: 2px;
+  }
+  
+  .toolbar-left :deep(.search-bar) {
+    max-width: 120px;
   }
 }
 
@@ -406,11 +596,61 @@ const getSortLabel = () => {
   }
 }
 
+/* 扫描进度样式 */
+.scan-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.scan-text {
+  white-space: nowrap;
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.scan-progress-bar {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.scan-count {
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.scan-file {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+
 /* 响应式：小屏幕时调整状态栏 */
 @media (max-width: 768px) {
   .status-bar {
     padding: 0 8px;
     font-size: 11px;
+  }
+  
+  .scan-progress-bar {
+    width: 60px;
+  }
+  
+  .scan-file {
+    max-width: 100px;
+  }
+}
+
+@media (max-width: 480px) {
+  .scan-file {
+    display: none;
   }
 }
 </style>

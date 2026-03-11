@@ -113,7 +113,10 @@ export interface FileDeletedEvent {
 
 export interface ScanProgressEvent {
   count: number
+  total: number
+  percentage: number
   path: string
+  current_file?: string
 }
 
 export interface ScanCompletedEvent {
@@ -131,4 +134,27 @@ export interface ThumbnailResponse {
   file_id: number
   url?: string
   exists: boolean
+}
+
+// 文件夹树类型
+export interface FolderNode {
+  name: string
+  path: string
+  file_count: number
+  children: FolderNode[]
+  is_expanded: boolean
+}
+
+export interface FolderTree {
+  root_path: string
+  folders: FolderNode[]
+  total_folders: number
+  root_file_count: number
+}
+
+export interface FolderContents {
+  path: string
+  files: FileSummary[]
+  total: number
+  has_more: boolean
 }

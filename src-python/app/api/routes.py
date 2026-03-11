@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select
 from ..db import get_session, Repo
 from ..db.models import File, Tag
 from ..core.search import SearchQuery
@@ -25,6 +26,9 @@ from .models import (
     FileTagsUpdateDTO,
     ScanProgressDTO,
     WorkspaceDTO,
+    FolderTreeDTO,
+    FolderNodeDTO,
+    FolderContentsDTO,
 )
 
 router = APIRouter(prefix="/api")
@@ -442,18 +446,17 @@ async def scan_workspace(
     workspace: WorkspaceDTO,
     repo: Repo = Depends(get_repo),
 ):
-    """扫描工作区"""
+    """扫描工作区 - 立即返回，实际扫描通过 WebSocket 进行"""
     root = Path(workspace.path)
     if not root.exists():
         raise HTTPException(status_code=400, detail="Path does not exist")
     
-    service = ScanService(repo.session)
-    count = service.scan_workspace(root)
-    
+    # 立即返回，不等待扫描完成
+    # 实际扫描应通过 WebSocket 进行以获得实时进度
     return ScanProgressDTO(
-        status="completed",
-        count=count,
-        message=f"Scanned {count} files",
+        status="started",
+        count=0,
+        message="Scan started via WebSocket",
     )
 
 
@@ -477,6 +480,221 @@ async def get_workspace_stats(
         "total_tags": total_tags,
         "type_distribution": {t: c for t, c in type_stats},
     }
+
+
+# ========== 文件夹树 API ==========
+
+def _build_folder_tree(root_path: str, repo: Repo) -> tuple[List[FolderNodeDTO], int]:
+    """构建文件夹树结构，返回 (子文件夹列表, 根目录直接文件数)"""
+    from sqlalchemy import func
+    
+    root = Path(root_path)
+    if not root.exists():
+        return [], 0
+    
+    # 获取该根路径下的所有文件路径
+    root_posix = root.as_posix()
+    root_pattern = root_posix.rstrip("/") + "/%"
+    
+    stmt = select(File.path).where(File.path.like(root_pattern))
+    file_paths = [str(row[0]) for row in repo.session.execute(stmt).all()]
+    
+    # 构建文件夹树
+    folder_map: dict[str, FolderNodeDTO] = {}
+    folder_file_counts: dict[str, int] = {}
+    root_direct_file_count = 0  # 根目录下的直接文件数
+    
+    for file_path in file_paths:
+        path_obj = Path(file_path)
+        
+        # 获取相对于根路径的相对路径
+        try:
+            rel_path = path_obj.relative_to(root)
+        except ValueError:
+            continue
+        
+        # 获取文件所在目录
+        folder_dir = path_obj.parent.as_posix()
+        
+        # 如果文件直接在根目录下，统计到 root_direct_file_count
+        if folder_dir == root_posix:
+            root_direct_file_count += 1
+            continue
+        
+        # 构建文件夹层级
+        current_path = root
+        current_node = None
+        
+        # 处理父文件夹
+        for part in rel_path.parent.parts:
+            if part == "." or not part:
+                continue
+            
+            parent_path = current_path
+            current_path = current_path / part
+            current_path_str = current_path.as_posix()
+            
+            if current_path_str not in folder_map:
+                node = FolderNodeDTO(
+                    name=part,
+                    path=current_path_str,
+                    file_count=0,
+                    children=[],
+                    is_expanded=False,
+                )
+                folder_map[current_path_str] = node
+                
+                # 添加到父节点的 children
+                parent_path_str = parent_path.as_posix()
+                if parent_path_str == root_posix:
+                    # 这是根的直接子文件夹
+                    pass
+                elif parent_path_str in folder_map:
+                    parent_node = folder_map[parent_path_str]
+                    if not any(c.path == current_path_str for c in parent_node.children):
+                        parent_node.children.append(node)
+            
+            current_node = folder_map[current_path_str]
+        
+        # 统计文件数量
+        folder_file_counts[folder_dir] = folder_file_counts.get(folder_dir, 0) + 1
+    
+    # 更新文件计数
+    for folder_path, count in folder_file_counts.items():
+        if folder_path in folder_map:
+            folder_map[folder_path].file_count = count
+    
+    # 递归计算子文件夹的文件数
+    def calc_total_files(node: FolderNodeDTO) -> int:
+        total = node.file_count
+        for child in node.children:
+            total += calc_total_files(child)
+        node.file_count = total
+        return total
+    
+    # 获取根的直接子文件夹
+    root_children: List[FolderNodeDTO] = []
+    seen_paths = set()
+    
+    for node in folder_map.values():
+        node_path = Path(node.path)
+        try:
+            rel_parts = node_path.relative_to(root).parts
+            if len(rel_parts) == 1:
+                # 这是根的直接子文件夹
+                if node.path not in seen_paths:
+                    calc_total_files(node)
+                    root_children.append(node)
+                    seen_paths.add(node.path)
+        except ValueError:
+            continue
+    
+    # 按名称排序
+    root_children.sort(key=lambda x: x.name.lower())
+    for node in root_children:
+        node.children.sort(key=lambda x: x.name.lower())
+    
+    return root_children, root_direct_file_count
+
+
+@router.get("/folders/tree", response_model=FolderTreeDTO)
+async def get_folder_tree(
+    root: str,
+    repo: Repo = Depends(get_repo),
+):
+    """获取文件夹树结构"""
+    root_path = Path(root)
+    if not root_path.exists():
+        raise HTTPException(status_code=404, detail="Root path not found")
+    
+    folders, root_file_count = _build_folder_tree(root, repo)
+    
+    # 计算总文件夹数
+    def count_folders(nodes: List[FolderNodeDTO]) -> int:
+        count = len(nodes)
+        for node in nodes:
+            count += count_folders(node.children)
+        return count
+    
+    return FolderTreeDTO(
+        root_path=root,
+        folders=folders,
+        total_folders=count_folders(folders),
+        root_file_count=root_file_count,
+    )
+
+
+@router.get("/folders/contents", response_model=FolderContentsDTO)
+async def get_folder_contents(
+    path: str,
+    offset: int = 0,
+    limit: int = 500,
+    sort_by: str = "name",
+    sort_desc: bool = False,
+    repo: Repo = Depends(get_repo),
+):
+    """获取指定文件夹的内容"""
+    folder_path = Path(path)
+    if not folder_path.exists():
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # 构建查询
+    folder_posix = folder_path.as_posix()
+    # 匹配直接在该文件夹下的文件（不包括子文件夹）
+    stmt = select(File).where(
+        File.path.like(folder_posix.rstrip("/") + "/%")
+    )
+    
+    # 排除子文件夹中的文件 - 只获取直接子文件
+    from sqlalchemy import func
+    
+    # 获取所有候选文件
+    all_files = list(repo.session.execute(stmt).scalars())
+    
+    # 过滤出直接在该文件夹下的文件
+    direct_files = []
+    for f in all_files:
+        file_parent = Path(f.path).parent.as_posix()
+        if file_parent == folder_posix:
+            direct_files.append(f)
+    
+    total = len(direct_files)
+    
+    # 排序
+    sort_key_map = {
+        "name": lambda f: f.name.lower(),
+        "size": lambda f: f.size,
+        "modified_at": lambda f: f.modified_at or 0,
+        "duration": lambda f: f.duration or 0,
+    }
+    
+    sort_key = sort_key_map.get(sort_by, sort_key_map["name"])
+    direct_files.sort(key=sort_key, reverse=sort_desc)
+    
+    # 分页
+    page_files = direct_files[offset:offset + limit]
+    
+    # 转换为 DTO
+    file_dtos = []
+    for f in page_files:
+        tag_ids = [t.id for t in f.tags]
+        file_dtos.append(FileSummaryDTO(
+            id=f.id,
+            name=f.name,
+            path=f.path,
+            type=f.type,
+            size=f.size,
+            modified_at=f.modified_at,
+            duration=f.duration,
+            tag_ids=tag_ids,
+        ))
+    
+    return FolderContentsDTO(
+        path=path,
+        files=file_dtos,
+        total=total,
+        has_more=offset + limit < total,
+    )
 
 
 # ========== 健康检查 ==========

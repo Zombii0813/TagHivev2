@@ -16,10 +16,12 @@ class WebSocketClient {
     if (this.socket?.connected) return
 
     this.socket = io(WS_URL, {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],  // 允许降级到 polling
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 60000,  // 连接超时 60 秒
     })
 
     this.socket.on('connect', () => {

@@ -27,10 +27,6 @@
       </el-form-item>
       
       <el-form-item>
-        <el-button type="primary" @click="rescanWorkspace">
-          <el-icon><Refresh /></el-icon>
-          重新扫描工作区
-        </el-button>
         <el-button @click="openLogViewer">
           <el-icon><Document /></el-icon>
           查看日志
@@ -59,15 +55,18 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { Refresh, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { wsClient } from '../api/websocket'
 import LogViewer from '../components/LogViewer.vue'
+import type { ScanProgressEvent } from '../types'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
+const router = useRouter()
 
 const scanning = ref(false)
 const scanProgress = ref(0)
@@ -87,22 +86,37 @@ async function selectWorkspace() {
     // 连接 WebSocket
     wsClient.connect()
     
-    // 订阅扫描完成事件
+    // 设置扫描状态 - 这会在主界面状态栏显示进度
+    fileStore.startScanning()
+    
+    // 订阅扫描进度事件
+    const unsubscribeProgress = wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
+      fileStore.updateScanProgress(data.count, data.total || 0, data.percentage || 0, data.current_file)
+    })
+    
+    // 订阅扫描完成事件 - 在 SettingsView 中不显示提示，由 MainLayout 统一处理
     const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
-      ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
+      fileStore.completeScanning()
       // 扫描完成后刷新文件列表
       fileStore.search({ root: path })
+      unsubscribeProgress()
       unsubscribeCompleted()
     })
     
     const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
-      ElMessage.error(`扫描失败: ${error.message}`)
+      fileStore.resetScanning()
+      // 错误提示由 MainLayout 统一处理
+      unsubscribeProgress()
+      unsubscribeCompleted()
       unsubscribeError()
     })
     
     // 开始扫描
     wsClient.startScan(path)
     ElMessage.success('工作区已更新，开始扫描...')
+    
+    // 跳转到主界面
+    router.push('/')
   }
 }
 
@@ -149,11 +163,6 @@ function rescanWorkspace() {
   
   // 开始扫描
   wsClient.startScan(appStore.currentWorkspace)
-}
-
-interface ScanProgressEvent {
-  count: number
-  path: string
 }
 </script>
 

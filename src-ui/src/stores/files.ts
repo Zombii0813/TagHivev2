@@ -1,7 +1,8 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import type { FileSummary, SearchQuery } from '../types'
+import type { FileSummary, SearchQuery, FolderContents } from '../types'
 import { fileApi } from '../api/files'
+import { folderApi } from '../api/folders'
 
 export const useFileStore = defineStore('files', () => {
   // State
@@ -11,9 +12,65 @@ export const useFileStore = defineStore('files', () => {
   const totalCount = ref(0)
   const hasMore = ref(false)
   const isLoading = ref(false)
+  // 视图模式：grid（网格）或 list（列表）
   const viewMode = ref<'grid' | 'list'>('grid')
+  // 浏览范围：folder（文件夹层级浏览）或 all（浏览所有文件）
+  const browseMode = ref<'folder' | 'all'>('all')
   const sortBy = ref<string>('name')
   const sortDesc = ref(false)
+  
+  // 文件夹浏览模式状态
+  const currentFolderPath = ref<string>('')
+  const folderContentsOffset = ref(0)
+  
+  // 加载文件夹内容
+  async function loadFolderContents(folderPath: string, append: boolean = false) {
+    if (!append) {
+      folderContentsOffset.value = 0
+      files.value = []
+    }
+    
+    currentFolderPath.value = folderPath
+    isLoading.value = true
+    
+    try {
+      const result = await folderApi.getContents(
+        folderPath,
+        folderContentsOffset.value,
+        500,
+        sortBy.value,
+        sortDesc.value
+      )
+      
+      if (append) {
+        files.value.push(...result.files)
+      } else {
+        files.value = result.files
+      }
+      
+      totalCount.value = result.total
+      hasMore.value = result.has_more
+    } catch (error) {
+      console.error('Failed to load folder contents:', error)
+    } finally {
+      isLoading.value = false
+    }
+  }
+  
+  // 加载更多文件夹内容
+  async function loadMoreFolderContents() {
+    if (!hasMore.value || isLoading.value || !currentFolderPath.value) return
+    
+    folderContentsOffset.value = files.value.length
+    await loadFolderContents(currentFolderPath.value, true)
+  }
+  
+  // 扫描状态
+  const isScanning = ref(false)
+  const scanProgress = ref(0)
+  const scanCount = ref(0)
+  const scanTotal = ref(0)
+  const scanCurrentFile = ref('')
 
   // Getters
   const selectedFiles = computed(() => {
@@ -113,6 +170,18 @@ export const useFileStore = defineStore('files', () => {
   function toggleViewMode() {
     viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid'
   }
+  
+  function setViewMode(mode: 'grid' | 'list') {
+    viewMode.value = mode
+  }
+
+  function toggleBrowseMode() {
+    browseMode.value = browseMode.value === 'folder' ? 'all' : 'folder'
+  }
+  
+  function setBrowseMode(mode: 'folder' | 'all') {
+    browseMode.value = mode
+  }
 
   function setSortBy(field: string) {
     if (sortBy.value === field) {
@@ -151,6 +220,38 @@ export const useFileStore = defineStore('files', () => {
       removeFile(fileId)
     })
   }
+  
+  // 扫描状态操作
+  function startScanning() {
+    isScanning.value = true
+    scanProgress.value = 0
+    scanCount.value = 0
+    scanTotal.value = 0
+    scanCurrentFile.value = ''
+  }
+  
+  function updateScanProgress(count: number, total: number, percentage: number, currentFile?: string) {
+    scanCount.value = count
+    scanTotal.value = total
+    scanProgress.value = percentage
+    if (currentFile) {
+      scanCurrentFile.value = currentFile
+    }
+  }
+  
+  function completeScanning() {
+    isScanning.value = false
+    scanProgress.value = 100
+    scanCurrentFile.value = ''
+  }
+  
+  function resetScanning() {
+    isScanning.value = false
+    scanProgress.value = 0
+    scanCount.value = 0
+    scanTotal.value = 0
+    scanCurrentFile.value = ''
+  }
 
   return {
     files,
@@ -160,23 +261,39 @@ export const useFileStore = defineStore('files', () => {
     hasMore,
     isLoading,
     viewMode,
+    browseMode,
     sortBy,
     sortDesc,
+    currentFolderPath,
     selectedFiles,
     selectedCount,
     hasSelection,
     isAllSelected,
+    isScanning,
+    scanProgress,
+    scanCount,
+    scanTotal,
+    scanCurrentFile,
     search,
     loadMore,
+    loadFolderContents,
+    loadMoreFolderContents,
     selectFile,
     selectRange,
     selectAll,
     clearSelection,
     toggleViewMode,
+    setViewMode,
+    toggleBrowseMode,
+    setBrowseMode,
     setSortBy,
     updateFileTags,
     updateBatchFileTags,
     removeFile,
     removeBatchFiles,
+    startScanning,
+    updateScanProgress,
+    completeScanning,
+    resetScanning,
   }
 })

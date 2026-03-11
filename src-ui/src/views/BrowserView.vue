@@ -9,6 +9,73 @@
       </el-empty>
     </div>
 
+    <!-- 文件夹浏览模式 -->
+    <template v-else-if="fileStore.browseMode === 'folder'">
+      <div class="tree-view-container">
+        <!-- 左侧文件夹树 -->
+        <div class="folder-tree-panel">
+          <FolderTree
+            :root-path="appStore.currentWorkspace"
+            @select="handleFolderSelect"
+          />
+        </div>
+        
+        <!-- 右侧文件列表 -->
+        <div ref="scrollerRef" class="scroller-container">
+          <!-- Grid 模式 -->
+          <RecycleScroller
+            v-if="fileStore.viewMode === 'grid'"
+            class="scroller grid-view"
+            :items="gridRows"
+            :item-size="gridItemHeight"
+            key-field="rowIndex"
+            v-slot="{ item: row }"
+          >
+            <div class="grid-row" :style="gridRowStyle">
+              <div
+                v-for="file in row.files"
+                :key="file.id"
+                class="grid-cell"
+                :style="gridCellStyle"
+              >
+                <FileCard
+                  :file="file"
+                  :selected="fileStore.selectedIds.has(file.id)"
+                  :size="gridItemWidth"
+                  @click="handleFileClick(file.id, $event)"
+                  @dblclick="handleFileDblClick(file)"
+                />
+              </div>
+            </div>
+          </RecycleScroller>
+
+          <!-- List 模式 -->
+          <RecycleScroller
+            v-else
+            class="scroller list-view"
+            :items="fileStore.files"
+            :item-size="60"
+            key-field="id"
+            v-slot="{ item }"
+          >
+            <FileListItem
+              ref="fileListItemRefs"
+              :file="item"
+              :selected="fileStore.selectedIds.has(item.id)"
+              @click="handleFileClick(item.id, $event)"
+              @dblclick="handleFileDblClick(item)"
+            />
+          </RecycleScroller>
+          
+          <!-- 加载更多提示 -->
+          <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- 文件列表 -->
     <template v-else>
       <div ref="scrollerRef" class="scroller-container">
@@ -67,13 +134,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch, ref, onUnmounted } from 'vue'
+import { computed, onMounted, watch, ref, onUnmounted, nextTick } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import FileCard from '../components/FileCard.vue'
 import FileListItem from '../components/FileListItem.vue'
+import FolderTree from '../components/FolderTree.vue'
 import type { FileSummary } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
 import { wsClient } from '../api/websocket'
@@ -90,6 +158,9 @@ const fileStore = useFileStore()
 const scrollerRef = ref<HTMLElement | null>(null)
 const fileListItemRefs = ref<InstanceType<typeof FileListItem>[]>([])
 const containerWidth = ref(0)
+
+// ResizeObserver 实例
+let resizeObserver: ResizeObserver | null = null
 
 // Grid 布局配置
 const GAP = 16 // 间距
@@ -179,6 +250,14 @@ onMounted(() => {
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
   
+  // 使用 ResizeObserver 监听容器大小变化
+  if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      updateContainerWidth()
+    })
+    resizeObserver.observe(scrollerRef.value)
+  }
+  
   // 添加滚动监听
   if (scrollerRef.value) {
     scrollerRef.value.addEventListener('scroll', handleScroll)
@@ -192,6 +271,12 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateContainerWidth)
   
+  // 移除 ResizeObserver
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+  
   // 移除滚动监听
   if (scrollerRef.value) {
     scrollerRef.value.removeEventListener('scroll', handleScroll)
@@ -201,7 +286,50 @@ onUnmounted(() => {
 // 监听工作区变化
 watch(() => appStore.currentWorkspace, (newPath) => {
   if (newPath) {
-    fileStore.search({ root: newPath })
+    if (fileStore.browseMode === 'folder') {
+      // 文件夹浏览模式：加载根目录内容
+      fileStore.loadFolderContents(newPath)
+    } else {
+      // 全部文件模式：搜索所有文件
+      fileStore.search({ root: newPath })
+    }
+  }
+})
+
+// 监听浏览模式变化
+watch(() => fileStore.browseMode, async (newMode) => {
+  if (!appStore.currentWorkspace) return
+  
+  if (newMode === 'folder') {
+    // 切换到文件夹浏览模式：加载根目录内容
+    await fileStore.loadFolderContents(appStore.currentWorkspace)
+  } else {
+    // 切换到全部文件模式：搜索所有文件
+    await fileStore.search({ root: appStore.currentWorkspace })
+  }
+  
+  // 等待 DOM 更新后重新设置 ResizeObserver
+  await nextTick()
+  
+  // 清理旧的 ResizeObserver
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+  
+  // 更新容器宽度
+  updateContainerWidth()
+  
+  // 重新设置 ResizeObserver
+  if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      updateContainerWidth()
+    })
+    resizeObserver.observe(scrollerRef.value)
+    
+    // 重新添加滚动监听
+    scrollerRef.value.removeEventListener('scroll', handleScroll)
+    scrollerRef.value.addEventListener('scroll', handleScroll)
   }
 })
 
@@ -257,6 +385,11 @@ async function handleFileDblClick(file: FileSummary) {
   } catch (error) {
     console.error('Failed to open file:', error)
   }
+}
+
+// 处理文件夹选择
+async function handleFolderSelect(folderPath: string) {
+  await fileStore.loadFolderContents(folderPath)
 }
 </script>
 
@@ -329,6 +462,39 @@ async function handleFileDblClick(file: FileSummary) {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* 树形视图样式 */
+.tree-view-container {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.folder-tree-panel {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  overflow-y: auto;
+}
+
+.tree-view-container .scroller-container {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 响应式：小屏幕时调整文件夹树宽度 */
+@media (max-width: 768px) {
+  .folder-tree-panel {
+    width: 200px;
+  }
+}
+
+@media (max-width: 480px) {
+  .folder-tree-panel {
+    width: 160px;
   }
 }
 </style>

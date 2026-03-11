@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Iterable
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, select, text, update, insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..core.indexer import FileMeta
@@ -38,47 +39,149 @@ class Repo:
     # ========== 文件操作 ==========
 
     def upsert_file(self, meta: FileMeta, existing_id: int | None = None) -> File:
-        """插入或更新单个文件"""
+        """插入或更新单个文件 - 使用 SQLite UPSERT 避免并发冲突"""
         # 统一使用 POSIX 路径格式
         path_str = meta.path.as_posix()
         
-        existing = None
+        # 首先尝试通过 existing_id 查找
         if existing_id is not None:
             existing = self.session.execute(
                 select(File).where(File.id == existing_id)
             ).scalar_one_or_none()
-        if existing is None:
-            existing = self.session.execute(
-                select(File).where(File.path == path_str)
-            ).scalar_one_or_none()
-
-        if existing is None:
-            file_row = File(
-                path=path_str,
-                name=meta.name,
-                ext=meta.ext,
-                size=meta.size,
-                type=meta.type,
-                hash=meta.sha256,
-                modified_at=meta.modified_at,
-                duration=meta.duration,
-            )
-            self.session.add(file_row)
-            # 清除缓存
-            self.clear_search_cache()
-            return file_row
-
-        existing.name = meta.name  # type: ignore[assignment]
-        existing.ext = meta.ext  # type: ignore[assignment]
-        existing.size = meta.size  # type: ignore[assignment]
-        existing.type = meta.type  # type: ignore[assignment]
-        existing.hash = meta.sha256  # type: ignore[assignment]
-        existing.modified_at = meta.modified_at  # type: ignore[assignment]
-        existing.duration = meta.duration  # type: ignore[assignment]
-        existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
-        # 清除缓存
+            if existing is not None:
+                # 更新现有记录
+                existing.name = meta.name  # type: ignore[assignment]
+                existing.ext = meta.ext  # type: ignore[assignment]
+                existing.size = meta.size  # type: ignore[assignment]
+                existing.type = meta.type  # type: ignore[assignment]
+                existing.hash = meta.sha256  # type: ignore[assignment]
+                existing.modified_at = meta.modified_at  # type: ignore[assignment]
+                existing.duration = meta.duration  # type: ignore[assignment]
+                existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
+                self.clear_search_cache()
+                return existing
+        
+        # 使用 SQLite 的 INSERT ... ON CONFLICT 进行原子性 UPSERT
+        stmt = sqlite_insert(File).values(
+            path=path_str,
+            name=meta.name,
+            ext=meta.ext,
+            size=meta.size,
+            type=meta.type,
+            hash=meta.sha256,
+            modified_at=meta.modified_at,
+            duration=meta.duration,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        
+        # 当 path 冲突时更新所有字段
+        update_dict = {
+            'name': meta.name,
+            'ext': meta.ext,
+            'size': meta.size,
+            'type': meta.type,
+            'hash': meta.sha256,
+            'modified_at': meta.modified_at,
+            'duration': meta.duration,
+            'updated_at': datetime.utcnow(),
+        }
+        
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['path'],
+            set_=update_dict
+        )
+        
+        self.session.execute(stmt)
         self.clear_search_cache()
-        return existing
+        
+        # 返回更新后的记录
+        return self.session.execute(
+            select(File).where(File.path == path_str)
+        ).scalar_one()
+
+    def bulk_upsert_files_fast(self, metas: list, existing_ids: dict[str, int]) -> int:
+        """
+        超高速批量插入或更新文件
+        
+        针对大文件量优化，使用原生 SQL 批量操作
+        
+        Args:
+            metas: FileMeta 列表
+            existing_ids: 路径到 ID 的映射字典
+        
+        Returns:
+            处理的文件数量
+        """
+        if not metas:
+            return 0
+        
+        # 分离插入和更新
+        to_insert = []
+        to_update = []
+        
+        for meta in metas:
+            path_str = meta.path.as_posix()
+            if path_str in existing_ids:
+                to_update.append(meta)
+            else:
+                to_insert.append(meta)
+        
+        now = datetime.utcnow()
+        
+        # 批量插入 - 使用 INSERT ... ON CONFLICT DO UPDATE
+        if to_insert:
+            insert_values = [
+                {
+                    'path': meta.path.as_posix(),
+                    'name': meta.name,
+                    'ext': meta.ext,
+                    'size': meta.size,
+                    'type': meta.type,
+                    'hash': meta.sha256,
+                    'modified_at': meta.modified_at,
+                    'duration': meta.duration,
+                    'created_at': now,
+                    'updated_at': now,
+                }
+                for meta in to_insert
+            ]
+            
+            stmt = sqlite_insert(File).values(insert_values)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['path'],
+                set_={
+                    'name': stmt.excluded.name,
+                    'ext': stmt.excluded.ext,
+                    'size': stmt.excluded.size,
+                    'type': stmt.excluded.type,
+                    'hash': stmt.excluded.hash,
+                    'modified_at': stmt.excluded.modified_at,
+                    'duration': stmt.excluded.duration,
+                    'updated_at': now,
+                }
+            )
+            self.session.execute(stmt)
+        
+        # 批量更新
+        if to_update:
+            for meta in to_update:
+                path_str = meta.path.as_posix()
+                self.session.execute(
+                    update(File).where(File.path == path_str).values(
+                        name=meta.name,
+                        ext=meta.ext,
+                        size=meta.size,
+                        type=meta.type,
+                        hash=meta.sha256,
+                        modified_at=meta.modified_at,
+                        duration=meta.duration,
+                        updated_at=now,
+                    )
+                )
+        
+        self.clear_search_cache()
+        return len(metas)
 
     def bulk_upsert_files(
         self, metas: Iterable[FileMeta], batch_size: int = DEFAULT_BATCH_SIZE
