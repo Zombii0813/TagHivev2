@@ -313,10 +313,75 @@ fn check_and_rotate_log_file(log_file_path: &PathBuf) {
     }
 }
 
-/// 获取便携模式数据目录
-/// 优先使用工作目录下的 .taghive，实现便携模式
+/// 获取项目根目录（开发模式使用）
+fn get_project_root() -> Option<PathBuf> {
+    // 尝试从当前工作目录找到项目根目录
+    let current_dir = std::env::current_dir().ok()?;
+    
+    // 如果在 src-tauri 目录中，向上两级找到项目根目录
+    if current_dir.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
+        return current_dir.parent().map(|p| p.to_path_buf());
+    }
+    
+    // 如果在项目根目录，直接返回
+    if current_dir.join("src-python").exists() {
+        return Some(current_dir);
+    }
+    
+    // 尝试向上查找包含 src-python 的目录
+    let mut dir = current_dir.clone();
+    for _ in 0..5 {
+        if dir.join("src-python").exists() {
+            return Some(dir);
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    
+    Some(current_dir)
+}
+
+/// 获取数据目录
+/// 默认便携模式：使用应用目录下的 .taghive
+/// 标准模式（需创建 use-system-data-dir 标志）：使用工作目录
 fn get_portable_data_dir(working_dir: &PathBuf) -> PathBuf {
+    // 首先检查环境变量 TAGHIVE_DATA_DIR（由主程序设置）
+    if let Ok(data_dir) = std::env::var("TAGHIVE_DATA_DIR") {
+        println!("Using TAGHIVE_DATA_DIR from env: {}", data_dir);
+        return PathBuf::from(data_dir);
+    }
+    
+    // 尝试获取应用目录（对于打包的应用）
+    let app_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
+    
+    if let Some(ref app_dir) = app_dir {
+        // 检查是否强制使用系统数据目录
+        let system_data_flag = app_dir.join("use-system-data-dir");
+        if system_data_flag.exists() {
+            // 标准模式：使用工作目录
+            println!("System data dir mode: using working directory");
+            return working_dir.join(".taghive");
+        }
+        
+        // 默认便携模式：使用应用目录下的 .taghive
+        println!("Portable mode (default): using app directory");
+        return app_dir.join(".taghive");
+    }
+    
+    // 回退到工作目录
     working_dir.join(".taghive")
+}
+
+/// 从环境变量获取数据目录（由主程序设置）
+fn get_data_dir_from_env() -> Option<PathBuf> {
+    std::env::var("TAGHIVE_DATA_DIR")
+        .ok()
+        .map(PathBuf::from)
 }
 
 /// 查找可用端口
@@ -493,10 +558,35 @@ fn get_sidecar_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(PathBuf, P
         // 否则，尝试查找系统 Python（与开发模式相同的逻辑）
         println!("Bundled sidecar not found at {:?}, trying to find system Python...", sidecar_path);
         
-        // 获取应用安装目录作为工作目录
-        let app_dir = app.path().app_local_data_dir()
-            .or_else(|_| app.path().app_data_dir())
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        // 获取应用安装目录
+        let install_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
+        
+        // 检查是否强制使用系统数据目录
+        let use_system_data = install_dir.as_ref()
+            .map(|dir| dir.join("use-system-data-dir").exists())
+            .unwrap_or(false);
+        
+        // 确定工作目录
+        let app_dir = if use_system_data {
+            // 标准模式：使用系统数据目录
+            app.path().app_local_data_dir()
+                .or_else(|_| app.path().app_data_dir())
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        } else {
+            // 默认便携模式：使用应用安装目录
+            install_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        };
+        
+        // 设置数据目录环境变量供 Python sidecar 使用
+        if !use_system_data {
+            let data_dir = app_dir.join(".taghive").join("data");
+            std::env::set_var("TAGHIVE_DATA_DIR", &data_dir);
+            println!("Portable mode (default): data directory set to {:?}", data_dir);
+        } else {
+            println!("System data dir mode: using system directories");
+        }
         
         // 尝试从环境变量获取 Python 路径
         if let Ok(python_path_str) = std::env::var("TAGHIVE_PYTHON_PATH") {

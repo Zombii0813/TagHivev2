@@ -6,6 +6,7 @@ use tauri::{Manager, State};
 mod sidecar;
 use sidecar::PythonSidecar;
 
+/// 应用状态
 pub struct AppState {
     pub sidecar: Arc<Mutex<Option<PythonSidecar>>>,
 }
@@ -16,6 +17,109 @@ impl AppState {
             sidecar: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+/// 应用数据目录状态
+pub struct AppDataDir(pub PathBuf);
+
+/// 获取项目根目录（开发模式使用）
+fn get_project_root() -> Option<PathBuf> {
+    // 尝试从当前工作目录找到项目根目录
+    let current_dir = std::env::current_dir().ok()?;
+    
+    // 如果在 src-tauri 目录中，向上两级找到项目根目录
+    if current_dir.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
+        return current_dir.parent().map(|p| p.to_path_buf());
+    }
+    
+    // 如果在项目根目录，直接返回
+    if current_dir.join("src-python").exists() {
+        return Some(current_dir);
+    }
+    
+    // 尝试向上查找包含 src-python 的目录
+    let mut dir = current_dir.clone();
+    for _ in 0..5 {
+        if dir.join("src-python").exists() {
+            return Some(dir);
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    
+    Some(current_dir)
+}
+
+/// 获取应用安装目录（exe 所在目录）
+fn get_app_install_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+}
+
+/// 获取便携模式的基础目录
+/// 开发模式: 项目根目录
+/// 生产模式: 应用安装目录
+fn get_portable_base_dir() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        // 开发模式：使用项目根目录
+        get_project_root()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // 生产模式：使用应用安装目录
+        get_app_install_dir()
+    }
+}
+
+/// 获取应用数据目录
+/// 默认便携模式: {base_dir}/.taghive/data/
+/// 标准模式（需创建 use-system-data-dir 标志）: %LOCALAPPDATA%/com.taghive.app/
+pub fn get_app_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    // 获取基础目录（开发模式为项目根目录，生产模式为应用安装目录）
+    if let Some(base_dir) = get_portable_base_dir() {
+        // 检查是否强制使用系统数据目录
+        let system_data_flag = base_dir.join("use-system-data-dir");
+        if system_data_flag.exists() {
+            // 标准模式：使用系统默认位置
+            let data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
+            println!("System data dir mode, data directory: {:?}", data_dir);
+            return data_dir;
+        }
+        
+        // 默认便携模式：数据存储在基础目录下
+        let data_dir = base_dir.join(".taghive").join("data");
+        println!("Portable mode (default), data directory: {:?}", data_dir);
+        return data_dir;
+    }
+    
+    // 回退到标准模式
+    let data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
+    println!("Fallback to system data dir, data directory: {:?}", data_dir);
+    data_dir
+}
+
+/// 获取 WebView 数据目录
+/// 默认便携模式下也使用基础目录
+pub fn get_webview_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    if let Some(base_dir) = get_portable_base_dir() {
+        // 检查是否强制使用系统数据目录
+        let system_data_flag = base_dir.join("use-system-data-dir");
+        if system_data_flag.exists() {
+            // 标准模式：使用默认位置
+            return app.path().app_local_data_dir().expect("Failed to get local data dir");
+        }
+        
+        // 默认便携模式：WebView 数据也放在基础目录
+        return base_dir.join(".taghive").join("webview");
+    }
+    
+    // 回退到标准模式
+    app.path().app_local_data_dir().expect("Failed to get local data dir")
 }
 
 #[tauri::command]
@@ -165,38 +269,6 @@ async fn open_folder(path: String, file_path: Option<String>) -> Result<(), Stri
     Ok(())
 }
 
-/// 获取开发模式下的项目根目录
-/// 在开发模式下，日志存储在 src-python/.taghive/logs/
-fn get_project_root() -> Option<PathBuf> {
-    // 尝试从当前工作目录找到项目根目录
-    let current_dir = std::env::current_dir().ok()?;
-    
-    // 如果在 src-tauri 目录中，向上两级找到项目根目录
-    if current_dir.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
-        return current_dir.parent().map(|p| p.to_path_buf());
-    }
-    
-    // 如果在项目根目录，直接返回
-    if current_dir.join("src-python").exists() {
-        return Some(current_dir);
-    }
-    
-    // 尝试向上查找包含 src-python 的目录
-    let mut dir = current_dir.clone();
-    for _ in 0..5 {
-        if dir.join("src-python").exists() {
-            return Some(dir);
-        }
-        if let Some(parent) = dir.parent() {
-            dir = parent.to_path_buf();
-        } else {
-            break;
-        }
-    }
-    
-    Some(current_dir)
-}
-
 /// 获取便携模式日志文件路径
 /// 开发模式: {project_root}/src-python/.taghive/logs/sidecar.log
 /// 生产模式: {app_dir}/.taghive/logs/sidecar.log
@@ -315,6 +387,35 @@ pub fn run() {
             open_logs_folder,
         ])
         .setup(|app| {
+            // 获取应用数据目录
+            let app_data_dir = get_app_data_dir(&app.handle());
+            
+            // 获取 WebView 数据目录
+            let webview_data_dir = get_webview_data_dir(&app.handle());
+            
+            // 确保数据目录存在
+            if let Err(e) = std::fs::create_dir_all(&webview_data_dir) {
+                eprintln!("Failed to create webview data directory: {}", e);
+            }
+            if let Err(e) = std::fs::create_dir_all(&app_data_dir) {
+                eprintln!("Failed to create app data directory: {}", e);
+            }
+            
+            println!("WebView data directory: {:?}", webview_data_dir);
+            println!("App data directory: {:?}", app_data_dir);
+            
+            // 设置 TAGHIVE_DATA_DIR 环境变量供 Python sidecar 使用
+            std::env::set_var("TAGHIVE_DATA_DIR", &app_data_dir);
+            println!("Set TAGHIVE_DATA_DIR to: {:?}", app_data_dir);
+            
+            // 注意：WebView 数据目录在 Tauri 2.0 中通过环境变量设置
+            // 在 Windows 上，WebView2 会读取 WEBVIEW2_USER_DATA_FOLDER 环境变量
+            #[cfg(windows)]
+            {
+                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_data_dir);
+                println!("Set WEBVIEW2_USER_DATA_FOLDER to: {:?}", webview_data_dir);
+            }
+            
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state: State<'_, AppState> = app_handle.state();

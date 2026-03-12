@@ -4,7 +4,7 @@
       v-model="searchText"
       placeholder="搜索文件..."
       clearable
-      @keyup.enter="handleSearch"
+      @input="handleInput"
     >
       <template #prefix>
         <el-icon><Search /></el-icon>
@@ -30,25 +30,54 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Search, ArrowDown } from '@element-plus/icons-vue'
 import { useFileStore } from '../stores/files'
+import { useAppStore } from '../stores/app'
 
 const fileStore = useFileStore()
+const appStore = useAppStore()
 const searchText = ref('')
 const selectedType = ref('')
+
+// 防抖定时器
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+const DEBOUNCE_DELAY = 300 // 防抖延迟 300ms
 
 function handleSearch() {
   fileStore.search({
     text: searchText.value || undefined,
     types: selectedType.value ? [selectedType.value] : undefined,
+    root: appStore.currentWorkspace || undefined,
   })
+}
+
+function handleInput() {
+  // 清除之前的定时器
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+  }
+  // 设置新的定时器，延迟执行搜索
+  debounceTimer = setTimeout(() => {
+    handleSearch()
+  }, DEBOUNCE_DELAY)
 }
 
 function handleTypeFilter(type: string) {
   selectedType.value = type
   handleSearch()
 }
+
+// 监听清空事件
+watch(searchText, (newValue) => {
+  if (newValue === '') {
+    // 清空时立即搜索（显示所有文件）
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+    }
+    handleSearch()
+  }
+})
 </script>
 
 <style scoped>

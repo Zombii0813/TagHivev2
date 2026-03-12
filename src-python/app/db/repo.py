@@ -488,11 +488,11 @@ class Repo:
         # 简单启发式：包含空格或使用 * 通配符时优先使用 FTS
         return " " in text or "*" in text or len(text) > 3
 
-    def _fts_search(self, text: str, limit: int | None = None) -> list[int]:
+    def _fts_search(self, query: str, limit: int | None = None) -> list[int]:
         """使用 FTS5 全文搜索"""
         # 转换用户输入为 FTS5 查询语法
         # 支持: prefix*, "phrase", AND, OR, NOT
-        query_text = text.replace("*", "*")  # 保留通配符
+        query_text = query.replace("*", "*")  # 保留通配符
         
         stmt = select(FileSearch.rowid).where(
             text("files_fts MATCH :query")
