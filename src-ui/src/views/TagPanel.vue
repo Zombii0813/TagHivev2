@@ -131,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, watch, nextTick } from 'vue'
 import { Plus, Close, Edit, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
@@ -164,8 +164,29 @@ const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
 const selectedTag = ref<Tag | null>(null)
 
+// 加载标签，根据当前工作目录过滤
+function loadTagsForWorkspace() {
+  const workspace = appStore.currentWorkspace
+  tagStore.loadTags(workspace || undefined)
+}
+
 onMounted(() => {
-  tagStore.loadTags()
+  loadTagsForWorkspace()
+})
+
+// 监听工作目录变化，重新加载标签
+watch(() => appStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
+  if (newWorkspace !== oldWorkspace) {
+    console.log('[TagPanel] Workspace changed from', oldWorkspace, 'to', newWorkspace)
+    // 清除标签选择
+    tagStore.clearSelection()
+    // 重新加载标签
+    loadTagsForWorkspace()
+    // 如果当前有标签过滤，清除过滤并重新搜索
+    if (tagStore.hasSelection) {
+      fileStore.search({ root: newWorkspace || undefined })
+    }
+  }
 })
 
 function handleTagClick(tagId: number, event: MouseEvent) {

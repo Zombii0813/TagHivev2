@@ -23,10 +23,10 @@ export const useTagStore = defineStore('tags', () => {
   const hasSelection = computed(() => selectedTagIds.value.size > 0)
 
   // Actions
-  async function loadTags() {
+  async function loadTags(root?: string) {
     isLoading.value = true
     try {
-      tags.value = await tagApi.getAll()
+      tags.value = await tagApi.getAll(root)
     } catch (error) {
       console.error('Failed to load tags:', error)
     } finally {

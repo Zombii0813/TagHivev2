@@ -3,8 +3,10 @@ import type { Tag, CreateTagRequest, UpdateTagRequest } from '../types'
 
 export const tagApi = {
   // 获取所有标签
-  async getAll(): Promise<Tag[]> {
-    return apiClient.get<Tag[]>('/api/tags')
+  // root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
+  async getAll(root?: string): Promise<Tag[]> {
+    const config = root ? { params: { root } } : undefined
+    return apiClient.get<Tag[]>('/api/tags', config)
   },
 
   // 获取标签详情

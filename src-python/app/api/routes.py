@@ -316,10 +316,15 @@ async def delete_file(
 
 @router.get("/tags", response_model=List[TagDTO])
 async def list_tags(
+    root: str | None = None,
     repo: Repo = Depends(get_repo),
 ):
-    """获取所有标签"""
-    tags = repo.list_tags()
+    """获取所有标签
+    
+    Args:
+        root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
+    """
+    tags = repo.list_tags(root=root)
     result = []
     for tag in tags:
         # 使用动态属性 _file_count（由 list_tags 方法设置）

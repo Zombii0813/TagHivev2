@@ -282,27 +282,77 @@ class Repo:
 
     # ========== 标签操作 ==========
 
-    def list_tags(self) -> list[Tag]:
-        """获取所有标签列表"""
-        # 获取所有标签
-        stmt = select(Tag)
-        tags = list(self.session.execute(stmt).scalars())
+    def list_tags(self, root: str | None = None) -> list[Tag]:
+        """获取所有标签列表
         
-        # 批量获取每个标签的文件数量
-        if tags:
-            tag_ids = [tag.id for tag in tags]
+        Args:
+            root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
+        """
+        if root:
+            # 如果提供了工作目录，只获取该目录下有关联文件的标签
+            root_posix = Path(root).as_posix()
+            root_pattern = root_posix.rstrip("/") + "/%"
+            
+            # 获取该工作目录下的所有文件ID
+            file_stmt = select(File.id).where(File.path.like(root_pattern))
+            file_ids = [row[0] for row in self.session.execute(file_stmt).all()]
+            
+            if not file_ids:
+                # 该工作目录下没有文件，返回空列表
+                return []
+            
+            # 获取这些文件关联的所有标签ID
+            tag_id_stmt = (
+                select(FileTag.tag_id)
+                .where(FileTag.file_id.in_(file_ids))
+                .distinct()
+            )
+            tag_ids = [row[0] for row in self.session.execute(tag_id_stmt).all()]
+            
+            if not tag_ids:
+                # 没有标签关联到这些文件
+                return []
+            
+            # 获取这些标签的详细信息
+            stmt = select(Tag).where(Tag.id.in_(tag_ids))
+            tags = list(self.session.execute(stmt).scalars())
+            
+            # 计算每个标签在该工作目录下的文件数量
             count_stmt = (
                 select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
-                .where(FileTag.tag_id.in_(tag_ids))
+                .where(
+                    FileTag.tag_id.in_(tag_ids),
+                    FileTag.file_id.in_(file_ids)
+                )
                 .group_by(FileTag.tag_id)
             )
             count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
             
-            # 将文件数量设置到标签对象上（用于序列化）
+            # 将文件数量设置到标签对象上
             for tag in tags:
                 tag._file_count = count_results.get(tag.id, 0)
-        
-        return tags
+            
+            return tags
+        else:
+            # 获取所有标签
+            stmt = select(Tag)
+            tags = list(self.session.execute(stmt).scalars())
+            
+            # 批量获取每个标签的文件数量
+            if tags:
+                tag_ids = [tag.id for tag in tags]
+                count_stmt = (
+                    select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
+                    .where(FileTag.tag_id.in_(tag_ids))
+                    .group_by(FileTag.tag_id)
+                )
+                count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
+                
+                # 将文件数量设置到标签对象上（用于序列化）
+                for tag in tags:
+                    tag._file_count = count_results.get(tag.id, 0)
+            
+            return tags
     
     def get_tag_file_count(self, tag_id: int) -> int:
         """获取标签关联的文件数量"""
