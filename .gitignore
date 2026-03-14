@@ -69,3 +69,5 @@ htmlcov/
 .taghive/
 taghive-sidecar.spec
 config.json
+
+docs/

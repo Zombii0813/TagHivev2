@@ -155,3 +155,45 @@
   - 开发版本更改至项目根目录下
   - 发行版本默认在应用目录下
   - 详细内容可查阅PORTABLE_MODE.md
+
+## [0.4.0] - 2026-03-15
+
+### Added
+
+- **数据库性能优化**
+  - 为 `files.path`、`files.type`、`files.modified_at` 添加数据库索引
+  - 为 `file_tags.file_id` 和 `file_tags.tag_id` 添加复合索引
+  - 预期提升搜索速度 30-50%
+
+- **数据库连接池**
+  - 使用 SQLAlchemy 连接池管理
+  - 配置合理的连接池大小（5-10）
+  - 提升并发请求处理能力
+
+- **查询结果缓存层** (`src-python/app/core/query_cache.py`)
+  - 实现内存缓存机制，支持 TTL 自动过期
+  - 最大容量限制和 LRU 淘汰策略
+  - 缓存统计信息（命中率、大小等）
+  - 支持装饰器模式缓存函数结果
+  - 缓存标签列表、文件夹树等相对静态数据
+  - 默认过期时间 5 分钟
+
+- **游标分页优化** (`src-python/app/core/cursor_pagination.py`)
+  - 实现游标分页器 `CursorPaginator`，避免 OFFSET 深度分页性能问题
+  - 支持多字段排序和前后翻页
+  - 自动编码/解码游标字符串
+  - 保留传统 OFFSET 分页用于小数据量场景
+  - 自动根据数据量选择最优分页策略（>10000条使用游标分页）
+
+### Changed
+
+- **数据访问层增强** (`src-python/app/db/repo.py`)
+  - 新增 `list_tags_cached()` 方法 - 缓存标签列表查询
+  - 新增 `get_folder_tree_cached()` 方法 - 缓存文件夹树查询
+  - 新增 `invalidate_tags_cache()` 方法 - 使标签缓存失效
+  - 新增 `invalidate_folder_cache()` 方法 - 使文件夹缓存失效
+  - 新增 `clear_all_caches()` 方法 - 清除所有缓存
+  - 新增 `search_with_cursor()` 方法 - 游标分页搜索
+  - 新增 `search_with_offset()` 方法 - OFFSET 分页搜索
+  - 新增 `search_optimized()` 方法 - 自动选择最优分页策略
+  - 新增 `_estimate_search_count()` 方法 - 预估搜索结果数量

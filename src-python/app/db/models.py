@@ -70,6 +70,8 @@ class FileTag(Base):
     __table_args__ = (
         Index("idx_file_tags_tag_id", "tag_id"),
         Index("idx_file_tags_file_id", "file_id"),
+        # 复合索引 - 同时按文件和标签查询时性能最优
+        Index("idx_file_tags_file_tag", "file_id", "tag_id"),
     )
 
 

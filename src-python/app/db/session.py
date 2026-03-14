@@ -71,6 +71,11 @@ def _ensure_schema() -> None:
             connection.execute(text("CREATE INDEX idx_files_duration ON files(duration)"))
         except Exception:
             pass
+        # 添加 file_tags 复合索引（如果不存在）
+        try:
+            connection.execute(text("CREATE INDEX idx_file_tags_file_tag ON file_tags(file_id, tag_id)"))
+        except Exception:
+            pass
         session.commit()
     except Exception:
         session.rollback()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Optional
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, text, update, insert
@@ -13,10 +13,20 @@ from ..core.indexer import FileMeta
 from ..core.search import SearchQuery, SearchResult
 from ..core.tag_manager import TagSpec
 from ..core.cache import SearchCache
+from ..core.query_cache import get_query_cache, QueryCache
+from ..core.cursor_pagination import (
+    CursorPage,
+    paginate_with_cursor,
+    paginate_with_offset,
+    OffsetPage,
+)
 from .models import File, FileTag, FileSearch, Tag
 
 # 批量操作默认批次大小
 DEFAULT_BATCH_SIZE = 500
+
+# 游标分页阈值 - 超过此数量使用游标分页
+CURSOR_PAGINATION_THRESHOLD = 10000
 
 
 @dataclass
@@ -578,3 +588,314 @@ class Repo:
             return []
         stmt = select(File).where(File.id.in_(file_ids))
         return list(self.session.execute(stmt).scalars())
+
+    # ========== 查询缓存优化 ==========
+
+    def list_tags_cached(self, root: str | None = None, ttl: int = 300) -> list[Tag]:
+        """获取标签列表（带缓存）
+        
+        Args:
+            root: 可选的工作目录路径
+            ttl: 缓存过期时间（秒），默认5分钟
+            
+        Returns:
+            标签列表
+        """
+        cache = get_query_cache()
+        cache_key = f"tags:list:{root or 'all'}"
+        
+        # 尝试从缓存获取
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        # 从数据库获取
+        tags = self.list_tags(root)
+        
+        # 缓存结果
+        cache.set(cache_key, tags, ttl)
+        return tags
+
+    def get_folder_tree_cached(self, root: str, ttl: int = 300) -> dict:
+        """获取文件夹树（带缓存）
+        
+        Args:
+            root: 根目录路径
+            ttl: 缓存过期时间（秒），默认5分钟
+            
+        Returns:
+            文件夹树数据字典
+        """
+        cache = get_query_cache()
+        cache_key = f"folder:tree:{root}"
+        
+        # 尝试从缓存获取
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        # 构建文件夹树
+        from ..api.routes import _build_folder_tree
+        folders, root_file_count = _build_folder_tree(root, self)
+        
+        # 计算总文件夹数
+        def count_folders(nodes) -> int:
+            count = len(nodes)
+            for node in nodes:
+                count += count_folders(node.children)
+            return count
+        
+        result = {
+            "root_path": root,
+            "folders": folders,
+            "total_folders": count_folders(folders),
+            "root_file_count": root_file_count,
+        }
+        
+        # 缓存结果
+        cache.set(cache_key, result, ttl)
+        return result
+
+    def invalidate_tags_cache(self, root: str | None = None) -> None:
+        """使标签列表缓存失效"""
+        cache = get_query_cache()
+        if root:
+            cache.invalidate(f"tags:list:{root}")
+        else:
+            cache.invalidate_pattern("tags:list:")
+
+    def invalidate_folder_cache(self, root: str | None = None) -> None:
+        """使文件夹树缓存失效"""
+        cache = get_query_cache()
+        if root:
+            cache.invalidate(f"folder:tree:{root}")
+        else:
+            cache.invalidate_pattern("folder:tree:")
+
+    def clear_all_caches(self) -> None:
+        """清除所有缓存"""
+        self.clear_search_cache()
+        get_query_cache().clear()
+
+    # ========== 游标分页查询 ==========
+
+    def search_with_cursor(
+        self,
+        query: SearchQuery,
+        cursor: str | None = None,
+        page_size: int = 50,
+    ) -> CursorPage[SearchResult]:
+        """使用游标分页搜索文件
+        
+        适用于大数据量场景，避免 OFFSET 分页的性能问题。
+        
+        Args:
+            query: 搜索查询
+            cursor: 游标字符串，None表示第一页
+            page_size: 每页大小
+            
+        Returns:
+            CursorPage 分页结果
+        """
+        # 构建基础查询
+        stmt = select(File)
+
+        # 文本搜索
+        if query.text:
+            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
+                fts_ids = self._fts_search(query.text)
+                if fts_ids:
+                    stmt = stmt.where(File.id.in_(fts_ids))
+                else:
+                    term = f"%{query.text}%"
+                    stmt = stmt.where(File.name.ilike(term))
+            else:
+                term = f"%{query.text}%"
+                stmt = stmt.where(File.name.ilike(term))
+
+        # 路径前缀过滤
+        if query.root:
+            root_posix = Path(query.root).as_posix()
+            root_pattern = root_posix.rstrip("/") + "/%"
+            stmt = stmt.where(File.path.like(root_pattern))
+
+        # 文件类型过滤
+        if query.types:
+            stmt = stmt.where(File.type.in_(query.types))
+
+        # 标签过滤
+        if query.tags:
+            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
+                Tag, Tag.id == FileTag.tag_id
+            )
+            stmt = stmt.where(Tag.id.in_(query.tags))
+            if query.match_all_tags:
+                stmt = stmt.group_by(File.id).having(
+                    func.count(func.distinct(Tag.id)) == len(query.tags)
+                )
+            else:
+                stmt = stmt.distinct()
+
+        # 确定排序字段
+        sort_column = getattr(File, query.sort_by, File.name) if query.sort_by else File.name
+
+        # 使用游标分页
+        def mapper(row) -> SearchResult:
+            return SearchResult(
+                file_id=int(row.id),
+                path=str(row.path),
+                name=str(row.name),
+                type=str(row.type),
+            )
+
+        return paginate_with_cursor(
+            query=stmt,
+            sort_by=sort_column,
+            cursor=cursor,
+            page_size=page_size,
+            sort_desc=query.sort_desc,
+            mapper=mapper,
+        )
+
+    def search_with_offset(
+        self,
+        query: SearchQuery,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> OffsetPage[SearchResult]:
+        """使用 OFFSET 分页搜索文件
+        
+        适用于小数据量场景（< 10000条记录）。
+        
+        Args:
+            query: 搜索查询
+            offset: 偏移量
+            limit: 每页大小
+            
+        Returns:
+            OffsetPage 分页结果
+        """
+        # 构建基础查询
+        stmt = select(File)
+
+        # 文本搜索
+        if query.text:
+            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
+                fts_ids = self._fts_search(query.text)
+                if fts_ids:
+                    stmt = stmt.where(File.id.in_(fts_ids))
+                else:
+                    term = f"%{query.text}%"
+                    stmt = stmt.where(File.name.ilike(term))
+            else:
+                term = f"%{query.text}%"
+                stmt = stmt.where(File.name.ilike(term))
+
+        # 路径前缀过滤
+        if query.root:
+            root_posix = Path(query.root).as_posix()
+            root_pattern = root_posix.rstrip("/") + "/%"
+            stmt = stmt.where(File.path.like(root_pattern))
+
+        # 文件类型过滤
+        if query.types:
+            stmt = stmt.where(File.type.in_(query.types))
+
+        # 标签过滤
+        if query.tags:
+            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
+                Tag, Tag.id == FileTag.tag_id
+            )
+            stmt = stmt.where(Tag.id.in_(query.tags))
+            if query.match_all_tags:
+                stmt = stmt.group_by(File.id).having(
+                    func.count(func.distinct(Tag.id)) == len(query.tags)
+                )
+            else:
+                stmt = stmt.distinct()
+
+        # 排序
+        if query.sort_by:
+            sort_column = getattr(File, query.sort_by, File.name)
+            if query.sort_desc:
+                stmt = stmt.order_by(sort_column.desc())
+            else:
+                stmt = stmt.order_by(sort_column.asc())
+        else:
+            stmt = stmt.order_by(File.name.asc())
+
+        # 使用 OFFSET 分页
+        def mapper(row) -> SearchResult:
+            return SearchResult(
+                file_id=int(row.id),
+                path=str(row.path),
+                name=str(row.name),
+                type=str(row.type),
+            )
+
+        return paginate_with_offset(
+            query=stmt,
+            offset=offset,
+            limit=limit,
+            mapper=mapper,
+        )
+
+    def search_optimized(
+        self,
+        query: SearchQuery,
+        offset: int = 0,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> CursorPage[SearchResult] | OffsetPage[SearchResult]:
+        """优化的搜索方法 - 自动选择分页策略
+        
+        根据预估数据量自动选择游标分页或 OFFSET 分页。
+        
+        Args:
+            query: 搜索查询
+            offset: 偏移量（OFFSET分页使用）
+            limit: 每页大小
+            cursor: 游标字符串（游标分页使用）
+            
+        Returns:
+            分页结果（CursorPage 或 OffsetPage）
+        """
+        # 如果提供了游标，使用游标分页
+        if cursor is not None:
+            return self.search_with_cursor(query, cursor, limit)
+        
+        # 预估数据量
+        estimated_count = self._estimate_search_count(query)
+        
+        # 大数据量使用游标分页
+        if estimated_count > CURSOR_PAGINATION_THRESHOLD or offset > 1000:
+            # OFFSET 较大时也使用游标分页
+            return self.search_with_cursor(query, None, limit)
+        
+        # 小数据量使用 OFFSET 分页
+        return self.search_with_offset(query, offset, limit)
+
+    def _estimate_search_count(self, query: SearchQuery) -> int:
+        """预估搜索结果数量"""
+        stmt = select(func.count(File.id))
+
+        # 应用相同的过滤条件
+        if query.text:
+            term = f"%{query.text}%"
+            stmt = stmt.where(File.name.ilike(term))
+
+        if query.root:
+            root_posix = Path(query.root).as_posix()
+            root_pattern = root_posix.rstrip("/") + "/%"
+            stmt = stmt.where(File.path.like(root_pattern))
+
+        if query.types:
+            stmt = stmt.where(File.type.in_(query.types))
+
+        if query.tags:
+            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
+                Tag, Tag.id == FileTag.tag_id
+            )
+            stmt = stmt.where(Tag.id.in_(query.tags))
+
+        return self.session.execute(stmt).scalar() or 0
