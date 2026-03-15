@@ -185,6 +185,21 @@
   - 保留传统 OFFSET 分页用于小数据量场景
   - 自动根据数据量选择最优分页策略（>10000条使用游标分页）
 
+- **并行扫描优化** (`src-python/app/core/parallel_scanner.py`)
+  - 实现 `ParallelScanner` 并行扫描器，使用多线程/多进程并行扫描不同子目录
+  - 实现 `AdaptiveScanner` 自适应扫描器，根据目录特征自动选择最优策略
+  - 支持动态线程数调整（根据 CPU 核心数）
+  - 支持任务优先级队列，优先扫描大目录
+  - 预期提升扫描速度 2-4 倍
+
+- **增量扫描改进** (`src-python/app/core/incremental_scanner.py`)
+  - 实现 `IncrementalScanner` 增量扫描器，基于文件签名检测变更
+  - 实现 `FileSystemWatcher` 文件系统监控器（支持 watchdog 库）
+  - 实现 `SmartScanner` 智能扫描器，结合多种扫描策略
+  - 支持文件签名比对（大小 + 修改时间 + inode）
+  - 支持文件系统实时监控（创建/修改/删除/移动事件）
+  - 支持断点续扫和扫描进度持久化
+
 ### Changed
 
 - **数据访问层增强** (`src-python/app/db/repo.py`)
@@ -197,3 +212,9 @@
   - 新增 `search_with_offset()` 方法 - OFFSET 分页搜索
   - 新增 `search_optimized()` 方法 - 自动选择最优分页策略
   - 新增 `_estimate_search_count()` 方法 - 预估搜索结果数量
+
+- **扫描服务增强** (`src-python/app/services/scan_service.py`)
+  - 新增 `OptimizedScanService` 优化扫描服务类
+  - 集成并行扫描和增量扫描功能
+  - 支持智能扫描策略选择（增量/全量/断点续扫）
+  - 支持实时监控文件变更

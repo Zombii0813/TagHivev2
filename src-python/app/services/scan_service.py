@@ -16,6 +16,8 @@ from ..core.indexer import (
     UltraFastFileScanner,
     BatchFileProcessor
 )
+from ..core.parallel_scanner import ParallelScanner, AdaptiveScanner, ScanResult
+from ..core.incremental_scanner import SmartScanner, IncrementalScanner, ChangeType
 from ..db.repo import Repo
 from ..utils.media_info import extract_duration, is_media_file
 
@@ -248,3 +250,206 @@ class ParallelScanService:
             return count
         finally:
             session.close()
+
+
+@dataclass
+class OptimizedScanService:
+    """优化扫描服务 - 结合并行扫描和增量扫描
+    
+    特性：
+    1. 并行扫描：使用多线程/多进程并行扫描不同子目录
+    2. 增量扫描：基于文件签名检测变更，减少不必要的全量扫描
+    3. 断点续扫：支持中断后恢复扫描
+    4. 实时监控：使用文件系统事件监控变更（可选）
+    """
+    
+    session: Session
+    use_parallel: bool = True
+    use_incremental: bool = True
+    
+    def __post_init__(self):
+        self.parallel_scanner = AdaptiveScanner()
+        self.incremental_scanner = IncrementalScanner()
+        self.smart_scanner = SmartScanner()
+    
+    def scan_workspace(
+        self,
+        root: Path,
+        force_full: bool = False,
+        resume: bool = True,
+        on_progress: Callable[[int, int, int, str], None] | None = None
+    ) -> int:
+        """优化扫描工作区
+        
+        Args:
+            root: 工作区根目录
+            force_full: 强制全量扫描
+            resume: 尝试断点续扫
+            on_progress: 进度回调函数，参数为 (当前计数, 总数, 百分比, 当前文件路径)
+            
+        Returns:
+            处理的文件总数
+        """
+        repo = Repo(self.session)
+        root_path = root.resolve()
+        logger.info(f"[OptimizedScan] Starting optimized scan of: {root_path}")
+        
+        # 阶段 1: 智能扫描检测变更
+        if self.use_incremental and not force_full:
+            changes, is_full = self.smart_scanner.scan(
+                root_path,
+                force_full=force_full,
+                resume=resume
+            )
+            
+            if not is_full:
+                logger.info(f"[OptimizedScan] Incremental scan: {len(changes)} changes detected")
+                return self._process_changes(repo, changes, on_progress)
+        
+        # 阶段 2: 并行扫描（全量扫描）
+        if self.use_parallel:
+            logger.info(f"[OptimizedScan] Using parallel scan")
+            return self._parallel_scan(repo, root_path, on_progress)
+        else:
+            logger.info(f"[OptimizedScan] Using standard scan")
+            return self._standard_scan(repo, root_path, on_progress)
+    
+    def _process_changes(
+        self,
+        repo: Repo,
+        changes: List,
+        on_progress: Callable[[int, int, int, str], None] | None
+    ) -> int:
+        """处理变更文件"""
+        from ..core.indexer import build_file_meta
+        
+        total = len(changes)
+        processed = 0
+        batch_size = 1000
+        current_batch: List[FileMeta] = []
+        
+        # 加载现有文件信息
+        root_path = Path(changes[0].path).parent if changes else Path(".")
+        while root_path.parent != root_path and not any(
+            c.path.startswith(str(root_path)) for c in changes[:10] if changes
+        ):
+            root_path = root_path.parent
+        
+        path_to_id = self._load_existing_files(repo, root_path)
+        
+        for change in changes:
+            if change.change_type == ChangeType.DELETED:
+                # 处理删除的文件
+                file_id = path_to_id.get(change.path)
+                if file_id:
+                    repo.delete_files([file_id])
+            else:
+                # 处理新增或修改的文件
+                try:
+                    meta = build_file_meta(Path(change.path))
+                    current_batch.append(meta)
+                    
+                    if len(current_batch) >= batch_size:
+                        repo.bulk_upsert_files_fast(current_batch, path_to_id)
+                        current_batch.clear()
+                        self.session.commit()
+                except Exception as e:
+                    logger.warning(f"[OptimizedScan] Failed to process {change.path}: {e}")
+            
+            processed += 1
+            if on_progress and processed % 100 == 0:
+                percentage = int((processed / total) * 100) if total > 0 else 0
+                on_progress(processed, total, percentage, change.path)
+        
+        # 处理剩余批次
+        if current_batch:
+            repo.bulk_upsert_files_fast(current_batch, path_to_id)
+            self.session.commit()
+        
+        if on_progress:
+            on_progress(processed, processed, 100, "扫描完成")
+        
+        logger.info(f"[OptimizedScan] Processed {processed} changes")
+        return processed
+    
+    def _parallel_scan(
+        self,
+        repo: Repo,
+        root_path: Path,
+        on_progress: Callable[[int, int, int, str], None] | None
+    ) -> int:
+        """并行扫描"""
+        from ..core.indexer import build_file_meta
+        
+        # 使用自适应扫描器
+        result = self.parallel_scanner.scan(root_path)
+        
+        total = result.file_count
+        processed = 0
+        batch_size = 1000
+        current_batch: List[FileMeta] = []
+        
+        # 加载现有文件信息
+        path_to_id = self._load_existing_files(repo, root_path)
+        
+        for file_path in result.file_paths:
+            try:
+                meta = build_file_meta(Path(file_path))
+                current_batch.append(meta)
+                
+                if len(current_batch) >= batch_size:
+                    repo.bulk_upsert_files_fast(current_batch, path_to_id)
+                    current_batch.clear()
+                    self.session.commit()
+                
+                processed += 1
+                if on_progress and processed % 100 == 0:
+                    percentage = int((processed / total) * 100) if total > 0 else 0
+                    on_progress(processed, total, percentage, file_path)
+                    
+            except Exception as e:
+                logger.warning(f"[OptimizedScan] Failed to process {file_path}: {e}")
+        
+        # 处理剩余批次
+        if current_batch:
+            repo.bulk_upsert_files_fast(current_batch, path_to_id)
+            self.session.commit()
+        
+        # 更新签名
+        self.incremental_scanner.detect_changes(root_path)
+        
+        if on_progress:
+            on_progress(processed, processed, 100, "扫描完成")
+        
+        logger.info(f"[OptimizedScan] Parallel scan completed: {processed} files in {result.elapsed_time:.2f}s")
+        return processed
+    
+    def _standard_scan(
+        self,
+        repo: Repo,
+        root_path: Path,
+        on_progress: Callable[[int, int, int, str], None] | None
+    ) -> int:
+        """标准扫描（使用原有逻辑）"""
+        service = ScanService(self.session)
+        return service.scan_workspace(root_path, on_progress)
+    
+    def _load_existing_files(self, repo: Repo, root_path: Path) -> dict[str, int]:
+        """加载现有文件信息到内存字典"""
+        path_to_id: dict[str, int] = {}
+        root_posix = root_path.as_posix()
+        
+        for file_id, path in repo.list_file_paths():
+            posix_path = Path(path).as_posix()
+            if posix_path.startswith(root_posix):
+                path_to_id[posix_path] = file_id
+        
+        return path_to_id
+    
+    def start_monitoring(self, root: Path, callback: Callable) -> bool:
+        """开始实时监控文件变更"""
+        return self.smart_scanner.start_monitoring(root, callback)
+    
+    def stop_monitoring(self):
+        """停止实时监控"""
+        self.smart_scanner.stop_monitoring()
