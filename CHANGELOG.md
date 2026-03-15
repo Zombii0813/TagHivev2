@@ -228,3 +228,24 @@
   - 支持 5 种尺寸：xs/small/medium/large/xl
   - 实现智能预取器 `ThumbnailPrefetcher`，根据滚动方向预加载
   - 新增异步缩略图 API 接口
+
+- **前端性能优化**
+  - **虚拟滚动优化** (`src-ui/src/components/VirtualScroller.vue`)
+    - 实现自定义虚拟滚动组件，支持动态缓冲区大小
+    - 使用 `will-change: transform` 优化渲染性能
+    - 支持 ResizeObserver 自动调整
+    - 减少白屏和闪烁
+  - **组件懒加载** (`src-ui/src/router/index.ts`)
+    - 路由级别代码分割，使用动态导入
+    - 实现路由预加载策略，延迟加载非关键页面
+    - 减少首屏加载时间
+  - **图片懒加载增强** (`src-ui/src/components/LazyImage.vue`)
+    - 使用 Intersection Observer API 实现智能懒加载
+    - 添加骨架屏占位图（Shimmer 动画效果）
+    - 支持 `rootMargin` 预加载配置
+    - 实现渐进式图片加载（淡入效果）
+    - 错误状态处理和重载机制
+  - **状态管理优化** (`src-ui/src/stores/files.ts`)
+    - 添加批量更新工具函数 `batchUpdate`
+    - 使用 `shallowRef` 优化大对象（预留）
+    - 避免频繁的状态变更
