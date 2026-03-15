@@ -80,7 +80,7 @@
 
           <!-- 文件夹浏览模式切换 -->
           <el-button
-            :type="fileStore.browseMode === 'folder' ? 'primary' : ''"
+            :class="['browse-mode-btn', { active: fileStore.browseMode === 'folder' }]"
             :icon="Folder"
             circle
             @click="toggleBrowseMode"
@@ -88,15 +88,15 @@
           />
 
           <!-- 视图模式切换 -->
-          <el-button-group>
+          <el-button-group class="view-mode-group">
             <el-button
-              :type="fileStore.viewMode === 'grid' ? 'primary' : ''"
+              :class="['view-mode-btn', { active: fileStore.viewMode === 'grid' }]"
               :icon="Grid"
               @click="fileStore.setViewMode('grid')"
               :title="'网格视图'"
             />
             <el-button
-              :type="fileStore.viewMode === 'list' ? 'primary' : ''"
+              :class="['view-mode-btn', { active: fileStore.viewMode === 'list' }]"
               :icon="List"
               @click="fileStore.setViewMode('list')"
               :title="'列表视图'"
@@ -362,6 +362,7 @@ const toggleBrowseMode = () => {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 50%, var(--color-bg-tertiary) 100%);
 }
 
 .sidebar {
@@ -369,9 +370,12 @@ const toggleBrowseMode = () => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
-  transition: width 0.3s ease;
+  border-right: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--glass-shadow);
 }
 
 .sidebar-content {
@@ -403,22 +407,24 @@ const toggleBrowseMode = () => {
 
 .sidebar-header {
   padding: 16px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .logo {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--color-text-primary);
   margin: 0;
+  letter-spacing: -0.5px;
 }
 
 .logo .el-icon {
-  font-size: 24px;
+  font-size: 28px;
   color: var(--color-accent);
+  filter: drop-shadow(0 2px 4px rgba(99, 102, 241, 0.3));
 }
 
 .main-content {
@@ -426,7 +432,7 @@ const toggleBrowseMode = () => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--color-bg-primary);
+  background: transparent;
   /* 确保主内容区有足够宽度，不被右侧面板过度压缩 */
   min-width: 600px;
 }
@@ -436,13 +442,111 @@ const toggleBrowseMode = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
+  padding: 0 20px;
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   min-width: 0;
   flex-shrink: 0;
   overflow: hidden;
-  gap: 8px;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* 工具栏按钮样式优化 */
+.toolbar :deep(.el-button) {
+  border-radius: var(--radius-md);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toolbar :deep(.el-button:hover) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.toolbar :deep(.el-button--primary) {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  border: none;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.toolbar :deep(.el-button--primary:hover) {
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+  transform: translateY(-2px);
+}
+
+/* 文件夹浏览模式按钮样式 */
+.browse-mode-btn {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-secondary) !important;
+  transition: all 0.2s ease !important;
+}
+
+.browse-mode-btn:hover {
+  background: var(--color-bg-secondary) !important;
+  border-color: var(--color-accent) !important;
+  color: var(--color-accent) !important;
+}
+
+.browse-mode-btn.active {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%) !important;
+  border-color: var(--color-accent) !important;
+  color: white !important;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.browse-mode-btn.active:hover {
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+  transform: translateY(-2px);
+}
+
+/* 视图模式按钮组样式 */
+.view-mode-group {
+  display: flex;
+}
+
+.view-mode-group :deep(.el-button) {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  margin: 0 !important;
+  border-radius: 0 !important;
+  transition: all 0.2s ease;
+}
+
+/* 第一个按钮左边圆角 */
+.view-mode-group :deep(.el-button:first-child) {
+  border-top-left-radius: var(--radius-md) !important;
+  border-bottom-left-radius: var(--radius-md) !important;
+}
+
+/* 最后一个按钮右边圆角 */
+.view-mode-group :deep(.el-button:last-child) {
+  border-top-right-radius: var(--radius-md) !important;
+  border-bottom-right-radius: var(--radius-md) !important;
+}
+
+/* 中间按钮取消相邻边圆角（通过上面的 0 已经实现） */
+.view-mode-group :deep(.el-button:hover) {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  z-index: 1;
+}
+
+.view-mode-group :deep(.el-button.active) {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  border-color: var(--color-accent);
+  color: white;
+  z-index: 2;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.view-mode-group :deep(.el-button.active:hover) {
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+  transform: translateY(-2px);
 }
 
 .toolbar-left,

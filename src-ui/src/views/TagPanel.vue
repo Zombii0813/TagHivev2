@@ -57,6 +57,8 @@
       v-model="showCreateDialog"
       title="新建标签"
       width="400px"
+      append-to-body
+      :modal-class="'tag-dialog-modal'"
     >
       <el-form :model="newTag" label-width="80px">
         <el-form-item label="名称">
@@ -106,6 +108,8 @@
       v-model="showEditDialog"
       title="编辑标签"
       width="400px"
+      append-to-body
+      :modal-class="'tag-dialog-modal'"
     >
       <el-form :model="editingTag" label-width="80px">
         <el-form-item label="名称">
@@ -241,16 +245,24 @@ async function createTag() {
   }
   
   try {
+    // 传入当前工作目录，实现标签隔离
+    const workspace = appStore.currentWorkspace || undefined
     await tagStore.createTag(
       newTag.value.name,
       newTag.value.color,
-      newTag.value.description
+      newTag.value.description,
+      workspace
     )
     ElMessage.success('标签创建成功')
     showCreateDialog.value = false
     newTag.value = { name: '', color: '#409EFF', description: '' }
-  } catch (error) {
-    ElMessage.error('标签创建失败')
+  } catch (error: any) {
+    // 处理 409 冲突错误
+    if (error?.response?.status === 409) {
+      ElMessage.error('该工作目录下已存在同名标签')
+    } else {
+      ElMessage.error('标签创建失败')
+    }
   }
 }
 

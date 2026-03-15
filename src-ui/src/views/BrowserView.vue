@@ -1,12 +1,15 @@
 <template>
   <div class="browser-view">
     <!-- 空状态 -->
-    <div v-if="!appStore.currentWorkspace" class="empty-state">
-      <el-empty description="请选择一个工作区">
-        <el-button type="primary" @click="selectWorkspace">
-          选择文件夹
-        </el-button>
-      </el-empty>
+    <div v-if="!appStore.currentWorkspace" class="empty-state-container">
+      <EmptyState
+        icon="folder"
+        title="开始管理您的文件"
+        description="选择一个文件夹作为工作区，开始使用 TagHive 管理您的文件和标签"
+        action-text="选择文件夹"
+        hint="支持图片、视频、音频、文档等多种文件类型"
+        @action="selectWorkspace"
+      />
     </div>
 
     <!-- 文件夹浏览模式 -->
@@ -142,6 +145,7 @@ import { useFileStore } from '../stores/files'
 import FileCard from '../components/FileCard.vue'
 import FileListItem from '../components/FileListItem.vue'
 import FolderTree from '../components/FolderTree.vue'
+import EmptyState from '../components/EmptyState.vue'
 import type { FileSummary } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
 import { wsClient } from '../api/websocket'

@@ -31,6 +31,7 @@ export interface CreateTagRequest {
   name: string
   color?: string
   description?: string
+  workspace?: string  // 工作目录路径，用于标签隔离
 }
 
 export interface UpdateTagRequest {

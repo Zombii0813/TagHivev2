@@ -137,23 +137,33 @@ function getTagColor(tagId: number): string {
   display: flex;
   flex-direction: column;
   width: 100%;
-  padding: 8px;
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background: var(--color-bg-primary);
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   box-sizing: border-box;
+  box-shadow: var(--shadow-sm);
 }
 
 .file-card:hover {
+  transform: translateY(-4px) scale(1.02);
   border-color: var(--color-accent);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-xl), var(--shadow-glow);
 }
 
 .file-card.selected {
   border-color: var(--color-accent);
-  background: rgba(64, 158, 255, 0.05);
+  background: var(--color-accent-light);
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-2px);
+}
+
+.file-card.selected .thumbnail {
+  box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 
 .thumbnail {
@@ -162,10 +172,11 @@ function getTagColor(tagId: number): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border-radius: 4px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
   overflow: hidden;
   flex-shrink: 0;
+  transition: all 0.3s ease;
 }
 
 .image-container {
@@ -188,16 +199,16 @@ function getTagColor(tagId: number): string {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: var(--color-bg-secondary);
+  background: linear-gradient(135deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 100%);
   z-index: 1;
   transition: opacity 0.3s ease;
 }
 
 .loading-spinner {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   margin-top: 8px;
-  border: 2px solid rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(99, 102, 241, 0.2);
   border-top: 2px solid var(--color-accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -213,7 +224,7 @@ function getTagColor(tagId: number): string {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.4s ease, transform 0.3s ease;
   z-index: 2;
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
@@ -227,6 +238,10 @@ function getTagColor(tagId: number): string {
   opacity: 0;
 }
 
+.file-card:hover .thumbnail img.image-loaded {
+  transform: scale(1.05);
+}
+
 .image-container .image-loaded {
   opacity: 1;
 }
@@ -237,17 +252,18 @@ function getTagColor(tagId: number): string {
 }
 
 .info {
-  margin-top: 8px;
+  margin-top: 10px;
   min-height: 40px;
 }
 
 .name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: -0.2px;
 }
 
 .meta {
@@ -257,6 +273,7 @@ function getTagColor(tagId: number): string {
   margin-top: 4px;
   font-size: 11px;
   color: var(--color-text-tertiary);
+  font-weight: 500;
 }
 
 .tags-indicator {
@@ -271,5 +288,22 @@ function getTagColor(tagId: number): string {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.file-card:hover .tag-dot {
+  transform: scale(1.2);
+}
+
+/* 选中动画 */
+@keyframes selectPulse {
+  0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+
+.file-card.selected {
+  animation: selectPulse 0.6s ease-out;
 }
 </style>

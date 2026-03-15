@@ -9,36 +9,108 @@
   --header-height: 48px;
   --tag-bar-height: 40px;
   
-  /* 颜色变量 - 亮色主题 */
+  /* 颜色变量 - 亮色主题（现代化配色） */
   --color-bg-primary: #ffffff;
-  --color-bg-secondary: #f5f5f5;
-  --color-bg-tertiary: #eeeeee;
-  --color-bg-hover: #e8e8e8;
-  --color-text-primary: #333333;
-  --color-text-secondary: #666666;
-  --color-text-tertiary: #999999;
-  --color-border: #e0e0e0;
-  --color-accent: #409eff;
-  --color-accent-hover: #66b1ff;
-  --color-accent-light: rgba(64, 158, 255, 0.1);
-  --color-success: #67c23a;
-  --color-warning: #e6a23c;
-  --color-danger: #f56c6c;
+  --color-bg-secondary: #f8f9fa;
+  --color-bg-tertiary: #f1f3f4;
+  --color-bg-hover: #e8eaed;
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: #4a4a68;
+  --color-text-tertiary: #8b8ba7;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-light: rgba(99, 102, 241, 0.1);
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  
+  /* 玻璃拟态变量 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  --glass-blur: blur(20px);
+  
+  /* 圆角变量 */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  
+  /* 阴影变量 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
 }
 
 /* 暗色主题 */
 [data-theme='dark'] {
-  --color-bg-primary: #1e1e1e;
-  --color-bg-secondary: #252526;
-  --color-bg-tertiary: #2d2d30;
-  --color-text-primary: #cccccc;
-  --color-text-secondary: #aaaaaa;
-  --color-text-tertiary: #888888;
-  --color-border: #3e3e42;
-  --color-accent: #4a9eff;
-  --color-accent-hover: #6ab2ff;
-  --color-accent-light: rgba(74, 158, 255, 0.2);
-  --color-bg-hover: #3e3e42;
+  --color-bg-primary: #0f0f1a;
+  --color-bg-secondary: #1a1a2e;
+  --color-bg-tertiary: #252542;
+  --color-bg-hover: #2d2d4a;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-text-tertiary: #64748b;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-accent: #818cf8;
+  --color-accent-hover: #a5b4fc;
+  --color-accent-light: rgba(129, 140, 248, 0.15);
+  --color-bg-hover: #2d2d4a;
+  
+  /* 暗色玻璃拟态 */
+  --glass-bg: rgba(26, 26, 46, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 20px rgba(129, 140, 248, 0.4);
+}
+
+/* 玻璃拟态效果 */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-xl), var(--shadow-glow);
+}
+
+/* 渐变背景 */
+.gradient-bg {
+  background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 100%);
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+}
+
+/* 霓虹光效 */
+.neon-glow {
+  box-shadow: 0 0 5px var(--color-accent),
+              0 0 10px var(--color-accent),
+              0 0 20px var(--color-accent),
+              0 0 40px var(--color-accent);
+}
+
+.neon-text {
+  text-shadow: 0 0 5px var(--color-accent),
+               0 0 10px var(--color-accent);
 }
 
 /* 滚动条样式 */

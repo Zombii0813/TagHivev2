@@ -370,23 +370,71 @@ class Repo:
         return self.session.execute(stmt).scalar() or 0
 
     def get_tag_by_name(self, name: str) -> Tag | None:
-        """通过名称获取标签"""
+        """通过名称获取标签（全局搜索）"""
         return self.session.execute(select(Tag).where(Tag.name == name)).scalar_one_or_none()
 
-    def create_tag(self, spec: TagSpec) -> Tag:
-        """创建新标签"""
-        tag = Tag(name=spec.name, color=spec.color, description=spec.description)
+    def get_tag_by_name_and_workspace(self, name: str, workspace: str | None = None) -> Tag | None:
+        """通过名称和工作目录获取标签
+        
+        支持按工作目录隔离，不同工作目录可以有相同名称的标签。
+        
+        Args:
+            name: 标签名称
+            workspace: 工作目录路径，None 表示全局标签
+            
+        Returns:
+            标签对象或 None
+        """
+        if workspace:
+            from pathlib import Path
+            workspace_posix = Path(workspace).as_posix()
+            return self.session.execute(
+                select(Tag).where(
+                    Tag.name == name,
+                    Tag.workspace == workspace_posix
+                )
+            ).scalar_one_or_none()
+        else:
+            return self.session.execute(
+                select(Tag).where(
+                    Tag.name == name,
+                    Tag.workspace.is_(None)
+                )
+            ).scalar_one_or_none()
+
+    def create_tag(self, spec: TagSpec, workspace: str | None = None) -> Tag:
+        """创建新标签
+        
+        Args:
+            spec: 标签规格
+            workspace: 工作目录路径，None 表示全局标签
+            
+        Returns:
+            创建的标签对象
+        """
+        from pathlib import Path
+        tag = Tag(
+            name=spec.name,
+            color=spec.color,
+            description=spec.description,
+            workspace=Path(workspace).as_posix() if workspace else None
+        )
         self.session.add(tag)
         # 清除缓存
         self.clear_search_cache()
         return tag
 
-    def get_or_create_tag(self, spec: TagSpec) -> Tag:
-        """获取或创建标签"""
-        existing = self.get_tag_by_name(spec.name)
+    def get_or_create_tag(self, spec: TagSpec, workspace: str | None = None) -> Tag:
+        """获取或创建标签
+        
+        Args:
+            spec: 标签规格
+            workspace: 工作目录路径，None 表示全局标签
+        """
+        existing = self.get_tag_by_name_and_workspace(spec.name, workspace)
         if existing is not None:
             return existing
-        return self.create_tag(spec)
+        return self.create_tag(spec, workspace)
 
     def delete_tag(self, tag_id: int) -> None:
         """删除标签及其关联"""

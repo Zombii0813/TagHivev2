@@ -120,6 +120,7 @@ class TagCreateDTO(BaseModel):
     name: str
     color: Optional[str] = None
     description: Optional[str] = None
+    workspace: Optional[str] = None  # 工作目录路径，用于标签隔离
 
 
 class TagUpdateDTO(BaseModel):

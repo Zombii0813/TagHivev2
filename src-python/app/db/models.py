@@ -40,21 +40,29 @@ class File(Base):
 
 
 class Tag(Base):
-    """标签模型 - 存储标签信息"""
+    """标签模型 - 存储标签信息
+    
+    标签按工作目录隔离，不同工作目录可以有相同名称的标签。
+    workspace 字段存储创建该标签时的工作目录路径。
+    """
 
     __tablename__ = "tags"
 
     id = Column(Integer, primary_key=True)
-    name = Column(Text, unique=True, nullable=False)
+    name = Column(Text, nullable=False)
     color = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
+    workspace = Column(Text, nullable=True)  # 工作目录路径，null 表示全局标签
     created_at = Column(DateTime, default=datetime.utcnow)
 
     files = relationship("File", secondary="file_tags", back_populates="tags")
 
     # 数据库索引优化 - 提升标签查询性能
+    # 使用联合唯一约束：同一工作目录下标签名称唯一
     __table_args__ = (
         Index("idx_tags_name", "name"),  # 按标签名称搜索
+        Index("idx_tags_workspace", "workspace"),  # 按工作目录筛选
+        Index("idx_tags_name_workspace", "name", "workspace"),  # 联合查询
     )
 
 

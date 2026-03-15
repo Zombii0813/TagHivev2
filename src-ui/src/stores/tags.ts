@@ -34,9 +34,9 @@ export const useTagStore = defineStore('tags', () => {
     }
   }
 
-  async function createTag(name: string, color?: string, description?: string) {
+  async function createTag(name: string, color?: string, description?: string, workspace?: string) {
     try {
-      const tag = await tagApi.create({ name, color, description })
+      const tag = await tagApi.create({ name, color, description, workspace })
       tags.value.push(tag)
       return tag
     } catch (error) {

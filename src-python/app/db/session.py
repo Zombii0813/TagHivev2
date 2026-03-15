@@ -76,11 +76,74 @@ def _ensure_schema() -> None:
             connection.execute(text("CREATE INDEX idx_file_tags_file_tag ON file_tags(file_id, tag_id)"))
         except Exception:
             pass
+        # 添加 tags.workspace 列（如果缺失）- 用于标签隔离
+        try:
+            connection.execute(text("ALTER TABLE tags ADD COLUMN workspace TEXT"))
+        except Exception:
+            pass
+        # 添加 tags 表索引（如果不存在）
+        try:
+            connection.execute(text("CREATE INDEX idx_tags_workspace ON tags(workspace)"))
+        except Exception:
+            pass
+        try:
+            connection.execute(text("CREATE INDEX idx_tags_name_workspace ON tags(name, workspace)"))
+        except Exception:
+            pass
+        # 重建 tags 表以移除 name 的唯一约束（SQLite 不支持直接删除约束）
+        _migrate_tags_table(connection)
         session.commit()
     except Exception:
         session.rollback()
     finally:
         session.close()
+
+
+def _migrate_tags_table(connection) -> None:
+    """迁移 tags 表，移除 name 的唯一约束
+    
+    SQLite 不支持直接修改约束，需要重建表。
+    """
+    try:
+        # 检查当前表结构
+        result = connection.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tags'"
+        ))
+        table_sql = result.scalar()
+        
+        if table_sql and 'UNIQUE' in table_sql.upper() and 'NAME' in table_sql.upper():
+            # 需要重建表来移除唯一约束
+            # 1. 创建临时表
+            connection.execute(text("""
+                CREATE TABLE tags_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR NOT NULL,
+                    color VARCHAR,
+                    description VARCHAR,
+                    workspace TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            
+            # 2. 复制数据
+            connection.execute(text("""
+                INSERT INTO tags_new (id, name, color, description, workspace, created_at)
+                SELECT id, name, color, description, workspace, created_at FROM tags
+            """))
+            
+            # 3. 删除旧表
+            connection.execute(text("DROP TABLE tags"))
+            
+            # 4. 重命名新表
+            connection.execute(text("ALTER TABLE tags_new RENAME TO tags"))
+            
+            # 5. 创建索引
+            connection.execute(text("CREATE INDEX idx_tags_workspace ON tags(workspace)"))
+            connection.execute(text("CREATE INDEX idx_tags_name_workspace ON tags(name, workspace)"))
+            
+            print("[DB Migration] tags 表已重建，移除了 name 的唯一约束")
+    except Exception as e:
+        print(f"[DB Migration] tags 表迁移失败: {e}")
 
 
 def _schema_tables():

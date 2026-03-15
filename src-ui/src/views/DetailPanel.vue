@@ -112,6 +112,7 @@
       v-model="showTagDialog"
       title="编辑标签"
       width="400px"
+      append-to-body
     >
       <el-checkbox-group v-model="selectedTagIds">
         <el-checkbox
