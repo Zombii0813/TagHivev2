@@ -218,3 +218,13 @@
   - 集成并行扫描和增量扫描功能
   - 支持智能扫描策略选择（增量/全量/断点续扫）
   - 支持实时监控文件变更
+
+- **缩略图生成优化** (`src-python/app/core/async_thumbnail.py`)
+  - 实现异步缩略图生成器 `AsyncThumbnailGenerator`
+  - 使用优先级队列和线程池处理缩略图生成
+  - 优先生成可见区域的缩略图（高优先级）
+  - 后台生成非可见区域缩略图（低优先级）
+  - 支持 WebP 格式，文件体积减少 25-35%
+  - 支持 5 种尺寸：xs/small/medium/large/xl
+  - 实现智能预取器 `ThumbnailPrefetcher`，根据滚动方向预加载
+  - 新增异步缩略图 API 接口

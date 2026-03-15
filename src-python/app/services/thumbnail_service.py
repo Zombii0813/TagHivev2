@@ -9,20 +9,31 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Optional
+from typing import Optional, List, Dict, Callable
 
 from PIL import Image
 
 from ..config import settings
+# 异步缩略图生成模块（用于高级功能）
+# from ..core.async_thumbnail import (
+#     AsyncThumbnailGenerator,
+#     MultiSizeThumbnailGenerator,
+#     ThumbnailPrefetcher,
+#     Priority,
+#     get_async_thumbnail_generator,
+#     shutdown_async_generator,
+# )
 
 logger = logging.getLogger(__name__)
 
 # 缩略图配置 - 统一使用正方形尺寸，保持所有缩略图大小一致
 DEFAULT_QUALITY = 85
 THUMBNAIL_SIZES = {
+    "xs": (80, 80),
     "small": (120, 120),
     "medium": (240, 240),
     "large": (480, 480),
+    "xl": (800, 800),
 }
 
 
@@ -149,8 +160,8 @@ class ThumbnailService:
             # scale=iw*min(w/iw\,h/ih):ih*min(w/iw\,h/ih) - 保持比例缩放
             # pad=w:h:(ow-iw)/2:(oh-ih)/2 - 填充到目标尺寸并居中
             vf_filter = (
-                f"scale='iw*min({target_width}/iw\,{target_height}/ih):"
-                f"ih*min({target_width}/iw\,{target_height}/ih)':"
+                f"scale='iw*min({target_width}/iw\\,{target_height}/ih):"
+                f"ih*min({target_width}/iw\\,{target_height}/ih)':"
                 f"force_original_aspect_ratio=decrease,"
                 f"pad={target_width}:{target_height}:({target_width}-iw)/2:({target_height}-ih)/2:black"
             )
