@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FolderTree, FolderContents, FolderNode } from '../types'
+import type { FolderTree, FolderContents } from '../types'
 
 export const folderApi = {
   // 获取文件夹树结构

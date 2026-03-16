@@ -1,20 +1,8 @@
-import { ref, computed, shallowRef } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import type { FileSummary, SearchQuery, FolderContents } from '../types'
+import type { FileSummary, SearchQuery } from '../types'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
-
-// 批量更新工具函数
-function batchUpdate<T>(
-  targetArray: T[],
-  updates: { index: number; value: T }[]
-) {
-  updates.forEach(({ index, value }) => {
-    if (index >= 0 && index < targetArray.length) {
-      targetArray[index] = value
-    }
-  })
-}
 
 export const useFileStore = defineStore('files', () => {
   // State

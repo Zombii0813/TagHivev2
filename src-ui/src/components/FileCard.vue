@@ -57,7 +57,6 @@ import { computed, ref } from 'vue'
 import { Document, VideoCamera, Headset, Folder, Picture } from '@element-plus/icons-vue'
 import { useTagStore } from '../stores/tags'
 import { thumbnailApi } from '../api/thumbnails'
-import LazyImage from './LazyImage.vue'
 import type { FileItem } from '../types'
 
 const props = defineProps<{
@@ -78,8 +77,8 @@ const thumbnailUrl = computed(() => {
   return thumbnailApi.getThumbnailUrl(props.file.id, 'medium')
 })
 
-// 计算缩略图尺寸
-const thumbnailSize = computed(() => {
+// 计算缩略图尺寸（预留）
+computed(() => {
   if (props.size) {
     return props.size - 16 // 减去 padding
   }

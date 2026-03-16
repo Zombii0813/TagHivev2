@@ -185,7 +185,6 @@ import {
   Loading,
   Refresh,
   Folder,
-  Files,
 } from '@element-plus/icons-vue'
 
 import { useAppStore } from '../stores/app'
@@ -254,7 +253,7 @@ const getSortLabel = () => {
   const currentField = fileStore.sortBy
   const currentDesc = fileStore.sortDesc
   
-  for (const [key, option] of Object.entries(sortOptions)) {
+  for (const [, option] of Object.entries(sortOptions)) {
     if (option.field === currentField && option.desc === currentDesc) {
       return option.label
     }

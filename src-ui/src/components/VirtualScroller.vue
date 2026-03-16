@@ -85,7 +85,7 @@ const spacerStyle = computed(() => ({
 }))
 
 // 获取项目样式
-function getItemStyle(item: { offset: number }) {
+function getItemStyle(_item: { offset: number }) {
   return {
     height: `${props.itemHeight}px`,
   }

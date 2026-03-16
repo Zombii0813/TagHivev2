@@ -55,7 +55,7 @@ const props = withDefaults(defineProps<Props>(), {
   animate: true,
 })
 
-const emit = defineEmits<{
+defineEmits<{
   action: []
 }>()
 

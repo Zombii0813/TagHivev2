@@ -34,7 +34,7 @@ const router = createRouter({
 // 添加路由守卫，实现预加载
 let prefetchTimeout: ReturnType<typeof setTimeout> | null = null
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((_to, _from, next) => {
   // 清除之前的预加载定时器
   if (prefetchTimeout) {
     clearTimeout(prefetchTimeout)

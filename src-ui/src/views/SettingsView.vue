@@ -56,7 +56,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh, Document } from '@element-plus/icons-vue'
+import { Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
@@ -95,7 +95,7 @@ async function selectWorkspace() {
     })
     
     // 订阅扫描完成事件 - 在 SettingsView 中不显示提示，由 MainLayout 统一处理
-    const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
+    const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (_data) => {
       fileStore.completeScanning()
       // 扫描完成后刷新文件列表
       fileStore.search({ root: path })
@@ -103,7 +103,7 @@ async function selectWorkspace() {
       unsubscribeCompleted()
     })
     
-    const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
+    const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (_error) => {
       fileStore.resetScanning()
       // 错误提示由 MainLayout 统一处理
       unsubscribeProgress()
@@ -120,50 +120,6 @@ async function selectWorkspace() {
   }
 }
 
-function rescanWorkspace() {
-  if (!appStore.currentWorkspace) {
-    ElMessage.warning('请先选择工作区')
-    return
-  }
-  
-  scanning.value = true
-  scanProgress.value = 0
-  scanCount.value = 0
-  scanStatus.value = ''
-  
-  // 连接 WebSocket
-  wsClient.connect()
-  
-  // 订阅扫描事件
-  const unsubscribeProgress = wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
-    scanCount.value = data.count
-  })
-  
-  const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
-    scanProgress.value = 100
-    scanStatus.value = 'success'
-    scanning.value = false
-    ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-    fileStore.search({ root: appStore.currentWorkspace! })
-    
-    // 取消订阅
-    unsubscribeProgress()
-    unsubscribeCompleted()
-  })
-  
-  const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
-    scanStatus.value = 'exception'
-    scanning.value = false
-    ElMessage.error(`扫描失败: ${error.message}`)
-    
-    unsubscribeProgress()
-    unsubscribeCompleted()
-    unsubscribeError()
-  })
-  
-  // 开始扫描
-  wsClient.startScan(appStore.currentWorkspace)
-}
 </script>
 
 <style scoped>
