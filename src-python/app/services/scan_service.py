@@ -47,8 +47,18 @@ class ScanService:
         Returns:
             处理的文件总数
         """
+        import os
         repo = Repo(self.session)
         root_path = root.resolve()
+        
+        # DEBUG: 记录当前工作目录信息
+        cwd = os.getcwd()
+        logger.info(f"[Scan][DEBUG] Current working directory: {cwd}")
+        logger.info(f"[Scan][DEBUG] Input root path: {root}")
+        logger.info(f"[Scan][DEBUG] Resolved root path: {root_path}")
+        logger.info(f"[Scan][DEBUG] Root exists: {root_path.exists()}")
+        logger.info(f"[Scan][DEBUG] Root is_dir: {root_path.is_dir()}")
+        
         logger.info(f"[Scan] Starting ultra-fast scan of: {root_path}")
         
         # 阶段 1: 快速预扫描获取总数

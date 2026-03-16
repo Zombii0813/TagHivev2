@@ -7,6 +7,11 @@ It's designed to work with PyInstaller to create a bundled executable.
 import sys
 import os
 
+# PyInstaller multiprocessing support - MUST be first
+if getattr(sys, 'frozen', False):
+    import multiprocessing
+    multiprocessing.freeze_support()
+
 # Add the src-python directory to Python path so 'app' package can be found
 if getattr(sys, 'frozen', False):
     # Running in a PyInstaller bundle

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import sys
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Iterable, List, Callable, Optional, Tuple, Dict, Set
@@ -121,20 +122,35 @@ class UltraFastFileScanner:
         使用栈迭代而非递归，避免深层目录栈溢出
         """
         count = 0
-        stack: List[str] = [str(root)]
+        root_str = str(root)
+        stack: List[str] = [root_str]
+        
+        # DEBUG: 记录扫描根目录信息
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[QuickCount][DEBUG] Root: {root}")
+        logger.info(f"[QuickCount][DEBUG] Root exists: {root.exists()}")
+        logger.info(f"[QuickCount][DEBUG] Root is_dir: {root.is_dir()}")
         
         while stack:
             current = stack.pop()
             try:
                 with os.scandir(current) as entries:
+                    entry_count = 0
                     for entry in entries:
+                        entry_count += 1
                         if entry.is_dir(follow_symlinks=False):
                             stack.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):
                             count += 1
-            except (OSError, PermissionError):
+                    # DEBUG: 记录第一层目录扫描结果
+                    if current == root_str:
+                        logger.info(f"[QuickCount][DEBUG] First level entries: {entry_count}")
+            except (OSError, PermissionError) as e:
+                logger.warning(f"[QuickCount][DEBUG] Cannot access {current}: {e}")
                 continue
-                
+        
+        logger.info(f"[QuickCount][DEBUG] Total files counted: {count}")
         return count
     
     def scan_directory_stream(self, root: Path) -> Iterable[os.DirEntry]:
@@ -195,34 +211,53 @@ class UltraFastFileScanner:
         
         使用进程池处理顶层目录，每个进程独立扫描子树
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not dir_paths:
+            return
+        
+        # 检查是否在 PyInstaller 环境中
+        is_frozen = getattr(sys, 'frozen', False)
+        if is_frozen:
+            logger.warning(f"[Scan][DEBUG] Running in frozen mode (PyInstaller), using serial scan")
+            # PyInstaller 环境下进程池可能有问题，使用串行扫描
+            for dir_path in dir_paths:
+                for entry in self._scan_recursive(dir_path):
+                    yield entry
             return
             
         # 使用进程池避免 GIL 限制
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            # 提交所有目录扫描任务
-            future_to_dir = {
-                executor.submit(self._scan_directory_to_list, dp): dp 
-                for dp in dir_paths
-            }
-            
-            # 按完成顺序返回结果
-            for future in as_completed(future_to_dir):
-                try:
-                    file_paths = future.result(timeout=300)  # 5分钟超时
-                    for file_path in file_paths:
-                        # 使用 os.scandir 获取单个文件的 DirEntry
-                        dir_path = os.path.dirname(file_path)
-                        try:
-                            with os.scandir(dir_path) as entries:
-                                for entry in entries:
-                                    if entry.path == file_path:
-                                        yield entry
-                                        break
-                        except (OSError, PermissionError):
-                            continue
-                except Exception:
-                    continue
+        try:
+            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+                # 提交所有目录扫描任务
+                future_to_dir = {
+                    executor.submit(self._scan_directory_to_list, dp): dp
+                    for dp in dir_paths
+                }
+                
+                # 按完成顺序返回结果
+                for future in as_completed(future_to_dir):
+                    try:
+                        file_paths = future.result(timeout=300)  # 5分钟超时
+                        for file_path in file_paths:
+                            # 使用 os.scandir 获取单个文件的 DirEntry
+                            dir_path = os.path.dirname(file_path)
+                            try:
+                                with os.scandir(dir_path) as entries:
+                                    for entry in entries:
+                                        if entry.path == file_path:
+                                            yield entry
+                                            break
+                            except (OSError, PermissionError):
+                                continue
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.error(f"[Scan][DEBUG] ProcessPool failed: {e}, falling back to serial scan")
+            for dir_path in dir_paths:
+                for entry in self._scan_recursive(dir_path):
+                    yield entry
     
     @staticmethod
     def _scan_directory_to_list(dir_path: str) -> List[str]:

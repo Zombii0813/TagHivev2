@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -19,11 +20,27 @@ from app.api.websocket import sio
 from app.db import init_db
 from app.config import settings
 
-# 配置日志
+# 配置日志 - 使用自定义格式器避免 uvicorn 的 isatty 问题
+class SafeFormatter(logging.Formatter):
+    """安全的日志格式器，不依赖 sys.stdout.isatty()"""
+    def __init__(self, fmt=None, datefmt=None, style='%', validate=True):
+        super().__init__(fmt, datefmt, style, validate)
+    
+    def format(self, record):
+        return super().format(record)
+
+# 配置根日志记录器
+handler = logging.StreamHandler(sys.stderr if sys.stderr else open(os.devnull, 'w'))
+handler.setFormatter(SafeFormatter(
+    fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[handler],
 )
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,12 +100,14 @@ def main():
     
     # 禁用 reload 功能，避免 watchfiles 监控日志文件导致循环
     # sidecar 进程不需要热重载功能
+    # 禁用默认日志配置，使用我们自己的配置
     uvicorn.run(
         "app.main:socket_app",
         host=host,
         port=port,
         reload=False,
         log_level="info",
+        log_config=None,  # 禁用 uvicorn 的默认日志配置
     )
 
 

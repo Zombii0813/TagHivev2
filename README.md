@@ -13,7 +13,7 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 
 ## 技术架构
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │           Frontend (Vue3 + TS)          │
 │  ├─ Element Plus UI                    │
@@ -140,7 +140,7 @@ Python Sidecar 默认运行在 `http://127.0.0.1:8000`
 
 ```bash
 # 1. 打包 Python Sidecar
-conda run -n taghive_env python scripts/build-sidecar.py
+python scripts/build-sidecar.py
 
 # 2. 构建 Tauri 应用
 cd src-tauri
@@ -151,7 +151,7 @@ cargo tauri build
 
 ### 各平台输出
 
-- **Windows**: 
+- **Windows**:
   - `TagHive_0.0.1_x64_en-US.msi` - MSI 安装程序
   - `TagHive_0.0.1_x64-setup.exe` - NSIS 安装程序
 - **macOS**: `dmg` 磁盘映像
@@ -171,80 +171,15 @@ cargo tauri build --debug
 
 ### 日志查看
 
-生产版本运行时，Python Sidecar 的日志会自动保存到日志文件中：
+生产版本运行时，Python Sidecar 的日志会自动保存到日志文件中，在应用内可以通过 **设置 → 查看日志** 打开日志查看器，支持：
 
-- **Windows**: `%LOCALAPPDATA%\TagHive\sidecar.log`
-- **macOS**: `~/Library/Application Support/TagHive/sidecar.log`
-- **Linux**: `~/.local/share/TagHive/sidecar.log`
-
-在应用内可以通过 **设置 → 查看日志** 打开日志查看器，支持：
 - 实时刷新日志
 - 调整显示行数（50-5000行）
 - 打开日志文件所在文件夹
 
-### 需要上传 Git 的文件
-
-以下文件需要上传到 Git 仓库，以便其他开发者或 CI/CD 使用：
-
-```
-# PyInstaller 配置文件
-src-python/taghive-sidecar.spec
-
-# 打包脚本
-scripts/build-sidecar.py
-
-# 入口文件
-src-python/sidecar_entry.py
-```
-
-**不需要上传的文件**（已添加到 .gitignore）：
-- `src-tauri/resources/taghive-sidecar.exe` - 打包生成的可执行文件
-- `src-python/dist/` - PyInstaller 输出目录
-- `src-python/build/` - PyInstaller 构建目录
-
-## 不同环境开发指南
-
-### 场景 1：使用 Conda 环境
-
-```bash
-# 创建环境
-conda create -n taghive_env python=3.11
-conda activate taghive_env
-pip install -r src-python/requirements.txt
-
-# 配置项目（二选一）
-# 方式 A：编辑配置文件
-# 修改 src-tauri/config.json 中的 path 为实际路径
-
-# 方式 B：使用环境变量
-$env:TAGHIVE_PYTHON_PATH = "$(conda run -n taghive_env which python)"
-```
-
-### 场景 2：使用 venv 虚拟环境
-
-```bash
-# 创建虚拟环境
-cd src-python
-python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/macOS
-pip install -r requirements.txt
-
-# 无需配置，程序会自动检测 src-python/venv
-```
-
-### 场景 3：使用系统 Python
-
-```bash
-# 安装依赖到系统 Python
-pip install -r src-python/requirements.txt
-
-# 无需配置，程序会自动使用系统 Python
-```
-
 ## 项目结构
 
-```
+```text
 TagHive/
 ├── src-ui/                 # Vue3 前端
 │   ├── src/
@@ -299,7 +234,3 @@ TagHive/
 1. 在 `src-ui/src/components/` 创建组件
 2. 遵循 Vue3 Composition API 风格
 3. 使用 Element Plus 组件库
-
-## 许可证
-
-MIT License

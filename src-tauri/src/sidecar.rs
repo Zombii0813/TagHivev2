@@ -92,9 +92,25 @@ impl PythonSidecar {
         // 获取 Python sidecar 路径和工作目录
         let (python_path, working_dir, is_bundled) = get_sidecar_path(app)?;
         
+        // 创建启动日志（用于诊断）
+        // let startup_log_path = std::env::temp_dir().join("taghive_startup.log");
+        // let startup_log = format!(
+        //     "[{}] Starting sidecar\n  Path: {:?}\n  Port: {}\n  Working dir: {:?}\n  Is bundled: {}\n",
+        //     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        //     python_path, port, working_dir, is_bundled
+        // );
+        // let _ = std::fs::write(&startup_log_path, startup_log);
+        
         println!("Starting Python sidecar at {:?} on port {}", python_path, port);
         println!("Working directory: {:?}", working_dir);
         println!("Is bundled: {}", is_bundled);
+        // println!("Startup log: {:?}", startup_log_path);
+        
+        // DEBUG: 记录当前系统工作目录
+        let current_exe = std::env::current_exe().unwrap_or_default();
+        let current_dir = std::env::current_dir().unwrap_or_default();
+        println!("DEBUG - Current exe: {:?}", current_exe);
+        println!("DEBUG - Current dir: {:?}", current_dir);
         
         // 使用 std::process::Command 来设置 Windows 特定的标志
         // 然后再转换为 tokio::process::Command
@@ -134,16 +150,46 @@ impl PythonSidecar {
         // 转换为 tokio::process::Command
         let mut cmd = Command::from(std_cmd);
         
-        let mut process = cmd.spawn()?;
+        let mut process = match cmd.spawn() {
+            Ok(p) => {
+                println!("Sidecar process spawned successfully (PID: {:?})", p.id());
+                p
+            }
+            Err(e) => {
+                eprintln!("CRITICAL: Failed to spawn sidecar: {}", e);
+                eprintln!("Python path: {:?}", python_path);
+                eprintln!("Working dir: {:?}", working_dir);
+                return Err(e.into());
+            }
+        };
         
         // 获取日志文件路径 - 便携模式：存储在工作目录下的 .taghive/logs/
         let log_dir = get_portable_data_dir(&working_dir).join("logs");
         let log_file_path = log_dir.join("sidecar.log");
         
         // 确保日志目录存在
-        if let Some(parent) = log_file_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        let log_dir_result = match std::fs::create_dir_all(&log_dir) {
+            Ok(_) => {
+                println!("Log directory created/verified: {:?}", log_dir);
+                format!("OK: {:?}", log_dir)
+            }
+            Err(e) => {
+                let msg = format!("FAILED: {:?} - {}", log_dir, e);
+                eprintln!("Warning: Failed to create log directory {:?}: {}", log_dir, e);
+                msg
+            }
+        };
+        // 追加到启动日志（已禁用）
+        // let startup_log_append = format!(
+        //     "Log dir result: {}\nLog file path: {:?}\n",
+        //     log_dir_result, log_file_path
+        // );
+        // let _ = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open(&startup_log_path)
+        //     .and_then(|mut f| std::io::Write::write_all(&mut f, startup_log_append.as_bytes()));
+        
         
         // 检查日志文件大小，超过阈值则清空
         check_and_rotate_log_file(&log_file_path);
@@ -163,11 +209,20 @@ impl PythonSidecar {
             let mut stderr_lines = stderr_reader.lines();
             
             // 打开日志文件（追加模式）
-            let mut log_file = OpenOptions::new()
+            let mut log_file = match OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&log_file_path_clone)
-                .ok();
+            {
+                Ok(file) => {
+                    println!("Log file opened successfully: {:?}", log_file_path_clone);
+                    Some(file)
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to open log file {:?}: {}", log_file_path_clone, e);
+                    None
+                }
+            };
             
             // 写入启动时间
             if let Some(ref mut file) = log_file {
@@ -351,7 +406,15 @@ fn get_portable_data_dir(working_dir: &PathBuf) -> PathBuf {
     // 首先检查环境变量 TAGHIVE_DATA_DIR（由主程序设置）
     if let Ok(data_dir) = std::env::var("TAGHIVE_DATA_DIR") {
         println!("Using TAGHIVE_DATA_DIR from env: {}", data_dir);
-        return PathBuf::from(data_dir);
+        let path = PathBuf::from(data_dir);
+        // 如果路径以 /data 或 \data 结尾（lib.rs 中设置的），去掉这层
+        // 日志应该放在 .taghive/logs/ 而不是 .taghive/data/logs/
+        if path.file_name().map(|n| n == "data").unwrap_or(false) {
+            let parent = path.parent().unwrap_or(&path).to_path_buf();
+            println!("Adjusted data dir (removed 'data' suffix): {:?}", parent);
+            return parent;
+        }
+        return path;
     }
     
     // 尝试获取应用目录（对于打包的应用）
@@ -366,6 +429,19 @@ fn get_portable_data_dir(working_dir: &PathBuf) -> PathBuf {
             // 标准模式：使用工作目录
             println!("System data dir mode: using working directory");
             return working_dir.join(".taghive");
+        }
+        
+        // 检查应用目录是否可写（Windows Program Files 需要管理员权限）
+        let test_file = app_dir.join(".write_test");
+        match std::fs::File::create(&test_file) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&test_file);
+                println!("App directory is writable: {:?}", app_dir);
+            }
+            Err(e) => {
+                eprintln!("WARNING: App directory is not writable: {:?} - {}", app_dir, e);
+                eprintln!("Consider: 1) Run as administrator, 2) Create 'use-system-data-dir' file, or 3) Install to user directory");
+            }
         }
         
         // 默认便携模式：使用应用目录下的 .taghive
