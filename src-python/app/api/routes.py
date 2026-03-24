@@ -322,7 +322,7 @@ async def list_tags(
     """获取所有标签
     
     Args:
-        root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
+        root: 可选的工作目录路径，用于过滤标签的工作空间
     """
     tags = repo.list_tags(root=root)
     result = []

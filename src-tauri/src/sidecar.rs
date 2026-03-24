@@ -115,6 +115,12 @@ impl PythonSidecar {
         // 使用 std::process::Command 来设置 Windows 特定的标志
         // 然后再转换为 tokio::process::Command
         let mut std_cmd = std::process::Command::new(&python_path);
+        
+        // 关键修复：传递 TAGHIVE_DATA_DIR 环境变量（必须在其他配置之前）
+        if let Ok(data_dir) = std::env::var("TAGHIVE_DATA_DIR") {
+            std_cmd.env("TAGHIVE_DATA_DIR", data_dir);
+        }
+        
         std_cmd.current_dir(&working_dir)
             .env("TAGHIVE_PORT", port.to_string())
             .env("TAGHIVE_HOST", "127.0.0.1")

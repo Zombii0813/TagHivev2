@@ -1,6 +1,6 @@
 [package]
 name = "taghive"
-version = "0.5.2"
+version = "0.5.3"
 description = "TagHive - 标签化文件管理器"
 authors = ["TagHive Team"]
 edition = "2021"

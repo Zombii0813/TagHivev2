@@ -296,51 +296,39 @@ class Repo:
         """获取所有标签列表
         
         Args:
-            root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
+            root: 可选的工作目录路径，用于过滤标签的工作空间
+                 如果提供，只返回该工作空间的标签（包括未关联文件的）
         """
         if root:
-            # 如果提供了工作目录，只获取该目录下有关联文件的标签
+            # 如果提供了工作目录，获取该工作空间的所有标签
             root_posix = Path(root).as_posix()
-            root_pattern = root_posix.rstrip("/") + "/%"
             
-            # 获取该工作目录下的所有文件ID
-            file_stmt = select(File.id).where(File.path.like(root_pattern))
-            file_ids = [row[0] for row in self.session.execute(file_stmt).all()]
-            
-            if not file_ids:
-                # 该工作目录下没有文件，返回空列表
-                return []
-            
-            # 获取这些文件关联的所有标签ID
-            tag_id_stmt = (
-                select(FileTag.tag_id)
-                .where(FileTag.file_id.in_(file_ids))
-                .distinct()
+            # 获取该工作空间的标签（包括 workspace 匹配或为空的）
+            stmt = select(Tag).where(
+                (Tag.workspace == root_posix) | (Tag.workspace.is_(None))
             )
-            tag_ids = [row[0] for row in self.session.execute(tag_id_stmt).all()]
-            
-            if not tag_ids:
-                # 没有标签关联到这些文件
-                return []
-            
-            # 获取这些标签的详细信息
-            stmt = select(Tag).where(Tag.id.in_(tag_ids))
             tags = list(self.session.execute(stmt).scalars())
             
             # 计算每个标签在该工作目录下的文件数量
-            count_stmt = (
-                select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
-                .where(
-                    FileTag.tag_id.in_(tag_ids),
-                    FileTag.file_id.in_(file_ids)
+            if tags:
+                root_pattern = root_posix.rstrip("/") + "/%"
+                tag_ids = [tag.id for tag in tags]
+                
+                # 获取该工作目录下的文件关联计数
+                count_stmt = (
+                    select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
+                    .join(File, File.id == FileTag.file_id)
+                    .where(
+                        FileTag.tag_id.in_(tag_ids),
+                        File.path.like(root_pattern)
+                    )
+                    .group_by(FileTag.tag_id)
                 )
-                .group_by(FileTag.tag_id)
-            )
-            count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
-            
-            # 将文件数量设置到标签对象上
-            for tag in tags:
-                tag._file_count = count_results.get(tag.id, 0)
+                count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
+                
+                # 将文件数量设置到标签对象上
+                for tag in tags:
+                    tag._file_count = count_results.get(tag.id, 0)
             
             return tags
         else:
