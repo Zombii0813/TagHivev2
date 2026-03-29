@@ -276,7 +276,7 @@ async function confirmRemoveTag(tag: { id: number; name: string; color?: string 
     })
     fileStore.updateFileTags(selectedFile.value.id, newTagIds)
     // 刷新标签列表以更新 file_count
-    await tagStore.loadTags()
+    await tagStore.reloadTags()
     ElMessage.success('标签已移除')
   } catch (error) {
     // 用户取消
@@ -293,7 +293,7 @@ async function saveTags() {
     })
     fileStore.updateFileTags(selectedFile.value.id, selectedTagIds.value)
     // 刷新标签列表以更新 file_count
-    await tagStore.loadTags()
+    await tagStore.reloadTags()
     showTagDialog.value = false
     ElMessage.success('标签更新成功')
   } catch (error) {

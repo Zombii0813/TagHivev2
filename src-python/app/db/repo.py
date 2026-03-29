@@ -625,6 +625,14 @@ class Repo:
         stmt = select(File).where(File.id.in_(file_ids))
         return list(self.session.execute(stmt).scalars())
 
+    def get_files_by_paths(self, paths: Iterable[str]) -> list[File]:
+        """通过路径批量获取文件"""
+        normalized_paths = [Path(path).as_posix() for path in paths if path]
+        if not normalized_paths:
+            return []
+        stmt = select(File).where(File.path.in_(normalized_paths))
+        return list(self.session.execute(stmt).scalars())
+
     # ========== 查询缓存优化 ==========
 
     def list_tags_cached(self, root: str | None = None, ttl: int = 300) -> list[Tag]:

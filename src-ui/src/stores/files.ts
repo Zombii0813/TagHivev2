@@ -206,6 +206,19 @@ export const useFileStore = defineStore('files', () => {
     })
   }
 
+  function addTagsToFile(fileId: number, tagIds: number[]) {
+    const file = files.value.find(f => f.id === fileId)
+    if (file) {
+      file.tag_ids = Array.from(new Set([...file.tag_ids, ...tagIds]))
+    }
+  }
+
+  function addTagsToFiles(fileIds: number[], tagIds: number[]) {
+    fileIds.forEach(fileId => {
+      addTagsToFile(fileId, tagIds)
+    })
+  }
+
   function removeFile(fileId: number) {
     const index = files.value.findIndex(f => f.id === fileId)
     if (index !== -1) {
@@ -289,6 +302,8 @@ export const useFileStore = defineStore('files', () => {
     setSortBy,
     updateFileTags,
     updateBatchFileTags,
+    addTagsToFile,
+    addTagsToFiles,
     removeFile,
     removeBatchFiles,
     startScanning,

@@ -50,6 +50,29 @@ class SearchResultDTO(BaseModel):
     has_more: bool
 
 
+class FileResolveRequestDTO(BaseModel):
+    """按路径解析文件 DTO"""
+    paths: List[str]
+
+
+class FileResolveResultDTO(BaseModel):
+    """按路径解析文件结果 DTO"""
+    files: List[FileSummaryDTO]
+    missing_paths: List[str] = Field(default_factory=list)
+
+
+class FileImportRequestDTO(BaseModel):
+    """导入外部文件到指定目录 DTO"""
+    paths: List[str]
+    target_dir: str
+
+
+class FileImportResultDTO(BaseModel):
+    """导入外部文件结果 DTO"""
+    files: List[FileSummaryDTO]
+    target_dir: str
+
+
 class SearchQueryDTO(BaseModel):
     """搜索查询 DTO"""
     text: Optional[str] = None
@@ -98,6 +121,19 @@ class FolderContentsDTO(BaseModel):
     files: List[FileSummaryDTO]
     total: int
     has_more: bool
+
+
+class FolderCreateRequestDTO(BaseModel):
+    """创建文件夹请求 DTO"""
+    root_path: str
+    parent_path: str
+    name: str
+
+
+class FolderCreateResultDTO(BaseModel):
+    """创建文件夹结果 DTO"""
+    name: str
+    path: str
 
 
 # ========== 标签相关 DTO ==========

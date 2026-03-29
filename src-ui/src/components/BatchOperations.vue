@@ -99,11 +99,12 @@ import { CollectionTag, Delete } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
+import { useAppStore } from '../stores/app'
 import { fileApi } from '../api/files'
-import { tagApi } from '../api/tags'
 
 const fileStore = useFileStore()
 const tagStore = useTagStore()
+const appStore = useAppStore()
 
 const showAddTagsDialog = ref(false)
 const showDeleteDialog = ref(false)
@@ -114,12 +115,12 @@ async function addNewTag() {
   if (!newTagName.value.trim()) return
   
   try {
-    const tag = await tagApi.create({
-      name: newTagName.value.trim(),
-      color: '#409eff'
-    })
-    // 将新标签添加到 store
-    tagStore.tags.push(tag)
+    const tag = await tagStore.createTag(
+      newTagName.value.trim(),
+      '#409eff',
+      '',
+      appStore.currentWorkspace || undefined,
+    )
     selectedTagIds.value.push(tag.id)
     newTagName.value = ''
     ElMessage.success('标签创建成功')
@@ -138,12 +139,7 @@ async function applyTags() {
   const selectedFileIds = Array.from(fileStore.selectedIds)
   
   try {
-    for (const fileId of selectedFileIds) {
-      await fileApi.updateTags(fileId, { tag_ids: selectedTagIds.value, mode: 'replace' })
-      fileStore.updateFileTags(fileId, selectedTagIds.value)
-    }
-    // 刷新标签列表以更新 file_count
-    await tagStore.loadTags()
+    await tagStore.assignTagsToFiles(selectedFileIds, selectedTagIds.value)
     ElMessage.success('标签添加成功')
     showAddTagsDialog.value = false
     selectedTagIds.value = []

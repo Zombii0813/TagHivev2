@@ -36,15 +36,32 @@
       </el-alert>
     </div>
 
-    <div class="tag-list" v-loading="tagStore.isLoading">
+    <div
+      class="tag-list"
+      :class="{ 'list-drop-active': listDropActive }"
+      v-loading="tagStore.isLoading"
+      @dragover.prevent="handleTagListDragOver"
+      @dragleave="handleTagListDragLeave"
+      @drop.prevent="handleTagListDrop"
+    >
       <div
-        v-for="tag in tagStore.tags"
+        v-for="tag in tagStore.orderedTags"
         :key="tag.id"
         class="tag-item"
-        :class="{ selected: tagStore.selectedTagIds.has(tag.id) }"
+        :class="{
+          selected: tagStore.selectedTagIds.has(tag.id),
+          'drag-source': draggingTagId === tag.id,
+          'drag-over': reorderTargetTagId === tag.id,
+        }"
         :style="{ backgroundColor: tag.color + '20', borderColor: tag.color }"
+        draggable="true"
         @click="handleTagClick(tag.id, $event)"
         @contextmenu.prevent="handleContextMenu(tag, $event)"
+        @dragstart="handleTagDragStart(tag.id, $event)"
+        @dragend="resetDragState"
+        @dragover.prevent="handleTagDragOver(tag.id, $event)"
+        @dragleave="handleTagDragLeave(tag.id)"
+        @drop.prevent="handleTagDrop(tag, $event)"
       >
         <span class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
         <span class="tag-name">{{ tag.name }}</span>
@@ -142,6 +159,7 @@ import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
 import type { Tag } from '../types'
+import { getDraggedTagId, setTagDragData } from '../utils/drag'
 
 const tagStore = useTagStore()
 const fileStore = useFileStore()
@@ -167,6 +185,9 @@ const editingTag = ref<Tag & { description?: string }>({
 const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
 const selectedTag = ref<Tag | null>(null)
+const draggingTagId = ref<number | null>(null)
+const reorderTargetTagId = ref<number | null>(null)
+const listDropActive = ref(false)
 
 // 加载标签，根据当前工作目录过滤
 function loadTagsForWorkspace() {
@@ -264,6 +285,66 @@ async function createTag() {
       ElMessage.error('标签创建失败')
     }
   }
+}
+
+function resetDragState() {
+  draggingTagId.value = null
+  reorderTargetTagId.value = null
+  listDropActive.value = false
+}
+
+function handleTagDragStart(tagId: number, event: DragEvent) {
+  draggingTagId.value = tagId
+  setTagDragData(event, tagId)
+}
+
+function handleTagDragOver(tagId: number, event: DragEvent) {
+  const draggedTagId = getDraggedTagId(event)
+
+  if (draggedTagId !== null) {
+    reorderTargetTagId.value = draggedTagId === tagId ? null : tagId
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move'
+    }
+  }
+}
+
+function handleTagDragLeave(tagId: number) {
+  if (reorderTargetTagId.value === tagId) {
+    reorderTargetTagId.value = null
+  }
+}
+
+function handleTagListDragOver(event: DragEvent) {
+  const draggedTagId = getDraggedTagId(event)
+  if (draggedTagId !== null) {
+    listDropActive.value = true
+  }
+}
+
+function handleTagListDragLeave() {
+  listDropActive.value = false
+}
+
+async function handleTagDrop(tag: Tag, event: DragEvent) {
+  const draggedTagId = getDraggedTagId(event)
+
+  if (draggedTagId !== null) {
+    if (draggedTagId !== tag.id) {
+      tagStore.reorderTags(draggedTagId, tag.id)
+    }
+    resetDragState()
+  }
+}
+
+async function handleTagListDrop(event: DragEvent) {
+  const draggedTagId = getDraggedTagId(event)
+
+  if (draggedTagId !== null) {
+    tagStore.reorderTags(draggedTagId, null)
+  }
+
+  resetDragState()
 }
 
 async function handleContextMenu(tag: Tag, event: MouseEvent) {
@@ -399,6 +480,11 @@ async function confirmDeleteTag() {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.tag-list.list-drop-active {
+  background: color-mix(in srgb, var(--color-accent-light) 45%, transparent);
 }
 
 .tag-item {
@@ -419,6 +505,16 @@ async function confirmDeleteTag() {
 
 .tag-item.selected {
   border-width: 2px;
+}
+
+.tag-item.drag-source {
+  opacity: 0.65;
+}
+
+.tag-item.drag-over {
+  border-color: var(--color-accent) !important;
+  transform: translateX(4px);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 50%, transparent);
 }
 
 .tag-dot {

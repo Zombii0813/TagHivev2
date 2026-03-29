@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate } from '../types'
+import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate, ResolveFilesResult, ImportFilesResult } from '../types'
 
 export const fileApi = {
   // 搜索文件
@@ -10,6 +10,19 @@ export const fileApi = {
   // 获取文件详情
   async getById(id: number): Promise<FileDetail> {
     return apiClient.get<FileDetail>(`/api/files/${id}`)
+  },
+
+  // 按路径解析已扫描文件
+  async resolvePaths(paths: string[]): Promise<ResolveFilesResult> {
+    return apiClient.post<ResolveFilesResult>('/api/files/resolve', { paths })
+  },
+
+  // 导入外部文件到指定目录
+  async importToDirectory(paths: string[], targetDir: string): Promise<ImportFilesResult> {
+    return apiClient.post<ImportFilesResult>('/api/files/import', {
+      paths,
+      target_dir: targetDir,
+    })
   },
 
   // 更新文件标签

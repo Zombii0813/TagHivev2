@@ -60,6 +60,16 @@ export interface SearchResult {
   has_more: boolean
 }
 
+export interface ResolveFilesResult {
+  files: FileSummary[]
+  missing_paths: string[]
+}
+
+export interface ImportFilesResult {
+  files: FileSummary[]
+  target_dir: string
+}
+
 export interface FileSummary {
   id: number
   name: string
@@ -158,4 +168,9 @@ export interface FolderContents {
   files: FileSummary[]
   total: number
   has_more: boolean
+}
+
+export interface CreateFolderResult {
+  name: string
+  path: string
 }

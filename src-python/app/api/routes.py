@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import shutil
 from typing import List
 from mimetypes import guess_type
 
@@ -14,9 +16,14 @@ from sqlalchemy import select
 from ..db import get_session, Repo
 from ..db.models import File, Tag
 from ..core.search import SearchQuery
+from ..core.indexer import build_file_meta
 from ..services.scan_service import ScanService
 from .models import (
     FileDTO,
+    FileImportRequestDTO,
+    FileImportResultDTO,
+    FileResolveRequestDTO,
+    FileResolveResultDTO,
     FileSummaryDTO,
     TagDTO,
     TagCreateDTO,
@@ -29,9 +36,36 @@ from .models import (
     FolderTreeDTO,
     FolderNodeDTO,
     FolderContentsDTO,
+    FolderCreateRequestDTO,
+    FolderCreateResultDTO,
 )
 
 router = APIRouter(prefix="/api")
+
+
+def _build_unique_target_path(target_dir: Path, source_name: str) -> Path:
+    """为导入文件生成不冲突的目标路径"""
+    candidate = target_dir / source_name
+    if not candidate.exists():
+        return candidate
+
+    stem = Path(source_name).stem
+    suffix = Path(source_name).suffix
+    counter = 1
+
+    while True:
+        candidate = target_dir / f"{stem} ({counter}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _ensure_path_within_root(path: Path, root: Path) -> None:
+    """确保路径位于指定根目录内。"""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Path is outside workspace root") from exc
 
 
 # ========== 依赖注入 ==========
@@ -144,6 +178,89 @@ async def get_file(
         updated_at=file.updated_at,
         tags=tags,
     )
+
+
+@router.post("/files/resolve", response_model=FileResolveResultDTO)
+async def resolve_files_by_paths(
+    payload: FileResolveRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """按路径解析已入库文件，用于拖拽外部文件时快速匹配。"""
+    normalized_paths = [Path(path).as_posix() for path in payload.paths if path]
+    files = repo.get_files_by_paths(normalized_paths)
+    file_map = {str(file.path): file for file in files}
+
+    resolved_files = []
+    missing_paths: list[str] = []
+
+    for path in normalized_paths:
+        file = file_map.get(path)
+        if file is None:
+            missing_paths.append(path)
+            continue
+
+        resolved_files.append(FileSummaryDTO(
+            id=file.id,
+            name=file.name,
+            path=file.path,
+            type=file.type,
+            size=file.size,
+            modified_at=file.modified_at,
+            duration=file.duration,
+            tag_ids=[tag.id for tag in file.tags],
+        ))
+
+    return FileResolveResultDTO(files=resolved_files, missing_paths=missing_paths)
+
+
+@router.post("/files/import", response_model=FileImportResultDTO)
+async def import_files_to_directory(
+    payload: FileImportRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """将外部文件移动到目标目录并立即入库。"""
+    target_dir = Path(payload.target_dir)
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Target directory not found")
+
+    imported_files: list[FileSummaryDTO] = []
+
+    for raw_path in payload.paths:
+        if not raw_path:
+            continue
+
+        source_path = Path(raw_path)
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=400, detail=f"Invalid file path: {raw_path}")
+
+        source_existing = repo.get_file_by_path(str(source_path))
+        destination_path = _build_unique_target_path(target_dir, source_path.name)
+
+        try:
+            moved_path = Path(shutil.move(str(source_path), str(destination_path)))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to move file: {raw_path} -> {exc}") from exc
+
+        meta = build_file_meta(moved_path)
+        existing = repo.get_file_by_path(str(moved_path))
+        file_row = repo.upsert_file(
+            meta,
+            existing_id=(source_existing.id if source_existing else (existing.id if existing else None)),
+        )
+
+        imported_files.append(FileSummaryDTO(
+            id=file_row.id,
+            name=file_row.name,
+            path=file_row.path,
+            type=file_row.type,
+            size=file_row.size,
+            modified_at=file_row.modified_at,
+            duration=file_row.duration,
+            tag_ids=[tag.id for tag in file_row.tags],
+        ))
+
+    repo.session.commit()
+    return FileImportResultDTO(files=imported_files, target_dir=target_dir.as_posix())
 
 
 @router.put("/files/{file_id}/tags")
@@ -495,84 +612,48 @@ async def get_workspace_stats(
 
 def _build_folder_tree(root_path: str, repo: Repo) -> tuple[List[FolderNodeDTO], int]:
     """构建文件夹树结构，返回 (子文件夹列表, 根目录直接文件数)"""
-    from sqlalchemy import func
-    
     root = Path(root_path)
-    if not root.exists():
+    if not root.exists() or not root.is_dir():
         return [], 0
-    
-    # 获取该根路径下的所有文件路径
-    root_posix = root.as_posix()
-    root_pattern = root_posix.rstrip("/") + "/%"
-    
-    stmt = select(File.path).where(File.path.like(root_pattern))
-    file_paths = [str(row[0]) for row in repo.session.execute(stmt).all()]
-    
-    # 构建文件夹树
+
     folder_map: dict[str, FolderNodeDTO] = {}
-    folder_file_counts: dict[str, int] = {}
-    root_direct_file_count = 0  # 根目录下的直接文件数
-    
-    for file_path in file_paths:
-        path_obj = Path(file_path)
-        
-        # 获取相对于根路径的相对路径
-        try:
-            rel_path = path_obj.relative_to(root)
-        except ValueError:
-            continue
-        
-        # 获取文件所在目录
-        folder_dir = path_obj.parent.as_posix()
-        
-        # 如果文件直接在根目录下，统计到 root_direct_file_count
-        if folder_dir == root_posix:
-            root_direct_file_count += 1
-            continue
-        
-        # 构建文件夹层级
-        current_path = root
-        current_node = None
-        
-        # 处理父文件夹
-        for part in rel_path.parent.parts:
-            if part == "." or not part:
+    root_children: list[FolderNodeDTO] = []
+    root_direct_file_count = 0
+
+    for current_root, dir_names, file_names in os.walk(root):
+        current_path = Path(current_root)
+        dir_names.sort(key=str.lower)
+
+        direct_file_count = 0
+        for file_name in file_names:
+            try:
+                if (current_path / file_name).is_file():
+                    direct_file_count += 1
+            except OSError:
                 continue
-            
-            parent_path = current_path
-            current_path = current_path / part
-            current_path_str = current_path.as_posix()
-            
-            if current_path_str not in folder_map:
-                node = FolderNodeDTO(
-                    name=part,
-                    path=current_path_str,
-                    file_count=0,
-                    children=[],
-                    is_expanded=False,
-                )
-                folder_map[current_path_str] = node
-                
-                # 添加到父节点的 children
-                parent_path_str = parent_path.as_posix()
-                if parent_path_str == root_posix:
-                    # 这是根的直接子文件夹
-                    pass
-                elif parent_path_str in folder_map:
-                    parent_node = folder_map[parent_path_str]
-                    if not any(c.path == current_path_str for c in parent_node.children):
-                        parent_node.children.append(node)
-            
-            current_node = folder_map[current_path_str]
-        
-        # 统计文件数量
-        folder_file_counts[folder_dir] = folder_file_counts.get(folder_dir, 0) + 1
-    
-    # 更新文件计数
-    for folder_path, count in folder_file_counts.items():
-        if folder_path in folder_map:
-            folder_map[folder_path].file_count = count
-    
+
+        if current_path == root:
+            root_direct_file_count = direct_file_count
+        else:
+            current_node = folder_map[current_path.as_posix()]
+            current_node.file_count = direct_file_count
+
+        for dir_name in dir_names:
+            child_path = current_path / dir_name
+            child_node = FolderNodeDTO(
+                name=dir_name,
+                path=child_path.as_posix(),
+                file_count=0,
+                children=[],
+                is_expanded=False,
+            )
+            folder_map[child_node.path] = child_node
+
+            if current_path == root:
+                root_children.append(child_node)
+            else:
+                folder_map[current_path.as_posix()].children.append(child_node)
+
     # 递归计算子文件夹的文件数
     def calc_total_files(node: FolderNodeDTO) -> int:
         total = node.file_count
@@ -580,28 +661,9 @@ def _build_folder_tree(root_path: str, repo: Repo) -> tuple[List[FolderNodeDTO],
             total += calc_total_files(child)
         node.file_count = total
         return total
-    
-    # 获取根的直接子文件夹
-    root_children: List[FolderNodeDTO] = []
-    seen_paths = set()
-    
-    for node in folder_map.values():
-        node_path = Path(node.path)
-        try:
-            rel_parts = node_path.relative_to(root).parts
-            if len(rel_parts) == 1:
-                # 这是根的直接子文件夹
-                if node.path not in seen_paths:
-                    calc_total_files(node)
-                    root_children.append(node)
-                    seen_paths.add(node.path)
-        except ValueError:
-            continue
-    
-    # 按名称排序
-    root_children.sort(key=lambda x: x.name.lower())
+
     for node in root_children:
-        node.children.sort(key=lambda x: x.name.lower())
+        calc_total_files(node)
     
     return root_children, root_direct_file_count
 
@@ -704,6 +766,43 @@ async def get_folder_contents(
         total=total,
         has_more=offset + limit < total,
     )
+
+
+@router.post("/folders/create", response_model=FolderCreateResultDTO)
+async def create_folder(
+    payload: FolderCreateRequestDTO,
+):
+    """在工作区内创建新目录。"""
+    root_path = Path(payload.root_path)
+    parent_path = Path(payload.parent_path)
+
+    if not root_path.exists() or not root_path.is_dir():
+        raise HTTPException(status_code=404, detail="Workspace root not found")
+
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise HTTPException(status_code=404, detail="Parent folder not found")
+
+    _ensure_path_within_root(parent_path, root_path)
+
+    folder_name = payload.name.strip()
+    if not folder_name:
+        raise HTTPException(status_code=400, detail="Folder name is required")
+
+    if folder_name in {".", ".."} or any(sep in folder_name for sep in ("/", "\\")):
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+
+    target_path = parent_path / folder_name
+    _ensure_path_within_root(target_path, root_path)
+
+    if target_path.exists():
+        raise HTTPException(status_code=409, detail="Folder already exists")
+
+    try:
+        target_path.mkdir(parents=False, exist_ok=False)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create folder: {exc}") from exc
+
+    return FolderCreateResultDTO(name=target_path.name, path=target_path.as_posix())
 
 
 # ========== 健康检查 ==========

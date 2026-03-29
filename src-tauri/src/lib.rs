@@ -269,6 +269,32 @@ async fn open_folder(path: String, file_path: Option<String>) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+async fn create_folder(path: String) -> Result<(), String> {
+    let target_path = PathBuf::from(&path);
+
+    if path.trim().is_empty() {
+        return Err("Folder path is required".to_string());
+    }
+
+    if target_path.exists() {
+        return Err("Folder already exists".to_string());
+    }
+
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| "Invalid folder path".to_string())?;
+
+    if !parent.exists() || !parent.is_dir() {
+        return Err("Parent folder not found".to_string());
+    }
+
+    std::fs::create_dir(&target_path)
+        .map_err(|e| format!("Failed to create folder: {}", e))?;
+
+    Ok(())
+}
+
 /// 获取便携模式日志文件路径
 /// 开发模式: {project_root}/src-python/.taghive/logs/sidecar.log
 /// 生产模式: {app_dir}/.taghive/logs/sidecar.log
@@ -381,6 +407,7 @@ pub fn run() {
             cmd_start_sidecar,
             cmd_stop_sidecar,
             select_folder,
+            create_folder,
             open_file,
             open_folder,
             get_sidecar_logs,

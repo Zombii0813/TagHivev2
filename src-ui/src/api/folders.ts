@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FolderTree, FolderContents } from '../types'
+import type { FolderTree, FolderContents, CreateFolderResult } from '../types'
 
 export const folderApi = {
   // 获取文件夹树结构
@@ -26,5 +26,13 @@ export const folderApi = {
       sort_desc: sortDesc.toString(),
     })
     return apiClient.get<FolderContents>(`/api/folders/contents?${params.toString()}`)
+  },
+
+  async createFolder(rootPath: string, parentPath: string, name: string): Promise<CreateFolderResult> {
+    return apiClient.post<CreateFolderResult>('/api/folders/create', {
+      root_path: rootPath,
+      parent_path: parentPath,
+      name,
+    })
   },
 }
