@@ -54,6 +54,7 @@
                   :size="gridItemWidth"
                   @click="handleFileClick(file.id, $event)"
                   @dblclick="handleFileDblClick(file)"
+                  @contextmenu.prevent="handleFileContextMenu(file, $event)"
                 />
               </div>
             </div>
@@ -74,6 +75,7 @@
               :selected="fileStore.selectedIds.has(item.id)"
               @click="handleFileClick(item.id, $event)"
               @dblclick="handleFileDblClick(item)"
+              @contextmenu.prevent="handleFileContextMenu(item, $event)"
             />
           </RecycleScroller>
           
@@ -115,6 +117,7 @@
                 :size="gridItemWidth"
                 @click="handleFileClick(file.id, $event)"
                 @dblclick="handleFileDblClick(file)"
+                @contextmenu.prevent="handleFileContextMenu(file, $event)"
               />
             </div>
           </div>
@@ -141,6 +144,7 @@
               :selected="fileStore.selectedIds.has(item.id)"
               @click="handleFileClick(item.id, $event)"
               @dblclick="handleFileDblClick(item)"
+              @contextmenu.prevent="handleFileContextMenu(item, $event)"
             />
           </div>
         </RecycleScroller>
@@ -153,6 +157,183 @@
       </div>
     </template>
 
+    <!-- 文件右键菜单 -->
+    <el-popover
+      :visible="fileContextMenuVisible"
+      :virtual-ref="fileContextMenuTrigger"
+      virtual-triggering
+      trigger="contextmenu"
+      placement="bottom-start"
+      :width="168"
+      popper-class="context-menu-popover"
+      @update:visible="onFileContextMenuVisibleChange"
+    >
+      <div class="context-menu">
+        <div
+          class="context-menu-item"
+          :class="{ disabled: contextMenuTargetIds.length !== 1 }"
+          @click="contextMenuTargetIds.length === 1 && openRenameDialog()"
+        >
+          <el-icon><Edit /></el-icon>
+          <span>重命名</span>
+        </div>
+        <div class="context-menu-item" @click="openMoveDialog()">
+          <el-icon><FolderOpened /></el-icon>
+          <span>移动到...</span>
+        </div>
+        <div class="context-menu-item" @click="openCopyDialog()">
+          <el-icon><CopyDocument /></el-icon>
+          <span>复制到...</span>
+        </div>
+        <div
+          class="context-menu-item"
+          :class="{ disabled: contextMenuTargetIds.length !== 1 }"
+          @click="contextMenuTargetIds.length === 1 && showInExplorer()"
+        >
+          <el-icon><Search /></el-icon>
+          <span>在资源管理器中显示</span>
+        </div>
+        <div class="context-menu-divider" />
+        <div class="context-menu-item delete" @click="deleteContextMenuFiles()">
+          <el-icon><Delete /></el-icon>
+          <span>删除</span>
+        </div>
+      </div>
+    </el-popover>
+
+    <!-- 重命名对话框 -->
+    <el-dialog
+      v-model="showRenameDialog"
+      title="重命名文件"
+      width="420px"
+      append-to-body
+      destroy-on-close
+    >
+      <el-input
+        v-model="renameNewName"
+        placeholder="输入新文件名（含扩展名）"
+        maxlength="255"
+        clearable
+        @keyup.enter="confirmRename"
+      />
+      <template #footer>
+        <el-button @click="showRenameDialog = false">取消</el-button>
+        <el-button type="primary" :loading="renameSubmitting" :disabled="!renameNewName.trim()" @click="confirmRename">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 移动/复制目录选择对话框 -->
+    <el-dialog
+      v-model="showFileOpDialog"
+      :title="fileOpMode === 'move' ? '选择移动目标目录' : '选择复制目标目录'"
+      width="680px"
+      destroy-on-close
+      class="import-target-dialog"
+    >
+      <div class="import-dialog-body">
+        <div class="import-dialog-hero">
+          <div>
+            <div class="import-dialog-title-row">
+              <span class="import-dialog-title">{{ fileOpMode === 'move' ? '移动文件' : '复制文件' }}</span>
+              <span class="import-dialog-count">{{ contextMenuTargetIds.length }} 个文件</span>
+            </div>
+            <p class="import-dialog-description">
+              请选择工作区中的目标目录，确认后会将文件{{ fileOpMode === 'move' ? '移动' : '复制' }}到该位置。
+            </p>
+          </div>
+          <div class="import-dialog-workspace">
+            <span class="workspace-label">工作区</span>
+            <strong>{{ getFolderDisplayName(appStore.currentWorkspace || '') }}</strong>
+          </div>
+        </div>
+
+        <div class="import-target-summary-card">
+          <div class="summary-main">
+            <span class="summary-label">当前目标</span>
+            <strong>{{ getFolderDisplayName(fileOpTargetDir || appStore.currentWorkspace || '') || '未选择' }}</strong>
+            <span class="summary-path">{{ getRelativeImportPath(fileOpTargetDir || appStore.currentWorkspace || '') }}</span>
+          </div>
+          <div class="summary-actions">
+            <el-button text @click="toggleFileOpCreateFolder">
+              {{ showFileOpCreateFolder ? '收起新建' : '新建目录' }}
+            </el-button>
+          </div>
+        </div>
+
+        <div v-if="showFileOpCreateFolder" class="create-folder-panel">
+          <div class="create-folder-info">
+            <span>在</span>
+            <strong>{{ fileOpTargetDir || appStore.currentWorkspace }}</strong>
+            <span>下创建目录</span>
+          </div>
+          <div class="create-folder-form">
+            <el-input
+              v-model="fileOpNewFolderName"
+              placeholder="输入新目录名称"
+              maxlength="80"
+              clearable
+              @keyup.enter="createFolderInFileOpDialog"
+            />
+            <el-button
+              type="primary"
+              :loading="fileOpCreatingFolder"
+              :disabled="!fileOpNewFolderName.trim() || fileOpCreatingFolder"
+              @click="createFolderInFileOpDialog"
+            >
+              创建
+            </el-button>
+          </div>
+        </div>
+
+        <div class="import-tree-panel">
+          <div class="import-tree-panel-header">
+            <span>目录层级</span>
+            <span class="import-tree-tip">显示工作区内全部目录，支持空目录与新建目录</span>
+          </div>
+          <div v-if="fileOpTreeLoading" class="import-dialog-loading">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>正在加载目录...</span>
+          </div>
+          <el-tree
+            v-else-if="fileOpTreeData.length"
+            ref="fileOpTreeRef"
+            :data="fileOpTreeData"
+            node-key="path"
+            :default-expanded-keys="fileOpDefaultExpandedKeys"
+            highlight-current
+            :expand-on-click-node="false"
+            :current-node-key="fileOpTargetDir"
+            :props="{ label: 'name', children: 'children' }"
+            @node-click="handleFileOpTargetSelect"
+          >
+            <template #default="{ data }">
+              <div class="import-tree-node">
+                <div class="import-tree-main">
+                  <span class="import-tree-name">{{ data.name }}</span>
+                  <span class="import-tree-meta">{{ getRelativeImportPath(data.path) }}</span>
+                </div>
+                <span class="import-tree-badge">{{ data.file_count }} 文件</span>
+              </div>
+            </template>
+          </el-tree>
+          <el-empty v-else description="当前工作区暂无可选目录" :image-size="80" />
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showFileOpDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!fileOpTargetDir || fileOpSubmitting"
+          :loading="fileOpSubmitting"
+          @click="confirmFileOp"
+        >
+          确认{{ fileOpMode === 'move' ? '移动' : '复制' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 原有拖拽导入对话框 -->
     <el-dialog
       v-model="showImportDialog"
       title="选择移动目标目录"
@@ -286,8 +467,8 @@ import { open } from '@tauri-apps/plugin-shell'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
-import { ElMessage } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles } from '../utils/drag'
 
@@ -316,6 +497,37 @@ const importFolderTree = ref<FolderNode[]>([])
 const selectedImportTarget = ref('')
 const lastHandledExternalDropSignature = ref('')
 const importTreeRef = ref<InstanceType<typeof ElTree> | null>(null)
+
+// 文件右键菜单状态
+const fileContextMenuVisible = ref(false)
+const fileContextMenuTrigger = ref<HTMLElement>()
+const contextMenuTargetIds = ref<number[]>([])
+const contextMenuTargetFile = ref<FileSummary | null>(null)
+
+// 右键菜单锚点（单例，始终存在于 DOM，避免删除时闪烁）
+const fileContextMenuAnchor = (() => {
+  const el = document.createElement('div')
+  el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none'
+  document.body.appendChild(el)
+  return el
+})()
+
+// 重命名对话框状态
+const showRenameDialog = ref(false)
+const renameNewName = ref('')
+const renameSubmitting = ref(false)
+
+// 移动/复制对话框状态
+const showFileOpDialog = ref(false)
+const fileOpMode = ref<'move' | 'copy'>('move')
+const fileOpTargetDir = ref('')
+const fileOpTreeLoading = ref(false)
+const fileOpSubmitting = ref(false)
+const fileOpFolderTree = ref<FolderNode[]>([])
+const showFileOpCreateFolder = ref(false)
+const fileOpNewFolderName = ref('')
+const fileOpCreatingFolder = ref(false)
+const fileOpTreeRef = ref<InstanceType<typeof ElTree> | null>(null)
 
 const currentImportDirectory = computed(() => {
   if (fileStore.browseMode === 'folder') {
@@ -368,6 +580,35 @@ const canCreateFolder = computed(() => {
   return !!(newFolderName.value.trim() && (selectedImportTarget.value || appStore.currentWorkspace) && !creatingFolder.value)
 })
 
+// 移动/复制对话框的目录树数据
+const fileOpTreeData = computed<FolderNode[]>(() => {
+  if (!appStore.currentWorkspace) return []
+  return [{
+    name: getFolderDisplayName(appStore.currentWorkspace),
+    path: appStore.currentWorkspace,
+    file_count: 0,
+    children: fileOpFolderTree.value,
+    is_expanded: true,
+  }]
+})
+
+const fileOpDefaultExpandedKeys = computed(() => {
+  const targetPath = fileOpTargetDir.value || appStore.currentWorkspace
+  if (!targetPath || !appStore.currentWorkspace) return []
+  const rootPath = appStore.currentWorkspace
+  const normalizedRoot = rootPath.replace(/\\/g, '/')
+  const normalizedTarget = targetPath.replace(/\\/g, '/')
+  if (!normalizedTarget.startsWith(normalizedRoot)) return [rootPath]
+  const relative = normalizedTarget.slice(normalizedRoot.length).replace(/^\/+/, '')
+  const keys = [rootPath]
+  let currentPath = normalizedRoot
+  relative.split('/').filter(Boolean).forEach((segment) => {
+    currentPath = `${currentPath}/${segment}`
+    keys.push(currentPath)
+  })
+  return keys
+})
+
 // ResizeObserver 实例
 let resizeObserver: ResizeObserver | null = null
 let unlistenNativeDragDrop: (() => void) | null = null
@@ -375,30 +616,23 @@ let lastHandledExternalDropResetTimer: ReturnType<typeof setTimeout> | null = nu
 
 // Grid 布局配置
 const GAP = 16 // 间距
-const MIN_ITEM_WIDTH = 160 // 最小宽度
 const PADDING = 32 // 左右 padding 总和
 const INFO_HEIGHT = 80 // 文件名等信息区域高度（包含标签区域）
 
-// 计算每行显示的列数
+// 计算每行显示的列数（根据固定卡片尺寸和容器宽度自动决定列数）
 const gridColumns = computed(() => {
   if (containerWidth.value === 0) return 4
   const availableWidth = containerWidth.value - PADDING
-  const columns = Math.floor((availableWidth + GAP) / (MIN_ITEM_WIDTH + GAP))
-  return Math.max(columns, 2) // 最少显示 2 列
+  const columns = Math.floor((availableWidth + GAP) / (fileStore.gridItemSize + GAP))
+  return Math.max(columns, 1) // 最少显示 1 列
 })
 
-// 计算每个 grid item 的宽度
-const gridItemWidth = computed(() => {
-  if (containerWidth.value === 0) return MIN_ITEM_WIDTH
-  const availableWidth = containerWidth.value - PADDING
-  // 计算每个 item 的宽度
-  const itemWidth = (availableWidth - (gridColumns.value - 1) * GAP) / gridColumns.value
-  return Math.max(itemWidth, MIN_ITEM_WIDTH)
-})
+// 卡片宽度固定为 gridItemSize
+const gridItemWidth = computed(() => fileStore.gridItemSize)
 
 // 计算每个 grid item 的高度
 const gridItemHeight = computed(() => {
-  return gridItemWidth.value + INFO_HEIGHT
+  return fileStore.gridItemSize + INFO_HEIGHT
 })
 
 // 将文件列表按行分组
@@ -656,6 +890,7 @@ async function confirmImportToSelectedDirectory() {
 onMounted(() => {
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
+  window.addEventListener('close-context-menus', closeFileContextMenu)
   
   // 使用 ResizeObserver 监听容器大小变化
   if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
@@ -706,6 +941,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateContainerWidth)
+  window.removeEventListener('close-context-menus', closeFileContextMenu)
   
   // 移除 ResizeObserver
   if (resizeObserver) {
@@ -836,6 +1072,197 @@ async function handleFileDblClick(file: FileSummary) {
 // 处理文件夹选择
 async function handleFolderSelect(folderPath: string) {
   await fileStore.loadFolderContents(folderPath)
+}
+
+// ===== 文件右键菜单 =====
+
+function handleFileContextMenu(file: FileSummary, event: MouseEvent) {
+  // 关闭其他面板的右键菜单
+  window.dispatchEvent(new Event('close-context-menus'))
+  // 若右键文件不在选中集合，先单选该文件
+  if (!fileStore.selectedIds.has(file.id)) {
+    fileStore.selectFile(file.id, false)
+  }
+  contextMenuTargetFile.value = file
+  contextMenuTargetIds.value = Array.from(fileStore.selectedIds)
+  fileContextMenuAnchor.style.left = `${event.clientX}px`
+  fileContextMenuAnchor.style.top = `${event.clientY}px`
+  fileContextMenuTrigger.value = fileContextMenuAnchor
+  fileContextMenuVisible.value = true
+}
+
+function onFileContextMenuVisibleChange(val: boolean) {
+  if (!val) fileContextMenuVisible.value = false
+}
+
+function closeFileContextMenu() {
+  fileContextMenuVisible.value = false
+}
+
+function openRenameDialog() {
+  fileContextMenuVisible.value = false
+  const file = contextMenuTargetFile.value
+  if (!file) return
+  renameNewName.value = file.name
+  showRenameDialog.value = true
+}
+
+async function confirmRename() {
+  const file = contextMenuTargetFile.value
+  if (!file || !renameNewName.value.trim()) return
+  renameSubmitting.value = true
+  try {
+    await fileApi.rename(file.id, renameNewName.value.trim())
+    showRenameDialog.value = false
+    ElMessage.success('重命名成功')
+    await refreshFileList()
+  } catch (error: any) {
+    const msg = error?.response?.data?.detail || '重命名失败'
+    ElMessage.error(msg)
+  } finally {
+    renameSubmitting.value = false
+  }
+}
+
+async function openMoveDialog() {
+  fileContextMenuVisible.value = false
+  fileOpMode.value = 'move'
+  fileOpTargetDir.value = currentImportDirectory.value || appStore.currentWorkspace || ''
+  showFileOpCreateFolder.value = false
+  fileOpNewFolderName.value = ''
+  showFileOpDialog.value = true
+  await loadFileOpFolderTree()
+}
+
+async function openCopyDialog() {
+  fileContextMenuVisible.value = false
+  fileOpMode.value = 'copy'
+  fileOpTargetDir.value = currentImportDirectory.value || appStore.currentWorkspace || ''
+  showFileOpCreateFolder.value = false
+  fileOpNewFolderName.value = ''
+  showFileOpDialog.value = true
+  await loadFileOpFolderTree()
+}
+
+async function loadFileOpFolderTree() {
+  if (!appStore.currentWorkspace) return
+  fileOpTreeLoading.value = true
+  try {
+    const result = await folderApi.getTree(appStore.currentWorkspace)
+    fileOpFolderTree.value = result.folders
+  } catch {
+    ElMessage.error('加载目录失败')
+    fileOpFolderTree.value = []
+  } finally {
+    fileOpTreeLoading.value = false
+    await nextTick()
+    if (fileOpTargetDir.value) {
+      fileOpTreeRef.value?.setCurrentKey(fileOpTargetDir.value)
+    }
+  }
+}
+
+function handleFileOpTargetSelect(node: FolderNode) {
+  fileOpTargetDir.value = node.path
+}
+
+function toggleFileOpCreateFolder() {
+  showFileOpCreateFolder.value = !showFileOpCreateFolder.value
+  if (!showFileOpCreateFolder.value) fileOpNewFolderName.value = ''
+}
+
+async function createFolderInFileOpDialog() {
+  const parentPath = fileOpTargetDir.value || appStore.currentWorkspace
+  const folderName = fileOpNewFolderName.value.trim()
+  if (!appStore.currentWorkspace || !parentPath || !folderName) return
+  fileOpCreatingFolder.value = true
+  try {
+    let createdPath = ''
+    try {
+      const result = await folderApi.createFolder(appStore.currentWorkspace, parentPath, folderName)
+      createdPath = result.path
+    } catch (error: any) {
+      if (error?.response?.status !== 404) throw error
+      const targetPath = `${parentPath.replace(/[\/\\]+$/, '')}/${folderName}`
+      await invoke('create_folder', { path: targetPath })
+      createdPath = targetPath.replace(/\\/g, '/')
+    }
+    await loadFileOpFolderTree()
+    fileOpTargetDir.value = createdPath
+    fileOpTreeRef.value?.setCurrentKey(createdPath)
+    fileOpNewFolderName.value = ''
+    showFileOpCreateFolder.value = false
+    ElMessage.success(`已创建目录：${folderName}`)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '创建目录失败')
+  } finally {
+    fileOpCreatingFolder.value = false
+  }
+}
+
+async function confirmFileOp() {
+  if (!fileOpTargetDir.value || !contextMenuTargetIds.value.length) return
+  fileOpSubmitting.value = true
+  try {
+    if (fileOpMode.value === 'move') {
+      const result = await fileApi.move(contextMenuTargetIds.value, fileOpTargetDir.value)
+      ElMessage.success(`已移动 ${result.files.length} 个文件`)
+    } else {
+      const result = await fileApi.copy(contextMenuTargetIds.value, fileOpTargetDir.value)
+      ElMessage.success(`已复制 ${result.files.length} 个文件`)
+    }
+    showFileOpDialog.value = false
+    await refreshFileList()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || `${fileOpMode.value === 'move' ? '移动' : '复制'}失败`)
+  } finally {
+    fileOpSubmitting.value = false
+  }
+}
+
+async function showInExplorer() {
+  fileContextMenuVisible.value = false
+  const file = contextMenuTargetFile.value
+  if (!file) return
+  try {
+    const folder = file.path.replace(/[/\\][^/\\]+$/, '')
+    await invoke('open_folder', { path: folder, filePath: file.path })
+  } catch {
+    ElMessage.error('无法打开资源管理器')
+  }
+}
+
+async function deleteContextMenuFiles() {
+  fileContextMenuVisible.value = false
+  const ids = contextMenuTargetIds.value
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${ids.length} 个文件吗？文件将被移入回收站。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    for (const id of ids) {
+      await fileApi.delete(id)
+    }
+    ElMessage.success(`已删除 ${ids.length} 个文件`)
+    fileStore.clearSelection()
+    await refreshFileList()
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
+
+async function refreshFileList() {
+  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
+    await fileStore.loadFolderContents(fileStore.currentFolderPath)
+  } else {
+    await fileStore.search({ root: appStore.currentWorkspace || undefined })
+  }
 }
 
 function clearDropIndicators() {
@@ -1279,5 +1706,43 @@ async function handleExternalDrop(event: DragEvent) {
   .folder-tree-panel {
     width: 160px;
   }
+}
+
+.context-menu {
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 6px;
+  transition: background-color 0.15s;
+}
+
+.context-menu-item:hover:not(.disabled) {
+  background-color: var(--color-bg-secondary);
+}
+
+.context-menu-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.context-menu-item.delete {
+  color: var(--color-danger);
+}
+
+.context-menu-item.delete:hover {
+  background-color: var(--color-danger-light);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background-color: var(--color-border);
+  margin: 4px 0;
 }
 </style>

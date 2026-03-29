@@ -102,6 +102,35 @@
               :title="'列表视图'"
             />
           </el-button-group>
+
+          <!-- 卡片大小调整 -->
+          <el-popover
+            v-if="fileStore.viewMode === 'grid'"
+            :visible="sizeSliderVisible"
+            placement="bottom"
+            :width="220"
+            @update:visible="sizeSliderVisible = $event"
+          >
+            <template #reference>
+              <el-button
+                :icon="ScaleToOriginal"
+                circle
+                :title="'调整卡片大小'"
+                @click="sizeSliderVisible = !sizeSliderVisible"
+              />
+            </template>
+            <div class="size-slider-panel">
+              <span class="size-slider-label">卡片大小</span>
+              <el-slider
+                :model-value="fileStore.gridItemSize"
+                :min="80"
+                :max="320"
+                :step="8"
+                @update:model-value="fileStore.setGridItemSize($event as number)"
+              />
+              <span class="size-slider-value">{{ fileStore.gridItemSize }}px</span>
+            </div>
+          </el-popover>
           
           <el-button
             :icon="appStore.detailPanelVisible ? ArrowRight : ArrowLeft"
@@ -185,6 +214,7 @@ import {
   Loading,
   Refresh,
   Folder,
+  ScaleToOriginal,
 } from '@element-plus/icons-vue'
 
 import { useAppStore } from '../stores/app'
@@ -201,6 +231,8 @@ import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
+
+const sizeSliderVisible = ref(false)
 
 // 检测是否为移动设备
 const isMobile = ref(false)
@@ -755,5 +787,27 @@ const toggleBrowseMode = () => {
   .scan-file {
     display: none;
   }
+}
+
+/* 卡片大小滑块 */
+.size-slider-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.size-slider-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.size-slider-value {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: right;
 }
 </style>

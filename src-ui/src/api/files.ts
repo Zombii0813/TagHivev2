@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate, ResolveFilesResult, ImportFilesResult } from '../types'
+import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate, ResolveFilesResult, ImportFilesResult, FileSummary, FileBatchResult } from '../types'
 
 export const fileApi = {
   // 搜索文件
@@ -33,5 +33,26 @@ export const fileApi = {
   // 删除文件
   async delete(id: number): Promise<{ success: boolean }> {
     return apiClient.delete<{ success: boolean }>(`/api/files/${id}`)
+  },
+
+  // 重命名文件
+  async rename(id: number, newName: string): Promise<FileSummary> {
+    return apiClient.put<FileSummary>(`/api/files/${id}/rename`, { new_name: newName })
+  },
+
+  // 移动文件（工作区内移动）
+  async move(fileIds: number[], targetDir: string): Promise<FileBatchResult> {
+    return apiClient.post<FileBatchResult>('/api/files/move', {
+      file_ids: fileIds,
+      target_dir: targetDir,
+    })
+  },
+
+  // 复制文件
+  async copy(fileIds: number[], targetDir: string): Promise<FileBatchResult> {
+    return apiClient.post<FileBatchResult>('/api/files/copy', {
+      file_ids: fileIds,
+      target_dir: targetDir,
+    })
   },
 }

@@ -105,7 +105,8 @@
       virtual-triggering
       trigger="contextmenu"
       placement="bottom-start"
-      :width="150"
+      :width="140"
+      popper-class="context-menu-popover"
       @update:visible="onContextMenuVisibleChange"
     >
       <div class="context-menu">
@@ -152,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Plus, Close, Edit, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
@@ -186,6 +187,13 @@ const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
 const selectedTag = ref<Tag | null>(null)
 const draggingTagId = ref<number | null>(null)
+
+const contextMenuAnchor = (() => {
+  const el = document.createElement('div')
+  el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none'
+  document.body.appendChild(el)
+  return el
+})()
 const reorderTargetTagId = ref<number | null>(null)
 const listDropActive = ref(false)
 
@@ -197,6 +205,11 @@ function loadTagsForWorkspace() {
 
 onMounted(() => {
   loadTagsForWorkspace()
+  window.addEventListener('close-context-menus', closeContextMenu)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('close-context-menus', closeContextMenu)
 })
 
 // 监听工作目录变化，重新加载标签
@@ -347,26 +360,20 @@ async function handleTagListDrop(event: DragEvent) {
   resetDragState()
 }
 
-async function handleContextMenu(tag: Tag, event: MouseEvent) {
+function closeContextMenu() {
+  contextMenuVisible.value = false
+}
+
+function handleContextMenu(tag: Tag, event: MouseEvent) {
   selectedTag.value = tag
-  
-  // 创建虚拟触发元素
-  const trigger = document.createElement('div')
-  trigger.style.position = 'fixed'
-  trigger.style.left = event.clientX + 'px'
-  trigger.style.top = event.clientY + 'px'
-  document.body.appendChild(trigger)
-  contextMenuTrigger.value = trigger as HTMLElement
-  
+
+  // 关闭其他面板的右键菜单
+  window.dispatchEvent(new Event('close-context-menus'))
+
+  contextMenuAnchor.style.left = `${event.clientX}px`
+  contextMenuAnchor.style.top = `${event.clientY}px`
+  contextMenuTrigger.value = contextMenuAnchor
   contextMenuVisible.value = true
-  
-  // 清理
-  await nextTick()
-  setTimeout(() => {
-    if (trigger.parentNode) {
-      document.body.removeChild(trigger)
-    }
-  }, 100)
 }
 
 function onContextMenuVisibleChange(val: boolean) {

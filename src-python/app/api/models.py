@@ -136,6 +136,29 @@ class FolderCreateResultDTO(BaseModel):
     path: str
 
 
+class FileRenameRequestDTO(BaseModel):
+    """重命名文件请求 DTO"""
+    new_name: str  # 仅文件名，不含路径
+
+
+class FileMoveRequestDTO(BaseModel):
+    """移动文件请求 DTO"""
+    file_ids: List[int]
+    target_dir: str
+
+
+class FileCopyRequestDTO(BaseModel):
+    """复制文件请求 DTO"""
+    file_ids: List[int]
+    target_dir: str
+
+
+class FileBatchResultDTO(BaseModel):
+    """批量文件操作结果 DTO"""
+    files: List[FileSummaryDTO]
+    target_dir: str
+
+
 # ========== 标签相关 DTO ==========
 
 class TagDTO(BaseModel):

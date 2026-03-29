@@ -38,6 +38,10 @@ from .models import (
     FolderContentsDTO,
     FolderCreateRequestDTO,
     FolderCreateResultDTO,
+    FileRenameRequestDTO,
+    FileMoveRequestDTO,
+    FileCopyRequestDTO,
+    FileBatchResultDTO,
 )
 
 router = APIRouter(prefix="/api")
@@ -427,6 +431,143 @@ async def delete_file(
     repo.delete_files([file_id])
     repo.session.commit()
     return {"success": True}
+
+
+@router.put("/files/{file_id}/rename", response_model=FileSummaryDTO)
+async def rename_file(
+    file_id: int,
+    payload: FileRenameRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """重命名文件（磁盘 + 数据库）"""
+    new_name = payload.new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New name cannot be empty")
+
+    file = repo.get_file_by_id(file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    old_path = Path(file.path)
+    new_path = old_path.parent / new_name
+
+    if new_path.exists():
+        raise HTTPException(status_code=400, detail=f"File already exists: {new_name}")
+
+    try:
+        old_path.rename(new_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to rename file: {exc}") from exc
+
+    meta = build_file_meta(new_path)
+    file_row = repo.upsert_file(meta, existing_id=file.id)
+    repo.session.commit()
+
+    return FileSummaryDTO(
+        id=file_row.id,
+        name=file_row.name,
+        path=file_row.path,
+        type=file_row.type,
+        size=file_row.size,
+        modified_at=file_row.modified_at,
+        duration=file_row.duration,
+        tag_ids=[t.id for t in file_row.tags],
+    )
+
+
+@router.post("/files/move", response_model=FileBatchResultDTO)
+async def move_files(
+    payload: FileMoveRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """将文件移动到指定目录（工作区内移动）"""
+    target_dir = Path(payload.target_dir)
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Target directory not found")
+
+    moved_files: list[FileSummaryDTO] = []
+
+    for file_id in payload.file_ids:
+        file = repo.get_file_by_id(file_id)
+        if not file:
+            continue
+
+        source_path = Path(file.path)
+        if not source_path.exists():
+            continue
+
+        # 目标路径与源路径相同时跳过
+        if source_path.parent.resolve() == target_dir.resolve():
+            continue
+
+        dest_path = _build_unique_target_path(target_dir, source_path.name)
+
+        try:
+            shutil.move(str(source_path), str(dest_path))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to move file: {exc}") from exc
+
+        meta = build_file_meta(dest_path)
+        file_row = repo.upsert_file(meta, existing_id=file.id)
+        moved_files.append(FileSummaryDTO(
+            id=file_row.id,
+            name=file_row.name,
+            path=file_row.path,
+            type=file_row.type,
+            size=file_row.size,
+            modified_at=file_row.modified_at,
+            duration=file_row.duration,
+            tag_ids=[t.id for t in file_row.tags],
+        ))
+
+    repo.session.commit()
+    return FileBatchResultDTO(files=moved_files, target_dir=target_dir.as_posix())
+
+
+@router.post("/files/copy", response_model=FileBatchResultDTO)
+async def copy_files(
+    payload: FileCopyRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """复制文件到指定目录（副本入库，不含原标签）"""
+    target_dir = Path(payload.target_dir)
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Target directory not found")
+
+    copied_files: list[FileSummaryDTO] = []
+
+    for file_id in payload.file_ids:
+        file = repo.get_file_by_id(file_id)
+        if not file:
+            continue
+
+        source_path = Path(file.path)
+        if not source_path.exists():
+            continue
+
+        dest_path = _build_unique_target_path(target_dir, source_path.name)
+
+        try:
+            shutil.copy2(str(source_path), str(dest_path))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to copy file: {exc}") from exc
+
+        meta = build_file_meta(dest_path)
+        # 副本作为全新记录入库（不传 existing_id）
+        file_row = repo.upsert_file(meta)
+        copied_files.append(FileSummaryDTO(
+            id=file_row.id,
+            name=file_row.name,
+            path=file_row.path,
+            type=file_row.type,
+            size=file_row.size,
+            modified_at=file_row.modified_at,
+            duration=file_row.duration,
+            tag_ids=[],
+        ))
+
+    repo.session.commit()
+    return FileBatchResultDTO(files=copied_files, target_dir=target_dir.as_posix())
 
 
 # ========== 标签相关 API ==========

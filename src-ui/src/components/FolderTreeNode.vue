@@ -2,12 +2,13 @@
   <div class="folder-node-wrapper">
     <div
       class="tree-node"
-      :class="{ 
+      :class="{
         selected: selectedPath === folder.path,
         expanded: isExpanded
       }"
       :style="{ paddingLeft: `${level * 16 + 8}px` }"
       @click="handleClick"
+      @contextmenu.prevent="handleContextMenu($event)"
     >
       <!-- 展开/收起图标 -->
       <span 
@@ -43,6 +44,7 @@
         :selected-path="selectedPath"
         :level="level + 1"
         @select="$emit('select', $event)"
+          @contextmenu="$emit('contextmenu', $event)"
       />
     </div>
   </div>
@@ -61,6 +63,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [path: string]
+  contextmenu: [payload: { folder: FolderNode; event: MouseEvent }]
 }>()
 
 const isExpanded = ref(false)
@@ -78,6 +81,10 @@ function toggleExpand() {
 
 function handleClick() {
   emit('select', props.folder.path)
+}
+
+function handleContextMenu(event: MouseEvent) {
+  emit('contextmenu', { folder: props.folder, event })
 }
 </script>
 

@@ -72,3 +72,6 @@ taghive-sidecar.spec
 config.json
 
 docs/
+
+# Claude Code
+.claude/

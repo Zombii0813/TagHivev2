@@ -14,6 +14,8 @@ export const useFileStore = defineStore('files', () => {
   const isLoading = ref(false)
   // 视图模式：grid（网格）或 list（列表）
   const viewMode = ref<'grid' | 'list'>('grid')
+  // 网格卡片固定尺寸（像素）
+  const gridItemSize = ref(160)
   // 浏览范围：folder（文件夹层级浏览）或 all（浏览所有文件）
   const browseMode = ref<'folder' | 'all'>('all')
   const sortBy = ref<string>('name')
@@ -175,6 +177,10 @@ export const useFileStore = defineStore('files', () => {
     viewMode.value = mode
   }
 
+  function setGridItemSize(size: number) {
+    gridItemSize.value = Math.max(80, Math.min(320, size))
+  }
+
   function toggleBrowseMode() {
     browseMode.value = browseMode.value === 'folder' ? 'all' : 'folder'
   }
@@ -275,9 +281,9 @@ export const useFileStore = defineStore('files', () => {
     isLoading,
     viewMode,
     browseMode,
+    gridItemSize,
     sortBy,
     sortDesc,
-    currentFolderPath,
     selectedFiles,
     selectedCount,
     hasSelection,
@@ -297,6 +303,7 @@ export const useFileStore = defineStore('files', () => {
     clearSelection,
     toggleViewMode,
     setViewMode,
+    setGridItemSize,
     toggleBrowseMode,
     setBrowseMode,
     setSortBy,

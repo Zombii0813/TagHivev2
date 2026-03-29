@@ -11,21 +11,6 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "TagHive",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 1000,
-        "minHeight": 700,
-        "center": true,
-        "decorations": true,
-        "dragDropEnabled": true,
-        "transparent": false,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
     "security": {
       "csp": null,
       "capabilities": ["default"]

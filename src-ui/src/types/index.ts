@@ -174,3 +174,8 @@ export interface CreateFolderResult {
   name: string
   path: string
 }
+
+export interface FileBatchResult {
+  files: FileSummary[]
+  target_dir: string
+}

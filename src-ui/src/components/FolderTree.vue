@@ -4,26 +4,27 @@
       <el-icon class="loading-icon"><Loading /></el-icon>
       <span>加载中...</span>
     </div>
-    
+
     <div v-else-if="!rootPath" class="empty-state">
       <span>请先选择工作区</span>
     </div>
-    
+
     <div v-else-if="folders.length === 0" class="empty-state">
       <span>暂无文件夹</span>
     </div>
-    
+
     <div v-else class="tree-container">
       <div
         class="tree-node root-node"
         :class="{ selected: selectedPath === rootPath }"
         @click="selectFolder(rootPath)"
+        @contextmenu.prevent="handleNodeContextMenu({ folder: { name: rootName, path: rootPath, file_count: totalFiles, children: [], is_expanded: true }, event: $event })"
       >
         <el-icon class="node-icon"><Folder /></el-icon>
         <span class="node-name">{{ rootName }}</span>
         <span class="file-count">({{ totalFiles }})</span>
       </div>
-      
+
       <div class="tree-children">
         <FolderTreeNode
           v-for="folder in folders"
@@ -32,15 +33,60 @@
           :selected-path="selectedPath"
           :level="1"
           @select="selectFolder"
+          @contextmenu="handleNodeContextMenu"
         />
       </div>
     </div>
+
+    <!-- 文件夹右键菜单 -->
+    <el-popover
+      :visible="contextMenuVisible"
+      :virtual-ref="contextMenuTrigger"
+      virtual-triggering
+      trigger="contextmenu"
+      placement="bottom-start"
+      :width="148"
+      popper-class="context-menu-popover"
+      @update:visible="(v) => { if (!v) contextMenuVisible = false }"
+    >
+      <div class="context-menu">
+        <div class="context-menu-item" @click="openCreateSubdirDialog">
+          <el-icon><FolderAdd /></el-icon>
+          <span>新建子目录</span>
+        </div>
+      </div>
+    </el-popover>
+
+    <!-- 新建子目录对话框 -->
+    <el-dialog
+      v-model="showCreateDialog"
+      title="新建子目录"
+      width="400px"
+      append-to-body
+      destroy-on-close
+    >
+      <div class="create-dialog-hint">在 <strong>{{ contextMenuFolder?.name }}</strong> 下创建子目录</div>
+      <el-input
+        v-model="newSubdirName"
+        placeholder="输入目录名称"
+        maxlength="80"
+        clearable
+        style="margin-top: 12px"
+        @keyup.enter="confirmCreateSubdir"
+      />
+      <template #footer>
+        <el-button @click="showCreateDialog = false">取消</el-button>
+        <el-button type="primary" :loading="creating" :disabled="!newSubdirName.trim()" @click="confirmCreateSubdir">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { Loading, Folder } from '@element-plus/icons-vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { Loading, Folder, FolderAdd } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
 import type { FolderNode } from '../types'
 import FolderTreeNode from './FolderTreeNode.vue'
@@ -102,6 +148,63 @@ function selectFolder(path: string) {
   emit('select', path)
 }
 
+// ===== 右键菜单 =====
+
+const contextMenuVisible = ref(false)
+const contextMenuTrigger = ref<HTMLElement>()
+const contextMenuFolder = ref<FolderNode | null>(null)
+const showCreateDialog = ref(false)
+
+const contextMenuAnchor = (() => {
+  const el = document.createElement('div')
+  el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none'
+  document.body.appendChild(el)
+  return el
+})()
+const newSubdirName = ref('')
+const creating = ref(false)
+
+function closeFolderContextMenu() {
+  contextMenuVisible.value = false
+}
+
+function handleNodeContextMenu(payload: { folder: FolderNode; event: MouseEvent }) {
+  contextMenuFolder.value = payload.folder
+  window.dispatchEvent(new Event('close-context-menus'))
+  contextMenuAnchor.style.left = `${payload.event.clientX}px`
+  contextMenuAnchor.style.top = `${payload.event.clientY}px`
+  contextMenuTrigger.value = contextMenuAnchor
+  contextMenuVisible.value = true
+}
+
+function openCreateSubdirDialog() {
+  contextMenuVisible.value = false
+  newSubdirName.value = ''
+  showCreateDialog.value = true
+}
+
+async function confirmCreateSubdir() {
+  const name = newSubdirName.value.trim()
+  if (!name || !props.rootPath || !contextMenuFolder.value) return
+  creating.value = true
+  try {
+    try {
+      await folderApi.createFolder(props.rootPath, contextMenuFolder.value.path, name)
+    } catch (error: any) {
+      if (error?.response?.status !== 404) throw error
+      const targetPath = `${contextMenuFolder.value.path.replace(/[\/\\]+$/, '')}/${name}`
+      await invoke('create_folder', { path: targetPath })
+    }
+    showCreateDialog.value = false
+    ElMessage.success(`已创建目录：${name}`)
+    await loadFolderTree()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '创建目录失败')
+  } finally {
+    creating.value = false
+  }
+}
+
 // 监听根路径变化
 watch(() => props.rootPath, () => {
   selectedPath.value = props.rootPath || ''
@@ -112,6 +215,11 @@ onMounted(() => {
   if (props.rootPath) {
     loadFolderTree()
   }
+  window.addEventListener('close-context-menus', closeFolderContextMenu)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('close-context-menus', closeFolderContextMenu)
 })
 </script>
 
@@ -199,5 +307,29 @@ onMounted(() => {
 
 .tree-children {
   margin-left: 4px;
+}
+
+.context-menu {
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 6px;
+  transition: background-color 0.15s;
+}
+
+.context-menu-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.create-dialog-hint {
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 </style>

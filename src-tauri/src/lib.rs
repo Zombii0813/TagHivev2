@@ -416,10 +416,10 @@ pub fn run() {
         .setup(|app| {
             // 获取应用数据目录
             let app_data_dir = get_app_data_dir(&app.handle());
-            
+
             // 获取 WebView 数据目录
             let webview_data_dir = get_webview_data_dir(&app.handle());
-            
+
             // 确保数据目录存在
             if let Err(e) = std::fs::create_dir_all(&webview_data_dir) {
                 eprintln!("Failed to create webview data directory: {}", e);
@@ -427,22 +427,26 @@ pub fn run() {
             if let Err(e) = std::fs::create_dir_all(&app_data_dir) {
                 eprintln!("Failed to create app data directory: {}", e);
             }
-            
+
             println!("WebView data directory: {:?}", webview_data_dir);
             println!("App data directory: {:?}", app_data_dir);
-            
+
             // 设置 TAGHIVE_DATA_DIR 环境变量供 Python sidecar 使用
             std::env::set_var("TAGHIVE_DATA_DIR", &app_data_dir);
             println!("Set TAGHIVE_DATA_DIR to: {:?}", app_data_dir);
-            
-            // 注意：WebView 数据目录在 Tauri 2.0 中通过环境变量设置
-            // 在 Windows 上，WebView2 会读取 WEBVIEW2_USER_DATA_FOLDER 环境变量
-            #[cfg(windows)]
-            {
-                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_data_dir);
-                println!("Set WEBVIEW2_USER_DATA_FOLDER to: {:?}", webview_data_dir);
-            }
-            
+
+            // 通过 WebviewWindowBuilder 创建主窗口并显式指定 WebView 数据目录
+            // 这是让 WebView2 使用便携路径而非系统 AppData 的唯一可靠方式
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+                .title("TagHive")
+                .inner_size(1400.0, 900.0)
+                .min_inner_size(1000.0, 700.0)
+                .center()
+                .resizable(true)
+                .data_directory(webview_data_dir)
+                .build()
+                .expect("Failed to create main window");
+
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state: State<'_, AppState> = app_handle.state();

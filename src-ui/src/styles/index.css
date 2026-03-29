@@ -108,6 +108,12 @@
               0 0 40px var(--color-accent);
 }
 
+/* 右键菜单 Popover — 消除默认内边距 */
+.context-menu-popover.el-popover.el-popper {
+  padding: 0;
+  min-width: unset;
+}
+
 .neon-text {
   text-shadow: 0 0 5px var(--color-accent),
                0 0 10px var(--color-accent);
