@@ -284,6 +284,7 @@ export const useFileStore = defineStore('files', () => {
     gridItemSize,
     sortBy,
     sortDesc,
+    currentFolderPath,
     selectedFiles,
     selectedCount,
     hasSelection,

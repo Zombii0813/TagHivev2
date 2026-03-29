@@ -1,5 +1,5 @@
 <template>
-  <div class="tag-panel">
+  <div class="tag-panel" @dragover="handlePanelDragOver">
     <div class="panel-header">
       <h3>标签</h3>
       <el-button
@@ -37,6 +37,7 @@
     </div>
 
     <div
+      ref="tagListRef"
       class="tag-list"
       :class="{ 'list-drop-active': listDropActive }"
       v-loading="tagStore.isLoading"
@@ -54,16 +55,18 @@
           'drag-over': reorderTargetTagId === tag.id,
         }"
         :style="{ backgroundColor: tag.color + '20', borderColor: tag.color }"
+        :data-tag-id="tag.id"
         draggable="true"
         @click="handleTagClick(tag.id, $event)"
         @contextmenu.prevent="handleContextMenu(tag, $event)"
         @dragstart="handleTagDragStart(tag.id, $event)"
         @dragend="resetDragState"
-        @dragover.prevent="handleTagDragOver(tag.id, $event)"
+        @dragover.prevent.stop="handleTagDragOver(tag.id, $event)"
         @dragleave="handleTagDragLeave(tag.id)"
-        @drop.prevent="handleTagDrop(tag, $event)"
+        @drop.prevent.stop="handleTagDrop(tag, $event)"
       >
-        <span class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
+        <span v-if="tag.icon" class="tag-icon">{{ tag.icon }}</span>
+        <span v-else class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
         <span class="tag-name">{{ tag.name }}</span>
         <span class="tag-count">{{ tag.file_count }}</span>
       </div>
@@ -83,6 +86,33 @@
         </el-form-item>
         <el-form-item label="颜色">
           <el-color-picker v-model="newTag.color" />
+        </el-form-item>
+        <el-form-item label="图标">
+          <div class="icon-picker-row">
+            <div
+              class="icon-preview"
+              :style="newTag.icon ? { borderColor: newTag.color } : {}"
+            >
+              <span v-if="newTag.icon" class="icon-preview-emoji">{{ newTag.icon }}</span>
+              <span v-else class="icon-preview-dot" :style="{ backgroundColor: newTag.color }"></span>
+            </div>
+            <el-input
+              v-model="newTag.icon"
+              placeholder="输入或粘贴 Emoji，如 🎨"
+              maxlength="8"
+              class="icon-input"
+              clearable
+            />
+          </div>
+          <div class="emoji-presets">
+            <span
+              v-for="e in emojiPresets"
+              :key="e"
+              class="emoji-preset-item"
+              :class="{ active: newTag.icon === e }"
+              @click="newTag.icon = newTag.icon === e ? '' : e"
+            >{{ e }}</span>
+          </div>
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -136,6 +166,33 @@
         <el-form-item label="颜色">
           <el-color-picker v-model="editingTag.color" />
         </el-form-item>
+        <el-form-item label="图标">
+          <div class="icon-picker-row">
+            <div
+              class="icon-preview"
+              :style="editingTag.icon ? { borderColor: editingTag.color } : {}"
+            >
+              <span v-if="editingTag.icon" class="icon-preview-emoji">{{ editingTag.icon }}</span>
+              <span v-else class="icon-preview-dot" :style="{ backgroundColor: editingTag.color }"></span>
+            </div>
+            <el-input
+              v-model="editingTag.icon"
+              placeholder="输入或粘贴 Emoji，如 🎨"
+              maxlength="8"
+              class="icon-input"
+              clearable
+            />
+          </div>
+          <div class="emoji-presets">
+            <span
+              v-for="e in emojiPresets"
+              :key="e"
+              class="emoji-preset-item"
+              :class="{ active: editingTag.icon === e }"
+              @click="editingTag.icon = editingTag.icon === e ? '' : e"
+            >{{ e }}</span>
+          </div>
+        </el-form-item>
         <el-form-item label="描述">
           <el-input
             v-model="editingTag.description"
@@ -160,7 +217,7 @@ import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
 import type { Tag } from '../types'
-import { getDraggedTagId, setTagDragData } from '../utils/drag'
+import { getDraggedTagId, setTagDragData, hasTagDrag, clearTagDragState, isTagDragInProgress } from '../utils/drag'
 
 const tagStore = useTagStore()
 const fileStore = useFileStore()
@@ -171,6 +228,7 @@ const showEditDialog = ref(false)
 const newTag = ref({
   name: '',
   color: '#409EFF',
+  icon: '',
   description: '',
 })
 
@@ -178,15 +236,24 @@ const editingTag = ref<Tag & { description?: string }>({
   id: 0,
   name: '',
   color: '#409EFF',
+  icon: '',
   description: '',
   created_at: '',
   file_count: 0,
 })
 
+// 常用 emoji 预设
+const emojiPresets = [
+  '🎨', '📁', '⭐', '🔥', '💡', '🎵', '📷', '🎬',
+  '📝', '🔖', '💼', '🏷️', '🎯', '✅', '❤️', '🌟',
+  '🚀', '💎', '🌈', '🍀', '🐾', '🎮', '📚', '🔑',
+]
+
 const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
 const selectedTag = ref<Tag | null>(null)
 const draggingTagId = ref<number | null>(null)
+const tagListRef = ref<HTMLElement | null>(null)
 
 const contextMenuAnchor = (() => {
   const el = document.createElement('div')
@@ -229,7 +296,7 @@ watch(() => appStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
 
 function handleTagClick(tagId: number, event: MouseEvent) {
   const multi = event.ctrlKey || event.metaKey
-  
+
   // 检查是否点击的是已选中的标签
   if (tagStore.selectedTagIds.has(tagId) && !multi) {
     // 如果是已选中的标签且没有按多选键，则取消选择
@@ -242,9 +309,9 @@ function handleTagClick(tagId: number, event: MouseEvent) {
     }
     return
   }
-  
+
   tagStore.selectTag(tagId, multi)
-  
+
   // 更新文件搜索
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
@@ -277,7 +344,7 @@ async function createTag() {
     ElMessage.warning('请输入标签名称')
     return
   }
-  
+
   try {
     // 传入当前工作目录，实现标签隔离
     const workspace = appStore.currentWorkspace || undefined
@@ -285,11 +352,12 @@ async function createTag() {
       newTag.value.name,
       newTag.value.color,
       newTag.value.description,
-      workspace
+      workspace,
+      newTag.value.icon || undefined,
     )
     ElMessage.success('标签创建成功')
     showCreateDialog.value = false
-    newTag.value = { name: '', color: '#409EFF', description: '' }
+    newTag.value = { name: '', color: '#409EFF', icon: '', description: '' }
   } catch (error: any) {
     // 处理 409 冲突错误
     if (error?.response?.status === 409) {
@@ -304,6 +372,17 @@ function resetDragState() {
   draggingTagId.value = null
   reorderTargetTagId.value = null
   listDropActive.value = false
+  clearTagDragState()
+}
+
+// 面板根元素 dragover：标签拖拽时防止在非 tag-list 区域显示禁止图标
+function handlePanelDragOver(event: DragEvent) {
+  if (isTagDragInProgress()) {
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move'
+    }
+  }
 }
 
 function handleTagDragStart(tagId: number, event: DragEvent) {
@@ -312,13 +391,13 @@ function handleTagDragStart(tagId: number, event: DragEvent) {
 }
 
 function handleTagDragOver(tagId: number, event: DragEvent) {
-  const draggedTagId = getDraggedTagId(event)
+  if (!isTagDragInProgress() && !hasTagDrag(event)) {
+    return
+  }
 
-  if (draggedTagId !== null) {
-    reorderTargetTagId.value = draggedTagId === tagId ? null : tagId
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'move'
-    }
+  reorderTargetTagId.value = draggingTagId.value === tagId ? null : tagId
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
   }
 }
 
@@ -329,8 +408,7 @@ function handleTagDragLeave(tagId: number) {
 }
 
 function handleTagListDragOver(event: DragEvent) {
-  const draggedTagId = getDraggedTagId(event)
-  if (draggedTagId !== null) {
+  if (isTagDragInProgress() || hasTagDrag(event)) {
     listDropActive.value = true
   }
 }
@@ -342,22 +420,65 @@ function handleTagListDragLeave() {
 async function handleTagDrop(tag: Tag, event: DragEvent) {
   const draggedTagId = getDraggedTagId(event)
 
-  if (draggedTagId !== null) {
-    if (draggedTagId !== tag.id) {
-      tagStore.reorderTags(draggedTagId, tag.id)
-    }
-    resetDragState()
+  if (draggedTagId !== null && draggedTagId !== tag.id) {
+    // 根据鼠标在目标 tag 的上/下半决定插入位置
+    const el = (event.currentTarget as HTMLElement)
+    const rect = el.getBoundingClientRect()
+    const isLowerHalf = event.clientY > rect.top + rect.height / 2
+    const targetId = isLowerHalf ? getNextTagId(tag.id) : tag.id
+    tagStore.reorderTags(draggedTagId, targetId)
   }
+  resetDragState()
 }
 
 async function handleTagListDrop(event: DragEvent) {
   const draggedTagId = getDraggedTagId(event)
 
   if (draggedTagId !== null) {
-    tagStore.reorderTags(draggedTagId, null)
+    const targetTagId = getTagIdNearY(event.clientY, draggedTagId)
+    tagStore.reorderTags(draggedTagId, targetTagId)
   }
 
   resetDragState()
+}
+
+// 根据鼠标 Y 坐标找到最近的目标标签 id
+// 返回 null 表示追加到末尾
+function getTagIdNearY(clientY: number, excludeTagId: number): number | null {
+  if (!tagListRef.value) return null
+
+  const items = Array.from(tagListRef.value.querySelectorAll<HTMLElement>('.tag-item'))
+  if (!items.length) return null
+
+  let nearestId: number | null = null
+  let nearestDist = Infinity
+
+  for (const item of items) {
+    const rect = item.getBoundingClientRect()
+    const itemCenter = rect.top + rect.height / 2
+    const dist = Math.abs(clientY - itemCenter)
+
+    if (dist < nearestDist) {
+      nearestDist = dist
+      // 读取 tag id（通过 data 属性或 key）
+      const idStr = item.dataset.tagId
+      if (idStr) {
+        const id = Number(idStr)
+        if (id !== excludeTagId) {
+          // 鼠标在该 tag 下半部时，插到它后面（targetId = 下一个 tag），否则插到它前面
+          nearestId = clientY > itemCenter ? getNextTagId(id) : id
+        }
+      }
+    }
+  }
+
+  return nearestId
+}
+
+function getNextTagId(tagId: number): number | null {
+  const order = tagStore.orderedTags
+  const idx = order.findIndex(t => t.id === tagId)
+  return idx !== -1 && idx + 1 < order.length ? order[idx + 1].id : null
 }
 
 function closeContextMenu() {
@@ -382,8 +503,8 @@ function onContextMenuVisibleChange(val: boolean) {
 
 function editTag() {
   if (!selectedTag.value) return
-  
-  editingTag.value = { ...selectedTag.value }
+
+  editingTag.value = { ...selectedTag.value, icon: selectedTag.value.icon || '' }
   contextMenuVisible.value = false
   showEditDialog.value = true
 }
@@ -393,11 +514,12 @@ async function saveTagEdit() {
     ElMessage.warning('请输入标签名称')
     return
   }
-  
+
   try {
     await tagStore.updateTag(editingTag.value.id, {
       name: editingTag.value.name,
       color: editingTag.value.color,
+      icon: editingTag.value.icon || undefined,
       description: editingTag.value.description,
     })
     ElMessage.success('标签更新成功')
@@ -409,10 +531,10 @@ async function saveTagEdit() {
 
 async function confirmDeleteTag() {
   if (!selectedTag.value) return
-  
+
   const tag = selectedTag.value
   contextMenuVisible.value = false
-  
+
   try {
     await ElMessageBox.confirm(
       `确定要删除标签 "${tag.name}" 吗？${tag.file_count > 0 ? `该标签已关联 ${tag.file_count} 个文件。` : ''}`,
@@ -423,9 +545,9 @@ async function confirmDeleteTag() {
         type: 'warning',
       }
     )
-    
+
     await tagStore.deleteTag(tag.id)
-    
+
     // 如果该标签正在被过滤，清除过滤
     if (tagStore.selectedTagIds.has(tag.id)) {
       tagStore.clearSelection()
@@ -435,7 +557,7 @@ async function confirmDeleteTag() {
         fileStore.search({})
       }
     }
-    
+
     ElMessage.success('标签删除成功')
   } catch (error: any) {
     if (error !== 'cancel') {
@@ -498,7 +620,7 @@ async function confirmDeleteTag() {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   margin-bottom: 4px;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -531,6 +653,14 @@ async function confirmDeleteTag() {
   flex-shrink: 0;
 }
 
+.tag-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+
 .tag-name {
   flex: 1;
   font-size: 13px;
@@ -543,6 +673,72 @@ async function confirmDeleteTag() {
   background: var(--color-bg-tertiary);
   padding: 2px 6px;
   border-radius: 10px;
+}
+
+/* 图标选择器 */
+.icon-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.icon-preview {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--color-bg-secondary);
+}
+
+.icon-preview-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.icon-preview-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.icon-input {
+  flex: 1;
+}
+
+.emoji-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.emoji-preset-item {
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.emoji-preset-item:hover {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border);
+}
+
+.emoji-preset-item.active {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
 }
 
 .context-menu {

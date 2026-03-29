@@ -51,6 +51,7 @@ class Tag(Base):
     id = Column(Integer, primary_key=True)
     name = Column(Text, nullable=False)
     color = Column(Text, nullable=True)
+    icon = Column(Text, nullable=True)   # emoji 图标
     description = Column(Text, nullable=True)
     workspace = Column(Text, nullable=True)  # 工作目录路径，null 表示全局标签
     created_at = Column(DateTime, default=datetime.utcnow)

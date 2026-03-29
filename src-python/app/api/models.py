@@ -166,6 +166,7 @@ class TagDTO(BaseModel):
     id: int
     name: str
     color: Optional[str] = None
+    icon: Optional[str] = None
     description: Optional[str] = None
     created_at: datetime
     file_count: int = 0
@@ -178,6 +179,7 @@ class TagCreateDTO(BaseModel):
     """创建标签 DTO"""
     name: str
     color: Optional[str] = None
+    icon: Optional[str] = None
     description: Optional[str] = None
     workspace: Optional[str] = None  # 工作目录路径，用于标签隔离
 
@@ -186,6 +188,7 @@ class TagUpdateDTO(BaseModel):
     """更新标签 DTO"""
     name: Optional[str] = None
     color: Optional[str] = None
+    icon: Optional[str] = None
     description: Optional[str] = None
 
 

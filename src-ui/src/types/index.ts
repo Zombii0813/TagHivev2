@@ -22,6 +22,7 @@ export interface Tag {
   id: number
   name: string
   color?: string
+  icon?: string
   description?: string
   created_at: string
   file_count: number
@@ -30,6 +31,7 @@ export interface Tag {
 export interface CreateTagRequest {
   name: string
   color?: string
+  icon?: string
   description?: string
   workspace?: string  // 工作目录路径，用于标签隔离
 }
@@ -37,6 +39,7 @@ export interface CreateTagRequest {
 export interface UpdateTagRequest {
   name?: string
   color?: string
+  icon?: string
   description?: string
 }
 

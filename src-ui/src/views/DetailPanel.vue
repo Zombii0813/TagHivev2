@@ -304,12 +304,21 @@ async function saveTags() {
 
 <style scoped>
 .detail-panel {
-  width: var(--detail-panel-width);
+  /* 默认折叠（宽度为 0），通过 .visible 展开 */
+  width: 0;
   flex-shrink: 0;
-  border-left: 1px solid var(--color-border);
+  border-left: 0px solid var(--color-border);
   background: var(--color-bg-secondary);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              border-left-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.detail-panel.visible {
+  width: var(--detail-panel-width);
+  border-left-width: 1px;
   overflow-y: auto;
 }
 

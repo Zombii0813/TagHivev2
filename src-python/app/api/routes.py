@@ -591,6 +591,7 @@ async def list_tags(
             id=tag.id,
             name=tag.name,
             color=tag.color,
+            icon=tag.icon,
             description=tag.description,
             created_at=tag.created_at,
             file_count=file_count,
@@ -617,14 +618,16 @@ async def create_tag(
     tag = repo.create_tag(TagSpec(
         name=spec.name,
         color=spec.color,
+        icon=spec.icon,
         description=spec.description,
     ), workspace=spec.workspace)
     repo.session.commit()
-    
+
     return TagDTO(
         id=tag.id,
         name=tag.name,
         color=tag.color,
+        icon=tag.icon,
         description=tag.description,
         created_at=tag.created_at,
         file_count=0,
@@ -646,6 +649,7 @@ async def get_tag(
         id=tag.id,
         name=tag.name,
         color=tag.color,
+        icon=tag.icon,
         description=tag.description,
         created_at=tag.created_at,
         file_count=len(tag.files),
@@ -662,21 +666,24 @@ async def update_tag(
     tags = repo.get_tags_by_ids([tag_id])
     if not tags:
         raise HTTPException(status_code=404, detail="Tag not found")
-    
+
     tag = tags[0]
     if update.name is not None:
         tag.name = update.name
     if update.color is not None:
         tag.color = update.color
+    if update.icon is not None:
+        tag.icon = update.icon
     if update.description is not None:
         tag.description = update.description
-    
+
     repo.session.commit()
-    
+
     return TagDTO(
         id=tag.id,
         name=tag.name,
         color=tag.color,
+        icon=tag.icon,
         description=tag.description,
         created_at=tag.created_at,
         file_count=len(tag.files),

@@ -437,12 +437,14 @@ pub fn run() {
 
             // 通过 WebviewWindowBuilder 创建主窗口并显式指定 WebView 数据目录
             // 这是让 WebView2 使用便携路径而非系统 AppData 的唯一可靠方式
+            // disable_drag_drop_handler(): 禁用 Tauri 原生拖放处理器，以允许 HTML5 drag-and-drop 在 Windows WebView2 上正常工作
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("TagHive")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(1000.0, 700.0)
                 .center()
                 .resizable(true)
+                .disable_drag_drop_handler()
                 .data_directory(webview_data_dir)
                 .build()
                 .expect("Failed to create main window");

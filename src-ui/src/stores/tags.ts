@@ -90,9 +90,9 @@ export const useTagStore = defineStore('tags', () => {
     await loadTags(lastLoadedRoot.value)
   }
 
-  async function createTag(name: string, color?: string, description?: string, workspace?: string) {
+  async function createTag(name: string, color?: string, description?: string, workspace?: string, icon?: string) {
     try {
-      const tag = await tagApi.create({ name, color, description, workspace })
+      const tag = await tagApi.create({ name, color, description, workspace, icon })
       tags.value.push(tag)
       syncTagOrder(workspace)
       return tag

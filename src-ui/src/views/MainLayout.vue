@@ -1,23 +1,44 @@
 <template>
-  <div class="main-layout">
+  <div class="main-layout" @dragover="handleLayoutDragOver">
     <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ collapsed: appStore.sidebarCollapsed }">
-      <div class="sidebar-header">
+      <div class="sidebar-header" :class="{ collapsed: appStore.sidebarCollapsed }">
         <h1 class="logo">
-          <el-icon><CollectionTag /></el-icon>
-          <span v-if="!appStore.sidebarCollapsed">TagHive</span>
+          <el-icon class="logo-icon"><CollectionTag /></el-icon>
+          <span class="logo-text">TagHive</span>
         </h1>
       </div>
-      
+
       <div class="sidebar-content">
         <TagPanel />
+      </div>
+
+      <!-- 折叠状态下的标签图标列表 -->
+      <div class="sidebar-collapsed-tags">
+        <el-tooltip
+          v-for="tag in tagStore.orderedTags"
+          :key="tag.id"
+          :content="tag.name"
+          placement="right"
+          :show-after="200"
+        >
+          <div
+            class="collapsed-tag-item"
+            :class="{ selected: tagStore.selectedTagIds.has(tag.id) }"
+            :style="{ borderColor: tag.color, backgroundColor: tag.color + '25' }"
+            @click="handleCollapsedTagClick(tag.id)"
+          >
+            <span v-if="tag.icon" class="collapsed-tag-emoji">{{ tag.icon }}</span>
+            <span v-else class="collapsed-tag-dot" :style="{ backgroundColor: tag.color }"></span>
+          </div>
+        </el-tooltip>
       </div>
     </aside>
 
     <!-- 主内容区 -->
     <main class="main-content">
       <!-- 顶部工具栏 -->
-      <header class="toolbar">
+      <header ref="toolbarRef" class="toolbar">
         <div class="toolbar-left">
           <el-button
             v-if="!isMobile"
@@ -27,7 +48,7 @@
           />
           <SearchBar />
         </div>
-        
+
         <div class="toolbar-right">
           <!-- 重新扫描按钮 -->
           <el-button
@@ -38,14 +59,14 @@
             :disabled="!appStore.currentWorkspace"
             :title="'重新扫描工作区'"
           />
-          
+
           <!-- 排序下拉菜单 -->
           <el-dropdown @command="handleSortCommand" trigger="click">
             <el-button :title="'排序'">
               <el-icon>
                 <component :is="getSortIcon()" />
               </el-icon>
-              <span class="sort-label">{{ getSortLabel() }}</span>
+              <span v-if="toolbarWide" class="sort-label">{{ getSortLabel() }}</span>
               <el-icon class="el-icon--right"><arrow-down /></el-icon>
             </el-button>
             <template #dropdown>
@@ -131,21 +152,44 @@
               <span class="size-slider-value">{{ fileStore.gridItemSize }}px</span>
             </div>
           </el-popover>
-          
-          <el-button
-            :icon="appStore.detailPanelVisible ? ArrowRight : ArrowLeft"
-            circle
-            @click="appStore.toggleDetailPanel()"
-            :title="appStore.detailPanelVisible ? '隐藏详情' : '显示详情'"
-          />
-          
-          <el-button 
-            :icon="appStore.isDark ? Sunny : Moon" 
-            circle 
-            @click="appStore.toggleTheme()"
-            :title="appStore.isDark ? '切换到浅色模式' : '切换到深色模式'" 
-          />
-          <el-button :icon="Setting" circle @click="$router.push('/settings')" :title="'设置'" />
+
+          <!-- 窄屏时折叠到 more 菜单的按钮 -->
+          <template v-if="toolbarWide">
+            <el-button
+              :icon="appStore.detailPanelVisible ? ArrowRight : ArrowLeft"
+              circle
+              @click="appStore.toggleDetailPanel()"
+              :title="appStore.detailPanelVisible ? '隐藏详情' : '显示详情'"
+            />
+            <el-button
+              :icon="appStore.isDark ? Sunny : Moon"
+              circle
+              @click="appStore.toggleTheme()"
+              :title="appStore.isDark ? '切换到浅色模式' : '切换到深色模式'"
+            />
+            <el-button :icon="Setting" circle @click="$router.push('/settings')" :title="'设置'" />
+          </template>
+          <template v-else>
+            <el-dropdown trigger="click" placement="bottom-end">
+              <el-button :icon="MoreFilled" circle :title="'更多'" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="appStore.toggleDetailPanel()">
+                    <el-icon><component :is="appStore.detailPanelVisible ? ArrowRight : ArrowLeft" /></el-icon>
+                    {{ appStore.detailPanelVisible ? '隐藏详情' : '显示详情' }}
+                  </el-dropdown-item>
+                  <el-dropdown-item @click="appStore.toggleTheme()">
+                    <el-icon><component :is="appStore.isDark ? Sunny : Moon" /></el-icon>
+                    {{ appStore.isDark ? '浅色模式' : '深色模式' }}
+                  </el-dropdown-item>
+                  <el-dropdown-item @click="$router.push('/settings')">
+                    <el-icon><Setting /></el-icon>
+                    设置
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
         </div>
       </header>
 
@@ -161,8 +205,8 @@
           <div v-if="fileStore.isScanning" class="scan-progress-container">
             <el-icon class="loading-icon"><Loading /></el-icon>
             <span class="scan-text">扫描中</span>
-            <el-progress 
-              :percentage="fileStore.scanProgress" 
+            <el-progress
+              :percentage="fileStore.scanProgress"
               :show-text="false"
               :stroke-width="4"
               class="scan-progress-bar"
@@ -187,9 +231,12 @@
       </footer>
     </main>
 
-    <!-- 详情面板 -->
-    <DetailPanel v-if="appStore.detailPanelVisible && !isMobile" />
-    
+    <!-- 详情面板（始终渲染，通过 CSS 动画控制展开/收起） -->
+    <DetailPanel
+      v-if="!isMobile"
+      :class="{ visible: appStore.detailPanelVisible }"
+    />
+
     <!-- 批量操作面板 -->
     <BatchOperations />
   </div>
@@ -215,24 +262,43 @@ import {
   Refresh,
   Folder,
   ScaleToOriginal,
+  MoreFilled,
 } from '@element-plus/icons-vue'
 
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
+import { useTagStore } from '../stores/tags'
 import TagPanel from './TagPanel.vue'
 import SearchBar from '../components/SearchBar.vue'
 import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
+import { isTagDragInProgress } from '../utils/drag'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
+const tagStore = useTagStore()
+
+// 全局 dragover 处理：标签拖拽经过中间层时防止显示禁止图标
+function handleLayoutDragOver(event: DragEvent) {
+  if (isTagDragInProgress()) {
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+  }
+}
 
 const sizeSliderVisible = ref(false)
+const toolbarRef = ref<HTMLElement | null>(null)
+const toolbarWidth = ref(800)
+
+// 工具栏宽度 >= 720px 时显示完整按钮，否则折叠到 more 菜单
+const toolbarWide = computed(() => toolbarWidth.value >= 720)
 
 // 检测是否为移动设备
 const isMobile = ref(false)
@@ -242,13 +308,25 @@ const checkIsMobile = () => {
   isMobile.value = window.innerWidth < 768
 }
 
+let toolbarObserver: ResizeObserver | null = null
+
 onMounted(() => {
   checkIsMobile()
   window.addEventListener('resize', checkIsMobile)
+
+  // 监听工具栏宽度
+  if (toolbarRef.value) {
+    toolbarObserver = new ResizeObserver((entries) => {
+      toolbarWidth.value = entries[0].contentRect.width
+    })
+    toolbarObserver.observe(toolbarRef.value)
+    toolbarWidth.value = toolbarRef.value.clientWidth
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkIsMobile)
+  toolbarObserver?.disconnect()
 })
 
 // 排序选项映射
@@ -323,9 +401,6 @@ let scanCompletedShown = false
 let scanErrorShown = false
 
 onMounted(() => {
-  checkIsMobile()
-  window.addEventListener('resize', checkIsMobile)
-  
   // 订阅扫描事件
   wsClient.connect()
   
@@ -367,7 +442,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', checkIsMobile)
+  // WebSocket cleanup handled by wsClient itself
 })
 
 // 截断文件名显示
@@ -386,6 +461,28 @@ const toggleBrowseMode = () => {
     fileStore.setBrowseMode('folder')
   }
 }
+
+// 折叠状态下点击标签图标：切换选中并触发搜索
+function handleCollapsedTagClick(tagId: number) {
+  const multi = false
+  if (tagStore.selectedTagIds.has(tagId) && tagStore.selectedTagIds.size === 1) {
+    tagStore.clearSelection()
+    if (appStore.currentWorkspace) {
+      fileStore.search({ root: appStore.currentWorkspace })
+    } else {
+      fileStore.search({})
+    }
+    return
+  }
+  tagStore.selectTag(tagId, multi)
+  if (tagStore.selectedTagIds.size > 0) {
+    fileStore.search({
+      root: appStore.currentWorkspace || undefined,
+      tags: Array.from(tagStore.selectedTagIds),
+      match_all_tags: false,
+    })
+  }
+}
 </script>
 
 <style scoped>
@@ -396,6 +493,7 @@ const toggleBrowseMode = () => {
   background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 50%, var(--color-bg-tertiary) 100%);
 }
 
+/* ===== 侧边栏 ===== */
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
@@ -407,11 +505,130 @@ const toggleBrowseMode = () => {
   -webkit-backdrop-filter: var(--glass-blur);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: var(--glass-shadow);
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar.collapsed {
+  width: 56px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  height: var(--header-height);
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar-header.collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.logo-icon {
+  font-size: 26px;
+  color: var(--color-accent);
+  filter: drop-shadow(0 2px 4px rgba(99, 102, 241, 0.3));
+  flex-shrink: 0;
+}
+
+.logo-text {
+  opacity: 1;
+  transition: opacity 0.2s ease;
+  overflow: hidden;
+}
+
+.sidebar.collapsed .logo-text {
+  opacity: 0;
+  width: 0;
+  pointer-events: none;
 }
 
 .sidebar-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* 折叠时内容淡出 */
+  transition: opacity 0.2s ease;
+}
+
+.sidebar.collapsed .sidebar-content {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 折叠标签图标列表 */
+.sidebar-collapsed-tags {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.sidebar.collapsed .sidebar-collapsed-tags {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.collapsed-tag-item {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1.5px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.collapsed-tag-item:hover {
+  opacity: 0.8;
+  transform: scale(1.08);
+}
+
+.collapsed-tag-item.selected {
+  border-width: 2.5px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.collapsed-tag-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.collapsed-tag-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
 }
 
 /* 移动设备适配 */
@@ -419,69 +636,39 @@ const toggleBrowseMode = () => {
   .sidebar {
     flex-direction: row;
     height: 60px;
+    width: 100% !important;
   }
-  
+
   .sidebar-content {
     flex: 1;
     overflow-x: auto;
     overflow-y: hidden;
   }
-  
-  .sidebar.collapsed {
-    width: 100% !important;
-  }
 }
 
-.sidebar.collapsed {
-  width: 60px;
-}
-
-.sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--glass-border);
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text-primary);
-  margin: 0;
-  letter-spacing: -0.5px;
-}
-
-.logo .el-icon {
-  font-size: 28px;
-  color: var(--color-accent);
-  filter: drop-shadow(0 2px 4px rgba(99, 102, 241, 0.3));
-}
-
+/* ===== 主内容区 ===== */
 .main-content {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   background: transparent;
-  /* 确保主内容区有足够宽度，不被右侧面板过度压缩 */
-  min-width: 600px;
 }
 
+/* ===== 工具栏 ===== */
 .toolbar {
   height: var(--header-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--glass-border);
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  min-width: 0;
   flex-shrink: 0;
   overflow: hidden;
-  gap: 12px;
+  gap: 8px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -505,6 +692,40 @@ const toggleBrowseMode = () => {
 .toolbar :deep(.el-button--primary:hover) {
   box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
   transform: translateY(-2px);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.toolbar-left {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-right {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* 排序按钮样式 */
+.toolbar-right .el-dropdown {
+  flex-shrink: 0;
+}
+
+.toolbar-right .el-button-group {
+  flex-shrink: 0;
+}
+
+.sort-label {
+  margin-left: 4px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 /* 文件夹浏览模式按钮样式 */
@@ -536,6 +757,7 @@ const toggleBrowseMode = () => {
 /* 视图模式按钮组样式 */
 .view-mode-group {
   display: flex;
+  flex-shrink: 0;
 }
 
 .view-mode-group :deep(.el-button) {
@@ -547,19 +769,16 @@ const toggleBrowseMode = () => {
   transition: all 0.2s ease;
 }
 
-/* 第一个按钮左边圆角 */
 .view-mode-group :deep(.el-button:first-child) {
   border-top-left-radius: var(--radius-md) !important;
   border-bottom-left-radius: var(--radius-md) !important;
 }
 
-/* 最后一个按钮右边圆角 */
 .view-mode-group :deep(.el-button:last-child) {
   border-top-right-radius: var(--radius-md) !important;
   border-bottom-right-radius: var(--radius-md) !important;
 }
 
-/* 中间按钮取消相邻边圆角（通过上面的 0 已经实现） */
 .view-mode-group :deep(.el-button:hover) {
   background: var(--color-bg-secondary);
   border-color: var(--color-accent);
@@ -580,118 +799,36 @@ const toggleBrowseMode = () => {
   transform: translateY(-2px);
 }
 
-.toolbar-left,
-.toolbar-right {
+/* 卡片大小滑块 */
+.size-slider-panel {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  padding: 4px 0;
 }
 
-.toolbar-right {
-  flex-wrap: nowrap;
-  flex-shrink: 0;
-  /* 右侧按钮组允许收缩 */
-  min-width: 0;
-}
-
-.toolbar-left {
-  /* 左侧区域可以收缩 */
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-/* 排序按钮样式 */
-.toolbar-right .el-dropdown {
-  flex-shrink: 0;
-}
-
-.toolbar-right .el-button-group {
-  flex-shrink: 0;
-}
-
-.sort-label {
-  margin-left: 4px;
-  font-size: 13px;
+.size-slider-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
-/* 按钮标签样式 */
-.btn-label {
-  margin-left: 4px;
-  font-size: 13px;
+.size-slider-value {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: right;
 }
 
-/* 响应式断点：中等屏幕 - 隐藏排序文字 */
-@media (max-width: 1100px) {
-  .sort-label {
-    display: none;
-  }
-}
-
-/* 响应式断点：较小屏幕 - 进一步压缩 */
-@media (max-width: 900px) {
-  .toolbar {
-    padding: 0 12px;
-    gap: 6px;
-  }
-  
-  .toolbar-left,
-  .toolbar-right {
-    gap: 6px;
-  }
-}
-
-/* 响应式断点：小屏幕 - 最小间距 */
-@media (max-width: 768px) {
-  .toolbar {
-    padding: 0 8px;
-    gap: 4px;
-  }
-  
-  .toolbar-left,
-  .toolbar-right {
-    gap: 4px;
-  }
-  
-  /* 隐藏搜索栏的占位空间 */
-  .toolbar-left :deep(.search-bar) {
-    max-width: 200px;
-  }
-}
-
-/* 响应式断点：超小屏幕 - 隐藏部分按钮文字 */
-@media (max-width: 640px) {
-  .toolbar-left :deep(.search-bar) {
-    max-width: 150px;
-  }
-}
-
-/* 响应式断点：极窄屏幕 - 只保留图标 */
-@media (max-width: 560px) {
-  .toolbar {
-    padding: 0 6px;
-    gap: 2px;
-  }
-  
-  .toolbar-left,
-  .toolbar-right {
-    gap: 2px;
-  }
-  
-  .toolbar-left :deep(.search-bar) {
-    max-width: 120px;
-  }
-}
-
+/* ===== 内容区 ===== */
 .content-area {
   flex: 1;
   overflow: hidden;
   position: relative;
 }
 
-/* 底部状态栏 */
+/* ===== 底部状态栏 ===== */
 .status-bar {
   height: 28px;
   display: flex;
@@ -723,15 +860,10 @@ const toggleBrowseMode = () => {
 }
 
 @keyframes rotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-/* 扫描进度样式 */
 .scan-progress-container {
   display: flex;
   align-items: center;
@@ -767,17 +899,16 @@ const toggleBrowseMode = () => {
   opacity: 0.8;
 }
 
-/* 响应式：小屏幕时调整状态栏 */
 @media (max-width: 768px) {
   .status-bar {
     padding: 0 8px;
     font-size: 11px;
   }
-  
+
   .scan-progress-bar {
     width: 60px;
   }
-  
+
   .scan-file {
     max-width: 100px;
   }
@@ -787,27 +918,5 @@ const toggleBrowseMode = () => {
   .scan-file {
     display: none;
   }
-}
-
-/* 卡片大小滑块 */
-.size-slider-panel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.size-slider-label {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-
-.size-slider-value {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  min-width: 36px;
-  text-align: right;
 }
 </style>

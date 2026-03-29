@@ -404,6 +404,7 @@ class Repo:
         tag = Tag(
             name=spec.name,
             color=spec.color,
+            icon=spec.icon,
             description=spec.description,
             workspace=Path(workspace).as_posix() if workspace else None
         )

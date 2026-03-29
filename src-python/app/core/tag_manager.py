@@ -7,4 +7,5 @@ from dataclasses import dataclass
 class TagSpec:
     name: str
     color: str | None = None
+    icon: str | None = None
     description: str | None = None

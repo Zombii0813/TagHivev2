@@ -46,7 +46,11 @@
                 v-for="file in row.files"
                 :key="file.id"
                 class="grid-cell"
+                :class="{ 'file-drop-active': activeDropFileId === file.id }"
                 :style="gridCellStyle"
+                @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
+                @dragleave="handleFileDragLeave(file.id)"
+                @drop.prevent.stop="handleFileDrop(file, $event)"
               >
                 <FileCard
                   :file="file"
@@ -69,16 +73,24 @@
             key-field="id"
             v-slot="{ item }"
           >
-            <FileListItem
-              ref="fileListItemRefs"
-              :file="item"
-              :selected="fileStore.selectedIds.has(item.id)"
-              @click="handleFileClick(item.id, $event)"
-              @dblclick="handleFileDblClick(item)"
-              @contextmenu.prevent="handleFileContextMenu(item, $event)"
-            />
+            <div
+              class="list-drop-target"
+              :class="{ 'file-drop-active': activeDropFileId === item.id }"
+              @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
+              @dragleave="handleFileDragLeave(item.id)"
+              @drop.prevent.stop="handleFileDrop(item, $event)"
+            >
+              <FileListItem
+                ref="fileListItemRefs"
+                :file="item"
+                :selected="fileStore.selectedIds.has(item.id)"
+                @click="handleFileClick(item.id, $event)"
+                @dblclick="handleFileDblClick(item)"
+                @contextmenu.prevent="handleFileContextMenu(item, $event)"
+              />
+            </div>
           </RecycleScroller>
-          
+
           <!-- 加载更多提示 -->
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
             <el-icon class="loading-icon"><Loading /></el-icon>
@@ -107,9 +119,9 @@
               class="grid-cell"
               :class="{ 'file-drop-active': activeDropFileId === file.id }"
               :style="gridCellStyle"
-              @dragover.prevent="handleFileDragOver(file.id, $event)"
+              @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
               @dragleave="handleFileDragLeave(file.id)"
-              @drop.prevent="handleFileDrop(file, $event)"
+              @drop.prevent.stop="handleFileDrop(file, $event)"
             >
               <FileCard
                 :file="file"
@@ -134,9 +146,9 @@
           <div
             class="list-drop-target"
             :class="{ 'file-drop-active': activeDropFileId === item.id }"
-            @dragover.prevent="handleFileDragOver(item.id, $event)"
+            @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
             @dragleave="handleFileDragLeave(item.id)"
-            @drop.prevent="handleFileDrop(item, $event)"
+            @drop.prevent.stop="handleFileDrop(item, $event)"
           >
             <FileListItem
               ref="fileListItemRefs"
@@ -453,7 +465,6 @@
 import { computed, onMounted, watch, ref, onUnmounted, nextTick } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
@@ -470,7 +481,7 @@ import { wsClient } from '../api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
-import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles } from '../utils/drag'
+import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState } from '../utils/drag'
 
 // 滚动加载配置
 const SCROLL_THRESHOLD = 100 // 距离底部多少像素时触发加载
@@ -485,7 +496,6 @@ const fileListItemRefs = ref<InstanceType<typeof FileListItem>[]>([])
 const containerWidth = ref(0)
 const activeDropFileId = ref<number | null>(null)
 const externalDropActive = ref(false)
-const pendingNativeDropPaths = ref<string[]>([])
 const pendingImportPaths = ref<string[]>([])
 const showImportDialog = ref(false)
 const importTreeLoading = ref(false)
@@ -908,35 +918,6 @@ onMounted(() => {
   if (appStore.currentWorkspace) {
     fileStore.search({ root: appStore.currentWorkspace })
   }
-
-  void getCurrentWindow().onDragDropEvent(async (event) => {
-    const payload = event.payload
-
-    if (payload.type === 'enter') {
-      pendingNativeDropPaths.value = normalizeDroppedPaths(payload.paths)
-      externalDropActive.value = true
-      return
-    }
-
-    if (payload.type === 'over') {
-      externalDropActive.value = true
-      return
-    }
-
-    if (payload.type === 'leave') {
-      pendingNativeDropPaths.value = []
-      externalDropActive.value = false
-      return
-    }
-
-    pendingNativeDropPaths.value = normalizeDroppedPaths(payload.paths)
-    externalDropActive.value = false
-    await promptImportTarget(pendingNativeDropPaths.value)
-  }).then((unlisten) => {
-    unlistenNativeDragDrop = unlisten
-  }).catch((error) => {
-    console.warn('Failed to listen native drag-drop event:', error)
-  })
 })
 
 onUnmounted(() => {
@@ -1271,8 +1252,7 @@ function clearDropIndicators() {
 }
 
 function handleFileDragOver(fileId: number, event: DragEvent) {
-  const draggedTagId = getDraggedTagId(event)
-  if (draggedTagId === null) {
+  if (!isTagDragInProgress() && !hasTagDrag(event)) {
     return
   }
 
@@ -1311,11 +1291,16 @@ async function handleFileDrop(file: FileSummary, event: DragEvent) {
     ElMessage.error('拖拽标签到文件失败')
   } finally {
     activeDropFileId.value = null
+    clearTagDragState()
   }
 }
 
 function handleExternalDragEnter(event: DragEvent) {
-  if (getDraggedTagId(event) !== null) {
+  if (isTagDragInProgress() || hasTagDrag(event)) {
+    // 标签拖拽进入：设置允许拖放，避免禁止图标
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
     return
   }
 
@@ -1325,7 +1310,11 @@ function handleExternalDragEnter(event: DragEvent) {
 }
 
 function handleExternalDragOver(event: DragEvent) {
-  if (getDraggedTagId(event) !== null) {
+  if (isTagDragInProgress() || hasTagDrag(event)) {
+    // 标签拖拽经过：设置允许拖放，避免禁止图标
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
     return
   }
 
@@ -1344,16 +1333,12 @@ function handleExternalDragLeave(event: DragEvent) {
 }
 
 async function handleExternalDrop(event: DragEvent) {
-  if (getDraggedTagId(event) !== null) {
+  if (isTagDragInProgress() || hasTagDrag(event)) {
     clearDropIndicators()
     return
   }
 
-  const paths = normalizeDroppedPaths([
-    ...pendingNativeDropPaths.value,
-    ...getDroppedFilePaths(event),
-  ])
-  pendingNativeDropPaths.value = []
+  const paths = normalizeDroppedPaths(getDroppedFilePaths(event))
   externalDropActive.value = false
 
   if (!paths.length) {

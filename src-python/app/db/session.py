@@ -81,6 +81,11 @@ def _ensure_schema() -> None:
             connection.execute(text("ALTER TABLE tags ADD COLUMN workspace TEXT"))
         except Exception:
             pass
+        # 添加 tags.icon 列（如果缺失）- 用于 emoji 图标
+        try:
+            connection.execute(text("ALTER TABLE tags ADD COLUMN icon TEXT"))
+        except Exception:
+            pass
         # 添加 tags 表索引（如果不存在）
         try:
             connection.execute(text("CREATE INDEX idx_tags_workspace ON tags(workspace)"))
