@@ -97,6 +97,11 @@ def _ensure_schema() -> None:
             pass
         # 重建 tags 表以移除 name 的唯一约束（SQLite 不支持直接删除约束）
         _migrate_tags_table(connection)
+        # 再次确保 icon 列存在（migration 可能重建了不含 icon 的表）
+        try:
+            connection.execute(text("ALTER TABLE tags ADD COLUMN icon TEXT"))
+        except Exception:
+            pass
         session.commit()
     except Exception:
         session.rollback()
@@ -124,16 +129,17 @@ def _migrate_tags_table(connection) -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name VARCHAR NOT NULL,
                     color VARCHAR,
+                    icon TEXT,
                     description VARCHAR,
                     workspace TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            
+
             # 2. 复制数据
             connection.execute(text("""
-                INSERT INTO tags_new (id, name, color, description, workspace, created_at)
-                SELECT id, name, color, description, workspace, created_at FROM tags
+                INSERT INTO tags_new (id, name, color, icon, description, workspace, created_at)
+                SELECT id, name, color, icon, description, workspace, created_at FROM tags
             """))
             
             # 3. 删除旧表

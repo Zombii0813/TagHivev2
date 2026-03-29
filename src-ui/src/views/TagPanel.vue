@@ -76,43 +76,32 @@
     <el-dialog
       v-model="showCreateDialog"
       title="新建标签"
-      width="400px"
+      width="420px"
       append-to-body
       :modal-class="'tag-dialog-modal'"
+      @open="emojiPickerVisible = false; removeEmojiPickerCloseHandler()"
     >
+      <!-- 图标选择器（顶部居中） -->
+      <div class="dialog-icon-section">
+        <div
+          ref="createIconBtnRef"
+          class="dialog-icon-btn"
+          :style="newTag.icon ? { borderColor: newTag.color, background: newTag.color + '18' } : { borderColor: newTag.color }"
+          @click="toggleEmojiPicker('create')"
+        >
+          <span v-if="newTag.icon" class="dialog-icon-emoji">{{ newTag.icon }}</span>
+          <span v-else class="dialog-icon-dot" :style="{ backgroundColor: newTag.color }"></span>
+          <span class="dialog-icon-hint">点击选择图标</span>
+        </div>
+        <span v-if="newTag.icon" class="dialog-icon-clear" @click.stop="newTag.icon = ''">移除图标</span>
+      </div>
+
       <el-form :model="newTag" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="newTag.name" placeholder="输入标签名称" />
         </el-form-item>
         <el-form-item label="颜色">
           <el-color-picker v-model="newTag.color" />
-        </el-form-item>
-        <el-form-item label="图标">
-          <div class="icon-picker-row">
-            <div
-              class="icon-preview"
-              :style="newTag.icon ? { borderColor: newTag.color } : {}"
-            >
-              <span v-if="newTag.icon" class="icon-preview-emoji">{{ newTag.icon }}</span>
-              <span v-else class="icon-preview-dot" :style="{ backgroundColor: newTag.color }"></span>
-            </div>
-            <el-input
-              v-model="newTag.icon"
-              placeholder="输入或粘贴 Emoji，如 🎨"
-              maxlength="8"
-              class="icon-input"
-              clearable
-            />
-          </div>
-          <div class="emoji-presets">
-            <span
-              v-for="e in emojiPresets"
-              :key="e"
-              class="emoji-preset-item"
-              :class="{ active: newTag.icon === e }"
-              @click="newTag.icon = newTag.icon === e ? '' : e"
-            >{{ e }}</span>
-          </div>
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -155,43 +144,32 @@
     <el-dialog
       v-model="showEditDialog"
       title="编辑标签"
-      width="400px"
+      width="420px"
       append-to-body
       :modal-class="'tag-dialog-modal'"
+      @open="emojiPickerVisible = false; removeEmojiPickerCloseHandler()"
     >
+      <!-- 图标选择器（顶部居中） -->
+      <div class="dialog-icon-section">
+        <div
+          ref="editIconBtnRef"
+          class="dialog-icon-btn"
+          :style="editingTag.icon ? { borderColor: editingTag.color, background: editingTag.color + '18' } : { borderColor: editingTag.color }"
+          @click="toggleEmojiPicker('edit')"
+        >
+          <span v-if="editingTag.icon" class="dialog-icon-emoji">{{ editingTag.icon }}</span>
+          <span v-else class="dialog-icon-dot" :style="{ backgroundColor: editingTag.color }"></span>
+          <span class="dialog-icon-hint">点击选择图标</span>
+        </div>
+        <span v-if="editingTag.icon" class="dialog-icon-clear" @click.stop="editingTag.icon = ''">移除图标</span>
+      </div>
+
       <el-form :model="editingTag" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="editingTag.name" placeholder="输入标签名称" />
         </el-form-item>
         <el-form-item label="颜色">
           <el-color-picker v-model="editingTag.color" />
-        </el-form-item>
-        <el-form-item label="图标">
-          <div class="icon-picker-row">
-            <div
-              class="icon-preview"
-              :style="editingTag.icon ? { borderColor: editingTag.color } : {}"
-            >
-              <span v-if="editingTag.icon" class="icon-preview-emoji">{{ editingTag.icon }}</span>
-              <span v-else class="icon-preview-dot" :style="{ backgroundColor: editingTag.color }"></span>
-            </div>
-            <el-input
-              v-model="editingTag.icon"
-              placeholder="输入或粘贴 Emoji，如 🎨"
-              maxlength="8"
-              class="icon-input"
-              clearable
-            />
-          </div>
-          <div class="emoji-presets">
-            <span
-              v-for="e in emojiPresets"
-              :key="e"
-              class="emoji-preset-item"
-              :class="{ active: editingTag.icon === e }"
-              @click="editingTag.icon = editingTag.icon === e ? '' : e"
-            >{{ e }}</span>
-          </div>
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -206,11 +184,41 @@
         <el-button type="primary" @click="saveTagEdit">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- Emoji 选择器弹出层 -->
+    <teleport to="body">
+      <div
+        v-if="emojiPickerVisible"
+        class="emoji-picker-popup"
+        :style="emojiPickerStyle"
+        @click.stop
+      >
+          <div class="emoji-picker-tabs">
+            <span
+              v-for="cat in emojiCategories"
+              :key="cat.name"
+              class="emoji-picker-tab"
+              :class="{ active: activeEmojiCategory === cat.name }"
+              :title="cat.label"
+              @click="activeEmojiCategory = cat.name"
+            >{{ cat.icon }}</span>
+          </div>
+          <div class="emoji-picker-grid">
+            <span
+              v-for="e in currentCategoryEmojis"
+              :key="e"
+              class="emoji-picker-item"
+              :class="{ active: currentIcon === e }"
+              @click="selectEmoji(e)"
+            >{{ e }}</span>
+          </div>
+      </div>
+    </teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Plus, Close, Edit, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
@@ -242,12 +250,189 @@ const editingTag = ref<Tag & { description?: string }>({
   file_count: 0,
 })
 
-// 常用 emoji 预设
-const emojiPresets = [
-  '🎨', '📁', '⭐', '🔥', '💡', '🎵', '📷', '🎬',
-  '📝', '🔖', '💼', '🏷️', '🎯', '✅', '❤️', '🌟',
-  '🚀', '💎', '🌈', '🍀', '🐾', '🎮', '📚', '🔑',
+// Emoji 选择器状态
+const emojiPickerVisible = ref(false)
+const emojiPickerTarget = ref<'create' | 'edit'>('create')
+const emojiPickerStyle = ref<Record<string, string>>({})
+const activeEmojiCategory = ref('smileys')
+const createIconBtnRef = ref<HTMLElement | null>(null)
+const editIconBtnRef = ref<HTMLElement | null>(null)
+
+const currentIcon = computed(() =>
+  emojiPickerTarget.value === 'create' ? newTag.value.icon : editingTag.value.icon
+)
+
+// 完整 emoji 数据（按分类）
+const emojiCategories = [
+  { name: 'smileys', label: '笑脸与情感', icon: '😀' },
+  { name: 'people', label: '人物', icon: '👤' },
+  { name: 'animals', label: '动物与自然', icon: '🐶' },
+  { name: 'food', label: '食物与饮料', icon: '🍎' },
+  { name: 'travel', label: '旅行与地点', icon: '✈️' },
+  { name: 'activities', label: '活动', icon: '⚽' },
+  { name: 'objects', label: '物品', icon: '💡' },
+  { name: 'symbols', label: '符号', icon: '❤️' },
+  { name: 'flags', label: '旗帜', icon: '🚩' },
 ]
+
+const emojiData: Record<string, string[]> = {
+  smileys: [
+    '😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','🫠','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️',
+    '😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🫡','🤫','🤔','🫢','🤐','🥱','😤','😠','😡',
+    '🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖','😺','😸','😹','😻','😼','😽','🙀',
+    '😿','😾','🙈','🙉','🙊','😱','😨','😰','😥','😢','😭','😓','😪','🥺','🫤','😔','😟','😞','😒','😕',
+    '🫥','😣','😖','😩','😫','🤯','😤','😶','😑','😬','🙄','😯','😦','😧','😮','😲','🥸','🤥','🤫','😷',
+    '🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','😵‍💫','🤠','🥳','🥸','😎','🤓','🧐',
+  ],
+  people: [
+    '👋','🤚','🖐️','✋','🖖','🫱','🫲','🫳','🫴','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉',
+    '👆','🖕','👇','☝️','🫵','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏','✍️','💅',
+    '🤳','💪','🦾','🦿','🦵','🦶','👂','🦻','👃','🫀','🫁','🧠','🦷','🦴','👀','👁️','👅','👄','🫦','💋',
+    '👶','🧒','👦','👧','🧑','👱','👨','🧔','👩','🧓','👴','👵','🙍','🙎','🙅','🙆','💁','🙋','🧏','🙇',
+    '🤦','🤷','👮','🕵️','💂','🥷','👷','🫅','🤴','👸','👰','🤵','🦸','🦹','🧙','🧝','🧛','🧟','🧞','🧜',
+    '🧚','👼','🤰','🫄','🤱','🧑‍🍼','🎅','🤶','🧑‍🎄','🦊','🐱','🐶','🐺','🦝',
+  ],
+  animals: [
+    '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐽','🐸','🐵','🙈','🙉','🙊',
+    '🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🪱','🐛','🦋','🐌','🐞','🐜','🪲',
+    '🦟','🦗','🪳','🕷️','🦂','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳',
+    '🐋','🦈','🦭','🐊','🐅','🐆','��','🦍','🦧','🦣','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂',
+    '🐄','🫎','🫏','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐕‍🦺','🐈','🐈‍⬛','🪶','🐓','🦃',
+    '🦤','🦚','🦜','🦢','🦩','🕊️','🐇','🦝','🦨','🦡','🦫','🦦','🦥','🐁','🐀','🐿️','🦔','🌵','🎄','🌲',
+    '🌳','🌴','🪵','🌱','🌿','☘️','🍀','🎍','🎋','🍃','🍂','🍁','🍄','🐚','🪸','🌾','💐','🌷','🌹','🥀',
+    '🌺','🌸','🌼','🌻','🌞','🌝','🌛','🌜','🌚','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙','🌟','⭐',
+    '🌠','🌌','☁️','⛅','🌤️','🌈','❄️','☃️','⛄','🌊','💧','🔥','🌪️','🌫️','🌬️',
+  ],
+  food: [
+    '🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🫒',
+    '🥦','🥬','🥒','🌶️','🫑','🥕','🧄','🧅','🥔','🍠','🫚','🥐','🥯','🍞','🥖','🥨','🧀','🥚','🍳','🧈',
+    '🥞','🧇','🥓','🥩','🍗','🍖','🌭','🍔','🍟','🍕','🫓','🥪','🥙','🧆','🌮','🌯','🫔','🥗','🥘','🫕',
+    '🥫','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥮','🍢','🧁','🍰','🎂','🍮',
+    '🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🧃','🥤','🧋','☕','🍵','🫖','🍺','🍻','🥂','🍷','🫗',
+    '🥃','🍸','🍹','🧉','🍾','🧊','🥄','🍴','🍽️','🥢','🫙','🧂',
+  ],
+  travel: [
+    '🌍','🌎','🌏','🌐','🗺️','🧭','🏔️','⛰️','🌋','🗻','🏕️','🏖️','🏜️','🏝️','🏞️','🏟️','🏛️','🏗️','🧱','🏘️',
+    '🏚️','🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽','⛪',
+    '🕌','🛕','🕍','⛩️','🕋','⛲','⛺','🏕️','🌁','🌃','🏙️','🌄','🌅','🌆','🌇','🌉','♨️','🎠','🎡','🎢',
+    '💈','🎪','🚂','🚃','🚄','🚅','🚆','🚇','🚈','🚉','🚊','🚝','🚞','🚋','🚌','🚍','🚎','🚐','🚑','🚒',
+    '🚓','🚔','🚕','🚖','🚗','🚘','🚙','🛻','🚚','🚛','🚜','🏎️','🏍️','🛵','🛺','🚲','🛴','🛹','🛼','🚏',
+    '🛣️','🛤️','⛽','🚧','⚓','🛟','⛵','🚤','🛥️','🛳️','⛴️','🚢','✈️','🛩️','🛫','🛬','🪂','💺','🚁','🚟',
+    '🚠','🚡','🛰️','🚀','🛸','🪐','🌠','🌌','🌙','⭐','🌟','💫','✨','⚡','🌈','☀️','🌤️','⛅','🌥️','☁️',
+  ],
+  activities: [
+    '⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🥏','🎱','🏓','🏸','🏒','🥍','🏑','🏏','🪃','🥅','⛳','🪁',
+    '🛝','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸️','🥌','🎿','⛷️','🏂','🪂','🏋️','🤸','⛹️','🤺',
+    '🤾','🏌️','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚵','🚴','🏆','🥇','🥈','🥉','🏅','🎖️','🏵️','🎗️','🎫',
+    '🎟️','🎪','🤹','🎭','🩰','🎨','🎬','🎤','🎧','🎼','🎵','🎶','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🪗',
+    '🎹','🪈','🎲','♟️','🎯','🎳','🎮','🕹️','🎰','🧩','🧸','🪆','♠️','♥️','♦️','♣️','🃏','🀄','🎴',
+  ],
+  objects: [
+    '⌚','📱','📲','💻','⌨️','🖥️','🖨️','🖱️','🖲️','💽','💾','💿','📀','📷','📸','📹','🎥','📽️','🎞️','📞',
+    '☎️','📟','📠','📺','📻','🎙️','🎚️','🎛️','🧭','⏱️','⏲️','⏰','🕰️','⌛','⏳','📡','🔋','🪫','🔌','💡',
+    '🔦','🕯️','🪔','🧯','🛢️','💸','💵','💴','💶','💷','🪙','💰','💳','💎','⚖️','🦯','🔧','🪛','🔨','⚒️',
+    '🛠️','⛏️','🪚','🔩','🪤','🧱','⛓️','🧲','🔫','💣','🧨','🪓','🔪','🗡️','⚔️','🛡️','🪬','🔬','🔭','📡',
+    '💉','🩸','💊','🩹','🩼','🩺','🩻','🚪','🛗','🪞','🪟','🛏️','🛋️','🪑','🚽','🪠','🚿','🛁','🪤','🧴',
+    '🧷','🧹','🧺','🧻','🪣','🧼','🫧','🪥','🧽','🧯','🛒','🚬','⚰️','🪦','⚱️','🧿','🪬','🗺️','🧭','💈',
+    '⚗️','🔭','🔬','🪬','🧲','🪝','🧲','💡','🔦','📦','📫','📪','📬','📭','📮','🗳️','✏️','✒️','🖋️','🖊️',
+    '📝','📁','📂','🗂️','📅','📆','🗒️','🗓️','📇','📈','📉','📊','📋','📌','📍','🗺️','📎','🖇️','📏','📐',
+    '✂️','🗃️','🗄️','🗑️','🔒','🔓','🔏','🔐','🔑','🗝️','🔨','🪓','⛏️','🔧','🪛','🔩','⚙️','🗜️','🔗','⛓️',
+    '🧰','🪤','🪜','🧱','🔮','🧿','🪬','🧸','📿','💎','🔮','📚','📖','📰','🗞️','📓','📔','📒','📕','📗',
+    '📘','📙','📜','📄','📃','📑','🗒️','📊','📈','📉',
+  ],
+  symbols: [
+    '❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','❤️‍🩹','❣️','💕','💞','💓','💗','💖','💘','💝',
+    '💟','☮️','✝️','☪️','🕉️','✡️','🔯','🪯','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐',
+    '♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️',
+    '🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🔰',
+    '✅','☑️','✔️','❎','🔱','⚜️','🔰','♻️','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾',
+    '♿','🅿️','🛗','🈳','🈹','🚰','🚹','🚺','🚻','🚼','🚽','⚠️','🔞','📵','🚯','🚱','🚳','📵','🔕','🔇',
+    '🔈','🔉','🔊','📢','📣','🔔','🔕','🎵','🎶','⁉️','🔅','🔆','📶','🛜','📳','📴','♾️','✖️','➕','➖','➗',
+    '🟰','♾️','‼️','⁉️','❓','❔','❗','❕','〰️','💱','💲','⚕️','♻️','⚜️','🔱','📛','🔰','⭕','✅','☑️','✔️',
+    '🔲','🔳','▪️','▫️','◾','◽','◼️','◻️','⬛','⬜','🟥','🟧','🟨','🟩','🟦','🟪','🟫','🔶','🔷','🔸',
+    '🔹','🔺','🔻','💠','🔘','🔲','🔳','🏁','🚩','🎌','🏴','🏳️',
+  ],
+  flags: [
+    '🏁','🚩','🎌','🏴','🏳️','🏳️‍🌈','🏳️‍⚧️','🏴‍☠️','🇦🇨','🇦🇩','🇦🇪','🇦🇫','🇦🇬','🇦🇮','🇦🇱','🇦🇲','🇦🇴','🇦🇶',
+    '🇦🇷','🇦🇸','🇦🇹','🇦🇺','🇦🇼','🇦🇽','🇦🇿','🇧🇦','🇧🇧','🇧🇩','🇧🇪','🇧🇫','🇧🇬','🇧🇭','🇧🇮','🇧🇯','🇧🇱','🇧🇲',
+    '🇧🇳','🇧🇴','🇧🇶','🇧🇷','🇧🇸','🇧🇹','🇧🇻','🇧🇼','🇧🇾','🇧🇿','🇨🇦','🇨🇨','🇨🇩','🇨🇫','🇨🇬','🇨🇭','🇨🇮','🇨🇰',
+    '🇨🇱','🇨🇲','🇨🇳','🇨🇴','🇨🇵','🇨🇷','🇨🇺','🇨🇻','🇨🇼','🇨🇽','🇨🇾','🇨🇿','🇩🇪','🇩🇬','🇩🇯','🇩🇰','🇩🇲','🇩🇴',
+    '🇩🇿','🇪🇦','🇪🇨','🇪🇪','🇪🇬','🇪🇭','🇪🇷','🇪🇸','🇪🇹','🇪🇺','🇫🇮','🇫🇯','🇫🇰','🇫🇲','🇫🇴','🇫🇷','🇬🇦','🇬🇧',
+    '🇬🇩','🇬🇪','🇬🇫','🇬🇬','🇬🇭','🇬🇮','🇬🇱','🇬🇲','🇬🇳','🇬🇵','🇬🇶','🇬🇷','🇬🇸','🇬🇹','🇬🇺','🇬🇼','🇬🇾','🇭🇰',
+    '🇭🇲','🇭🇳','🇭🇷','🇭🇹','🇭🇺','🇮🇨','🇮🇩','🇮🇪','🇮🇱','🇮🇲','🇮🇳','🇮🇴','🇮🇶','🇮🇷','🇮🇸','🇮🇹','🇯🇪','🇯🇲',
+    '🇯🇴','🇯🇵','🇰🇪','🇰🇬','🇰🇭','🇰🇮','🇰🇲','🇰🇳','🇰🇵','🇰🇷','🇰🇼','🇰🇾','🇰🇿','🇱🇦','🇱🇧','🇱🇨','🇱🇮','🇱🇰',
+    '🇱🇷','🇱🇸','🇱🇹','🇱🇺','🇱🇻','🇱🇾','🇲🇦','🇲🇨','🇲🇩','🇲🇪','🇲🇫','🇲🇬','🇲🇭','🇲🇰','🇲🇱','🇲🇲','🇲🇳','🇲🇴',
+    '🇲🇵','🇲🇶','🇲🇷','🇲🇸','🇲🇹','🇲🇺','🇲🇻','🇲🇼','🇲🇽','🇲🇾','🇲🇿','🇳🇦','🇳🇨','🇳🇪','🇳🇫','🇳🇬','🇳🇮','🇳🇱',
+    '🇳🇴','🇳🇵','🇳🇷','🇳🇺','🇳🇿','🇴🇲','🇵🇦','🇵🇪','🇵🇫','🇵🇬','🇵🇭','🇵🇰','🇵🇱','🇵🇲','🇵🇳','🇵🇷','🇵🇸','🇵🇹',
+    '🇵🇼','🇵🇾','🇶🇦','🇷🇪','🇷🇴','🇷🇸','🇷🇺','🇷🇼','🇸🇦','🇸🇧','🇸🇨','🇸🇩','🇸🇪','🇸🇬','🇸🇭','🇸🇮','🇸🇯','🇸🇰',
+    '🇸🇱','🇸🇲','🇸🇳','🇸🇴','🇸🇷','🇸🇸','🇸🇹','🇸🇻','🇸🇽','🇸🇾','🇸🇿','🇹🇦','🇹🇨','🇹🇩','🇹🇫','🇹🇬','🇹🇭','🇹🇯',
+    '🇹🇰','🇹🇱','🇹🇲','🇹🇳','🇹🇴','🇹🇷','🇹🇹','🇹🇻','🇹🇼','🇹🇿','🇺🇦','🇺🇬','🇺🇲','🇺🇳','🇺🇸','🇺🇾','🇺🇿','🇻🇦',
+    '🇻🇨','🇻🇪','🇻🇬','🇻🇮','🇻🇳','🇻🇺','🇼🇫','🇼🇸','🇽🇰','🇾🇪','🇾🇹','🇿🇦','🇿🇲','🇿🇼',
+  ],
+}
+
+const currentCategoryEmojis = computed(() => emojiData[activeEmojiCategory.value] || [])
+
+let emojiPickerCloseHandler: ((e: MouseEvent) => void) | null = null
+
+function removeEmojiPickerCloseHandler() {
+  if (emojiPickerCloseHandler) {
+    document.removeEventListener('click', emojiPickerCloseHandler, false)
+    emojiPickerCloseHandler = null
+  }
+}
+
+function toggleEmojiPicker(target: 'create' | 'edit') {
+  if (emojiPickerVisible.value && emojiPickerTarget.value === target) {
+    emojiPickerVisible.value = false
+    removeEmojiPickerCloseHandler()
+    return
+  }
+  emojiPickerTarget.value = target
+  emojiPickerVisible.value = true
+
+  nextTick(() => {
+    const btnRef = target === 'create' ? createIconBtnRef.value : editIconBtnRef.value
+    if (!btnRef) return
+    const rect = btnRef.getBoundingClientRect()
+    const pickerWidth = 320
+    const pickerHeight = 280
+    let left = rect.left + rect.width / 2 - pickerWidth / 2
+    let top = rect.bottom + 8
+
+    if (left < 8) left = 8
+    if (left + pickerWidth > window.innerWidth - 8) left = window.innerWidth - pickerWidth - 8
+    if (top + pickerHeight > window.innerHeight - 8) top = rect.top - pickerHeight - 8
+
+    emojiPickerStyle.value = {
+      position: 'fixed',
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${pickerWidth}px`,
+      zIndex: '9999',
+    }
+
+    // 注册 document click 以点击外部关闭（setTimeout 跳过当前触发的 click 事件）
+    removeEmojiPickerCloseHandler()
+    emojiPickerCloseHandler = () => {
+      emojiPickerVisible.value = false
+      removeEmojiPickerCloseHandler()
+    }
+    setTimeout(() => {
+      document.addEventListener('click', emojiPickerCloseHandler!, false)
+    }, 0)
+  })
+}
+
+function selectEmoji(emoji: string) {
+  if (emojiPickerTarget.value === 'create') {
+    newTag.value.icon = newTag.value.icon === emoji ? '' : emoji
+  } else {
+    editingTag.value.icon = editingTag.value.icon === emoji ? '' : emoji
+  }
+  emojiPickerVisible.value = false
+  removeEmojiPickerCloseHandler()
+}
 
 const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
@@ -277,6 +462,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('close-context-menus', closeContextMenu)
+  removeEmojiPickerCloseHandler()
 })
 
 // 监听工作目录变化，重新加载标签
@@ -675,72 +861,66 @@ async function confirmDeleteTag() {
   border-radius: 10px;
 }
 
-/* 图标选择器 */
-.icon-picker-row {
+/* 对话框图标区域 */
+.dialog-icon-section {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  gap: 6px;
+  padding: 16px 0 8px;
 }
 
-.icon-preview {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
+.dialog-icon-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  border: 2px dashed var(--color-border);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  background: var(--color-bg-secondary);
-}
-
-.icon-preview-emoji {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.icon-preview-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-
-.icon-input {
-  flex: 1;
-}
-
-.emoji-presets {
-  display: flex;
-  flex-wrap: wrap;
   gap: 4px;
-  margin-top: 8px;
-}
-
-.emoji-preset-item {
-  font-size: 18px;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.15s ease;
+  transition: all 0.2s ease;
+  background: var(--color-bg-secondary);
   user-select: none;
 }
 
-.emoji-preset-item:hover {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border);
+.dialog-icon-btn:hover {
+  border-style: solid;
+  background: var(--color-bg-tertiary);
 }
 
-.emoji-preset-item.active {
-  background: var(--color-accent-light);
-  border-color: var(--color-accent);
+.dialog-icon-emoji {
+  font-size: 36px;
+  line-height: 1;
 }
 
+.dialog-icon-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.dialog-icon-hint {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.dialog-icon-clear {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  text-decoration: underline;
+  user-select: none;
+}
+
+.dialog-icon-clear:hover {
+  color: var(--color-danger);
+}
+
+/* Emoji 选择器弹出层 */
 .context-menu {
   padding: 4px 0;
 }
@@ -764,5 +944,82 @@ async function confirmDeleteTag() {
 
 .context-menu-item.delete:hover {
   background-color: var(--color-danger-light);
+}
+</style>
+
+<style>
+/* Emoji picker — teleported to <body>, must not be scoped */
+.emoji-picker-popup {
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.emoji-picker-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.emoji-picker-tab {
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.emoji-picker-tab:hover {
+  background: var(--color-bg-secondary);
+}
+
+.emoji-picker-tab.active {
+  border-bottom-color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.emoji-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 8px;
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+.emoji-picker-item {
+  font-size: 20px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  user-select: none;
+  border: 1px solid transparent;
+}
+
+.emoji-picker-item:hover {
+  background: var(--color-bg-secondary);
+}
+
+.emoji-picker-item.active {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
 }
 </style>

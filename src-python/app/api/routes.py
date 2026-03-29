@@ -605,16 +605,16 @@ async def create_tag(
     repo: Repo = Depends(get_repo),
 ):
     """创建标签
-    
+
     支持按工作目录隔离，不同工作目录可以有相同名称的标签。
     """
     from ..core.tag_manager import TagSpec
-    
+
     # 检查同一工作目录下是否已存在同名标签
     existing = repo.get_tag_by_name_and_workspace(spec.name, spec.workspace)
     if existing:
         raise HTTPException(status_code=409, detail="Tag already exists in this workspace")
-    
+
     tag = repo.create_tag(TagSpec(
         name=spec.name,
         color=spec.color,
