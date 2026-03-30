@@ -1290,7 +1290,7 @@ async function handleFileDrop(file: FileSummary, event: DragEvent) {
     console.error('Failed to drop tag onto file:', error)
     ElMessage.error('拖拽标签到文件失败')
   } finally {
-    activeDropFileId.value = null
+    clearDropIndicators()
     clearTagDragState()
   }
 }
@@ -1416,6 +1416,12 @@ async function handleExternalDrop(event: DragEvent) {
   border-radius: 12px;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent);
   background: color-mix(in srgb, var(--color-accent-light) 32%, transparent);
+  animation: file-drop-pulse 0.6s ease infinite alternate;
+}
+
+@keyframes file-drop-pulse {
+  from { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 50%, transparent); }
+  to   { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 90%, transparent), 0 0 12px color-mix(in srgb, var(--color-accent) 25%, transparent); }
 }
 
 .list-drop-target {

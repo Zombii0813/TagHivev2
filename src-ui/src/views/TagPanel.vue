@@ -573,7 +573,8 @@ function handlePanelDragOver(event: DragEvent) {
 
 function handleTagDragStart(tagId: number, event: DragEvent) {
   draggingTagId.value = tagId
-  setTagDragData(event, tagId)
+  const tag = tagStore.getTagById(tagId)
+  setTagDragData(event, tagId, tag ? { name: tag.name, color: tag.color, icon: tag.icon } : undefined)
 }
 
 function handleTagDragOver(tagId: number, event: DragEvent) {
@@ -823,7 +824,8 @@ async function confirmDeleteTag() {
 }
 
 .tag-item.drag-source {
-  opacity: 0.65;
+  opacity: 0.45;
+  transform: scale(0.96);
 }
 
 .tag-item.drag-over {
