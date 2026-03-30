@@ -2,18 +2,28 @@
   <div class="tag-panel" @dragover="handlePanelDragOver">
     <div class="panel-header">
       <h3>标签</h3>
-      <el-button
-        type="primary"
-        size="small"
-        :icon="Plus"
-        @click="showCreateDialog = true"
-      >
-        新建
-      </el-button>
+      <div class="header-actions">
+        <el-button
+          :type="isManageMode ? 'warning' : 'default'"
+          size="small"
+          @click="toggleManageMode"
+        >
+          {{ isManageMode ? '完成' : '管理' }}
+        </el-button>
+        <el-button
+          v-if="!isManageMode"
+          type="primary"
+          size="small"
+          :icon="Plus"
+          @click="showCreateDialog = true"
+        >
+          新建
+        </el-button>
+      </div>
     </div>
 
     <!-- 过滤状态提示 -->
-    <div class="filter-status" :class="{ active: tagStore.hasSelection }">
+    <div v-if="!isManageMode" class="filter-status" :class="{ active: tagStore.hasSelection }">
       <el-alert
         :title="tagStore.hasSelection ? `已选择 ${tagStore.selectedTagIds.size} 个标签过滤` : '点击标签进行过滤'"
         :type="tagStore.hasSelection ? 'info' : 'info'"
@@ -36,40 +46,41 @@
       </el-alert>
     </div>
 
+    <!-- 管理模式提示 -->
+    <div v-if="isManageMode" class="manage-hint">
+      <span>拖动标签可调整顺序</span>
+    </div>
+
     <div
       ref="tagListRef"
       class="tag-list"
-      :class="{ 'list-drop-active': listDropActive }"
+      :class="{ 'manage-mode': isManageMode }"
       v-loading="tagStore.isLoading"
-      @dragover.prevent="handleTagListDragOver"
-      @dragleave="handleTagListDragLeave"
-      @drop.prevent="handleTagListDrop"
     >
-      <div
-        v-for="tag in tagStore.orderedTags"
-        :key="tag.id"
-        class="tag-item"
-        :class="{
-          selected: tagStore.selectedTagIds.has(tag.id),
-          'drag-source': draggingTagId === tag.id,
-          'drag-over': reorderTargetTagId === tag.id,
-        }"
-        :style="{ backgroundColor: tag.color + '20', borderColor: tag.color }"
-        :data-tag-id="tag.id"
-        draggable="true"
-        @click="handleTagClick(tag.id, $event)"
-        @contextmenu.prevent="handleContextMenu(tag, $event)"
-        @dragstart="handleTagDragStart(tag.id, $event)"
-        @dragend="resetDragState"
-        @dragover.prevent.stop="handleTagDragOver(tag.id, $event)"
-        @dragleave="handleTagDragLeave(tag.id)"
-        @drop.prevent.stop="handleTagDrop(tag, $event)"
-      >
-        <span v-if="tag.icon" class="tag-icon">{{ tag.icon }}</span>
-        <span v-else class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
-        <span class="tag-name">{{ tag.name }}</span>
-        <span class="tag-count">{{ tag.file_count }}</span>
-      </div>
+      <template v-for="(tag, index) in tagStore.orderedTags" :key="tag.id">
+        <div
+          class="tag-item"
+          :class="{
+            selected: !isManageMode && tagStore.selectedTagIds.has(tag.id),
+            'manage-dragging': isManageMode && manageDragState.sourceId === tag.id,
+            'manage-item': isManageMode,
+          }"
+          :style="getTagItemStyle(tag, index)"
+          :data-tag-id="tag.id"
+          :draggable="!isManageMode"
+          @click="!isManageMode && handleTagClick(tag.id, $event)"
+          @contextmenu.prevent="!isManageMode && handleContextMenu(tag, $event)"
+          @dragstart="!isManageMode && handleTagDragStart(tag.id, $event)"
+          @dragend="!isManageMode && clearTagDragState()"
+          @pointerdown="isManageMode && handleManagePointerDown(tag.id, $event)"
+        >
+          <span v-if="isManageMode" class="manage-drag-handle">⠿</span>
+          <span v-if="tag.icon" class="tag-icon">{{ tag.icon }}</span>
+          <span v-else class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
+          <span class="tag-name">{{ tag.name }}</span>
+          <span class="tag-count">{{ tag.file_count }}</span>
+        </div>
+      </template>
     </div>
 
     <!-- 新建标签对话框 -->
@@ -225,7 +236,7 @@ import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
 import type { Tag } from '../types'
-import { getDraggedTagId, setTagDragData, hasTagDrag, clearTagDragState, isTagDragInProgress } from '../utils/drag'
+import { setTagDragData, clearTagDragState, isTagDragInProgress } from '../utils/drag'
 
 const tagStore = useTagStore()
 const fileStore = useFileStore()
@@ -437,8 +448,208 @@ function selectEmoji(emoji: string) {
 const contextMenuVisible = ref(false)
 const contextMenuTrigger = ref<HTMLElement>()
 const selectedTag = ref<Tag | null>(null)
-const draggingTagId = ref<number | null>(null)
 const tagListRef = ref<HTMLElement | null>(null)
+
+// 管理模式
+const isManageMode = ref(false)
+
+// 管理模式下的拖拽状态（pointer events 驱动）
+interface ManageDragState {
+  sourceId: number | null
+  insertIndex: number | null        // 当前插入点索引（在 orderedTags 中）
+  itemMidYs: number[]               // 拖拽开始时各 item 中点 Y 的快照
+  itemHeight: number                // item 高度快照
+  ghostEl: HTMLElement | null       // 跟随鼠标的 clone 元素
+  startY: number                    // 指针起始 Y
+  sourceIndex: number               // 被拖项的原始索引
+}
+const manageDragState = ref<ManageDragState>({
+  sourceId: null,
+  insertIndex: null,
+  itemMidYs: [],
+  itemHeight: 36,
+  ghostEl: null,
+  startY: 0,
+  sourceIndex: -1,
+})
+
+function toggleManageMode() {
+  if (isManageMode.value) {
+    isManageMode.value = false
+    endManageDrag(false)
+  } else {
+    // 退出过滤状态再进入管理模式
+    tagStore.clearSelection()
+    isManageMode.value = true
+  }
+}
+
+// 计算 tag-item 的内联样式（管理模式下加入 transform）
+function getTagItemStyle(tag: Tag, index: number): Record<string, string> {
+  const color = tag.color ?? '#409EFF'
+  const base: Record<string, string> = {
+    backgroundColor: color + '20',
+    borderColor: color,
+  }
+  if (!isManageMode.value) return base
+
+  const ds = manageDragState.value
+  if (ds.sourceId === null || ds.insertIndex === null) return base
+
+  const si = ds.sourceIndex
+  const ii = ds.insertIndex
+  const itemH = ds.itemHeight
+
+  if (index === si) {
+    // 被拖项本身：透明占位
+    return { ...base, opacity: '0', pointerEvents: 'none' }
+  }
+
+  // 其他项根据插入点计算偏移
+  let shift = 0
+  if (si < ii) {
+    // 向下拖：si+1 ~ ii-1 的项向上移
+    if (index > si && index < ii) shift = -(itemH + 4)
+  } else {
+    // 向上拖：ii ~ si-1 的项向下移
+    if (index >= ii && index < si) shift = itemH + 4
+  }
+
+  if (shift !== 0) {
+    return { ...base, transform: `translateY(${shift}px)`, transition: 'transform 0.18s cubic-bezier(0.25,0.46,0.45,0.94)' }
+  }
+  return { ...base, transition: 'transform 0.18s cubic-bezier(0.25,0.46,0.45,0.94)' }
+}
+
+function handleManagePointerDown(tagId: number, event: PointerEvent) {
+  if (!isManageMode.value) return
+  event.preventDefault()
+
+  const tags = tagStore.orderedTags
+  const sourceIndex = tags.findIndex(t => t.id === tagId)
+  if (sourceIndex === -1) return
+
+  // 快照所有 item 的中点 Y（此时 DOM 尚未变化）
+  const items = Array.from(tagListRef.value?.querySelectorAll<HTMLElement>('.tag-item') ?? [])
+  const itemHeight = items.length > 0 ? items[0].getBoundingClientRect().height : 36
+  const midYs = items.map(el => {
+    const r = el.getBoundingClientRect()
+    return r.top + r.height / 2
+  })
+
+  // 创建 ghost clone
+  const srcEl = items[sourceIndex]
+  const ghost = srcEl.cloneNode(true) as HTMLElement
+  const srcRect = srcEl.getBoundingClientRect()
+  ghost.style.cssText = `
+    position: fixed;
+    left: ${srcRect.left}px;
+    top: ${srcRect.top}px;
+    width: ${srcRect.width}px;
+    height: ${srcRect.height}px;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.92;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+    transition: none;
+    transform: scale(1.03);
+  `
+  document.body.appendChild(ghost)
+
+  manageDragState.value = {
+    sourceId: tagId,
+    insertIndex: sourceIndex,
+    itemMidYs: midYs,
+    itemHeight,
+    ghostEl: ghost,
+    startY: event.clientY,
+    sourceIndex,
+  }
+
+  // 捕获指针
+  const target = event.currentTarget as HTMLElement
+  target.setPointerCapture(event.pointerId)
+  target.addEventListener('pointermove', handleManagePointerMove)
+  target.addEventListener('pointerup', handleManagePointerUp)
+  target.addEventListener('pointercancel', handleManagePointerCancel)
+}
+
+function handleManagePointerMove(event: PointerEvent) {
+  const ds = manageDragState.value
+  if (ds.sourceId === null || !ds.ghostEl) return
+  event.preventDefault()
+
+  const deltaY = event.clientY - ds.startY
+
+  // 移动 ghost：以初始 item 顶部位置 + 偏移
+  const origTop = ds.itemMidYs[ds.sourceIndex] - ds.itemHeight / 2
+  ds.ghostEl.style.top = `${origTop + deltaY}px`
+
+  // 用初始 midY 快照计算插入点，跳过 source 自身行
+  const midYs = ds.itemMidYs
+  const cursorY = event.clientY
+  let insertIdx = midYs.length // 默认末尾
+  for (let i = 0; i < midYs.length; i++) {
+    if (i === ds.sourceIndex) continue
+    if (cursorY < midYs[i]) {
+      insertIdx = i
+      break
+    }
+  }
+  ds.insertIndex = insertIdx
+}
+
+function handleManagePointerUp(event: PointerEvent) {
+  endManageDrag(true)
+  cleanupManagePointerListeners(event.currentTarget as HTMLElement, event.pointerId)
+}
+
+function handleManagePointerCancel(event: PointerEvent) {
+  endManageDrag(false)
+  cleanupManagePointerListeners(event.currentTarget as HTMLElement, event.pointerId)
+}
+
+function cleanupManagePointerListeners(target: HTMLElement, pointerId: number) {
+  target.releasePointerCapture(pointerId)
+  target.removeEventListener('pointermove', handleManagePointerMove)
+  target.removeEventListener('pointerup', handleManagePointerUp)
+  target.removeEventListener('pointercancel', handleManagePointerCancel)
+}
+
+function endManageDrag(commit: boolean) {
+  const ds = manageDragState.value
+  if (ds.ghostEl) {
+    ds.ghostEl.remove()
+  }
+  if (commit && ds.sourceId !== null && ds.insertIndex !== null) {
+    const tags = tagStore.orderedTags
+    // 将 insertIndex 转换为目标 tag id
+    let targetId: number | null = null
+    const ii = ds.insertIndex
+    const si = ds.sourceIndex
+    // 有效移动判断
+    if (ii !== si && ii !== si + 1) {
+      // insertIndex 是在原始数组中的位置
+      // 注意：insertIndex 可能等于 sourceIndex（不动）或 sourceIndex+1（相当于不动）
+      if (ii < tags.length) {
+        targetId = tags[ii].id
+      } else {
+        targetId = null // 移到末尾
+      }
+      tagStore.reorderTags(ds.sourceId, targetId)
+    }
+  }
+  manageDragState.value = {
+    sourceId: null,
+    insertIndex: null,
+    itemMidYs: [],
+    itemHeight: 36,
+    ghostEl: null,
+    startY: 0,
+    sourceIndex: -1,
+  }
+}
 
 const contextMenuAnchor = (() => {
   const el = document.createElement('div')
@@ -446,8 +657,6 @@ const contextMenuAnchor = (() => {
   document.body.appendChild(el)
   return el
 })()
-const reorderTargetTagId = ref<number | null>(null)
-const listDropActive = ref(false)
 
 // 加载标签，根据当前工作目录过滤
 function loadTagsForWorkspace() {
@@ -463,6 +672,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('close-context-menus', closeContextMenu)
   removeEmojiPickerCloseHandler()
+  endManageDrag(false)
 })
 
 // 监听工作目录变化，重新加载标签
@@ -554,118 +764,19 @@ async function createTag() {
   }
 }
 
-function resetDragState() {
-  draggingTagId.value = null
-  reorderTargetTagId.value = null
-  listDropActive.value = false
-  clearTagDragState()
-}
-
 // 面板根元素 dragover：标签拖拽时防止在非 tag-list 区域显示禁止图标
 function handlePanelDragOver(event: DragEvent) {
   if (isTagDragInProgress()) {
     event.preventDefault()
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'move'
+      event.dataTransfer.dropEffect = 'copy'
     }
   }
 }
 
 function handleTagDragStart(tagId: number, event: DragEvent) {
-  draggingTagId.value = tagId
   const tag = tagStore.getTagById(tagId)
   setTagDragData(event, tagId, tag ? { name: tag.name, color: tag.color, icon: tag.icon } : undefined)
-}
-
-function handleTagDragOver(tagId: number, event: DragEvent) {
-  if (!isTagDragInProgress() && !hasTagDrag(event)) {
-    return
-  }
-
-  reorderTargetTagId.value = draggingTagId.value === tagId ? null : tagId
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move'
-  }
-}
-
-function handleTagDragLeave(tagId: number) {
-  if (reorderTargetTagId.value === tagId) {
-    reorderTargetTagId.value = null
-  }
-}
-
-function handleTagListDragOver(event: DragEvent) {
-  if (isTagDragInProgress() || hasTagDrag(event)) {
-    listDropActive.value = true
-  }
-}
-
-function handleTagListDragLeave() {
-  listDropActive.value = false
-}
-
-async function handleTagDrop(tag: Tag, event: DragEvent) {
-  const draggedTagId = getDraggedTagId(event)
-
-  if (draggedTagId !== null && draggedTagId !== tag.id) {
-    // 根据鼠标在目标 tag 的上/下半决定插入位置
-    const el = (event.currentTarget as HTMLElement)
-    const rect = el.getBoundingClientRect()
-    const isLowerHalf = event.clientY > rect.top + rect.height / 2
-    const targetId = isLowerHalf ? getNextTagId(tag.id) : tag.id
-    tagStore.reorderTags(draggedTagId, targetId)
-  }
-  resetDragState()
-}
-
-async function handleTagListDrop(event: DragEvent) {
-  const draggedTagId = getDraggedTagId(event)
-
-  if (draggedTagId !== null) {
-    const targetTagId = getTagIdNearY(event.clientY, draggedTagId)
-    tagStore.reorderTags(draggedTagId, targetTagId)
-  }
-
-  resetDragState()
-}
-
-// 根据鼠标 Y 坐标找到最近的目标标签 id
-// 返回 null 表示追加到末尾
-function getTagIdNearY(clientY: number, excludeTagId: number): number | null {
-  if (!tagListRef.value) return null
-
-  const items = Array.from(tagListRef.value.querySelectorAll<HTMLElement>('.tag-item'))
-  if (!items.length) return null
-
-  let nearestId: number | null = null
-  let nearestDist = Infinity
-
-  for (const item of items) {
-    const rect = item.getBoundingClientRect()
-    const itemCenter = rect.top + rect.height / 2
-    const dist = Math.abs(clientY - itemCenter)
-
-    if (dist < nearestDist) {
-      nearestDist = dist
-      // 读取 tag id（通过 data 属性或 key）
-      const idStr = item.dataset.tagId
-      if (idStr) {
-        const id = Number(idStr)
-        if (id !== excludeTagId) {
-          // 鼠标在该 tag 下半部时，插到它后面（targetId = 下一个 tag），否则插到它前面
-          nearestId = clientY > itemCenter ? getNextTagId(id) : id
-        }
-      }
-    }
-  }
-
-  return nearestId
-}
-
-function getNextTagId(tagId: number): number | null {
-  const order = tagStore.orderedTags
-  const idx = order.findIndex(t => t.id === tagId)
-  return idx !== -1 && idx + 1 < order.length ? order[idx + 1].id : null
 }
 
 function closeContextMenu() {
@@ -770,11 +881,26 @@ async function confirmDeleteTag() {
   border-bottom: 1px solid var(--color-border);
 }
 
+.header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .panel-header h3 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-secondary);
+}
+
+.manage-hint {
+  padding: 6px 16px;
+  background: color-mix(in srgb, var(--color-warning, #e6a23c) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #e6a23c) 30%, transparent);
+  font-size: 12px;
+  color: var(--color-warning, #e6a23c);
+  text-align: center;
 }
 
 .filter-status {
@@ -799,10 +925,6 @@ async function confirmDeleteTag() {
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-.tag-list.list-drop-active {
-  background: color-mix(in srgb, var(--color-accent-light) 45%, transparent);
-}
-
 .tag-item {
   display: flex;
   align-items: center;
@@ -815,6 +937,16 @@ async function confirmDeleteTag() {
   transition: all 0.2s ease;
 }
 
+.tag-item.manage-item {
+  cursor: grab;
+  user-select: none;
+}
+
+.tag-item.manage-item:active,
+.tag-item.manage-dragging {
+  cursor: grabbing;
+}
+
 .tag-item:hover {
   opacity: 0.8;
 }
@@ -823,15 +955,13 @@ async function confirmDeleteTag() {
   border-width: 2px;
 }
 
-.tag-item.drag-source {
-  opacity: 0.45;
-  transform: scale(0.96);
-}
-
-.tag-item.drag-over {
-  border-color: var(--color-accent) !important;
-  transform: translateX(4px);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 50%, transparent);
+.manage-drag-handle {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+  cursor: grab;
+  flex-shrink: 0;
+  line-height: 1;
+  letter-spacing: -1px;
 }
 
 .tag-dot {

@@ -60,6 +60,15 @@
                   @dblclick="handleFileDblClick(file)"
                   @contextmenu.prevent="handleFileContextMenu(file, $event)"
                 />
+                <div
+                  v-if="activeDropFileId === file.id && dragTagMeta"
+                  class="tag-drop-badge"
+                  :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+                >
+                  <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+                  <span v-else class="tag-drop-badge-dot"></span>
+                  <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+                </div>
               </div>
             </div>
           </RecycleScroller>
@@ -88,6 +97,15 @@
                 @dblclick="handleFileDblClick(item)"
                 @contextmenu.prevent="handleFileContextMenu(item, $event)"
               />
+              <div
+                v-if="activeDropFileId === item.id && dragTagMeta"
+                class="tag-drop-badge"
+                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+              >
+                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+                <span v-else class="tag-drop-badge-dot"></span>
+                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+              </div>
             </div>
           </RecycleScroller>
 
@@ -131,6 +149,15 @@
                 @dblclick="handleFileDblClick(file)"
                 @contextmenu.prevent="handleFileContextMenu(file, $event)"
               />
+              <div
+                v-if="activeDropFileId === file.id && dragTagMeta"
+                class="tag-drop-badge"
+                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+              >
+                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+                <span v-else class="tag-drop-badge-dot"></span>
+                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+              </div>
             </div>
           </div>
         </RecycleScroller>
@@ -158,6 +185,15 @@
               @dblclick="handleFileDblClick(item)"
               @contextmenu.prevent="handleFileContextMenu(item, $event)"
             />
+            <div
+              v-if="activeDropFileId === item.id && dragTagMeta"
+              class="tag-drop-badge tag-drop-badge--list"
+              :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+            >
+              <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+              <span v-else class="tag-drop-badge-dot"></span>
+              <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+            </div>
           </div>
         </RecycleScroller>
       </div>
@@ -481,7 +517,8 @@ import { wsClient } from '../api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
-import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState } from '../utils/drag'
+import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
+import type { TagDragMeta } from '../utils/drag'
 
 // 滚动加载配置
 const SCROLL_THRESHOLD = 100 // 距离底部多少像素时触发加载
@@ -495,6 +532,7 @@ const scrollerRef = ref<HTMLElement | null>(null)
 const fileListItemRefs = ref<InstanceType<typeof FileListItem>[]>([])
 const containerWidth = ref(0)
 const activeDropFileId = ref<number | null>(null)
+const dragTagMeta = ref<TagDragMeta | null>(null)
 const externalDropActive = ref(false)
 const pendingImportPaths = ref<string[]>([])
 const showImportDialog = ref(false)
@@ -1248,6 +1286,7 @@ async function refreshFileList() {
 
 function clearDropIndicators() {
   activeDropFileId.value = null
+  dragTagMeta.value = null
   externalDropActive.value = false
 }
 
@@ -1257,6 +1296,7 @@ function handleFileDragOver(fileId: number, event: DragEvent) {
   }
 
   activeDropFileId.value = fileId
+  dragTagMeta.value = getDragMeta()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
   }
@@ -1417,6 +1457,71 @@ async function handleExternalDrop(event: DragEvent) {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent);
   background: color-mix(in srgb, var(--color-accent-light) 32%, transparent);
   animation: file-drop-pulse 0.6s ease infinite alternate;
+}
+
+/* 标签拖拽到文件时的徽章预览 */
+.grid-cell,
+.list-drop-target {
+  position: relative;
+}
+
+.tag-drop-badge {
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 20px;
+  background: var(--tag-color, #409EFF);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+  animation: tag-badge-appear 0.18s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  z-index: 10;
+}
+
+.tag-drop-badge--list {
+  bottom: auto;
+  top: 50%;
+  left: auto;
+  right: 16px;
+  transform: translateY(-50%);
+}
+
+.tag-drop-badge-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tag-drop-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.8);
+  flex-shrink: 0;
+}
+
+.tag-drop-badge-name {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes tag-badge-appear {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
 }
 
 @keyframes file-drop-pulse {
