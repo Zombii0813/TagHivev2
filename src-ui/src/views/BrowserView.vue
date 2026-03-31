@@ -7,8 +7,8 @@
     @dragleave="handleExternalDragLeave"
     @drop.prevent="handleExternalDrop"
   >
-    <!-- 空状态 -->
-    <div v-if="!appStore.currentWorkspace" class="empty-state-container">
+    <!-- 空状态：无工作区时显示引导 -->
+    <div v-if="appStore.workspaces.length === 0" class="empty-state-container">
       <EmptyState
         icon="folder"
         title="开始管理您的文件"
@@ -19,8 +19,118 @@
       />
     </div>
 
-    <!-- 文件夹浏览模式 -->
-    <template v-else-if="fileStore.browseMode === 'folder'">
+    <!-- 文件夹浏览模式 - 全局视图（多工作区并列） -->
+    <template v-else-if="fileStore.browseMode === 'folder' && appStore.isGlobalView">
+      <div class="tree-view-container">
+        <!-- 左侧：多工作区文件夹树并列 -->
+        <div class="folder-tree-panel folder-tree-panel--multi">
+          <div
+            v-for="ws in appStore.workspaces"
+            :key="ws"
+            class="multi-workspace-tree"
+            :class="{ 'multi-workspace-tree--active': activeMultiTreeWorkspace === ws }"
+          >
+            <div class="multi-workspace-label" :title="ws">
+              <el-icon><Folder /></el-icon>
+              <span>{{ getWorkspaceName(ws) }}</span>
+            </div>
+            <FolderTree
+              :root-path="ws"
+              @select="handleFolderSelect"
+            />
+          </div>
+        </div>
+
+        <!-- 右侧文件列表 -->
+        <div ref="scrollerRef" class="scroller-container">
+          <!-- Grid 模式 -->
+          <RecycleScroller
+            v-if="fileStore.viewMode === 'grid'"
+            class="scroller grid-view"
+            :items="gridRows"
+            :item-size="gridItemHeight"
+            key-field="rowIndex"
+            v-slot="{ item: row }"
+          >
+            <div class="grid-row" :style="gridRowStyle">
+              <div
+                v-for="file in row.files"
+                :key="file.id"
+                class="grid-cell"
+                :class="{ 'file-drop-active': activeDropFileId === file.id }"
+                :style="gridCellStyle"
+                @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
+                @dragleave="handleFileDragLeave(file.id)"
+                @drop.prevent.stop="handleFileDrop(file, $event)"
+              >
+                <FileCard
+                  :file="file"
+                  :selected="fileStore.selectedIds.has(file.id)"
+                  :size="gridItemWidth"
+                  @click="handleFileClick(file.id, $event)"
+                  @dblclick="handleFileDblClick(file)"
+                  @contextmenu.prevent="handleFileContextMenu(file, $event)"
+                />
+                <div
+                  v-if="activeDropFileId === file.id && dragTagMeta"
+                  class="tag-drop-badge"
+                  :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+                >
+                  <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+                  <span v-else class="tag-drop-badge-dot"></span>
+                  <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+                </div>
+              </div>
+            </div>
+          </RecycleScroller>
+
+          <!-- List 模式 -->
+          <RecycleScroller
+            v-else
+            class="scroller list-view"
+            :items="fileStore.files"
+            :item-size="60"
+            key-field="id"
+            v-slot="{ item }"
+          >
+            <div
+              class="list-drop-target"
+              :class="{ 'file-drop-active': activeDropFileId === item.id }"
+              @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
+              @dragleave="handleFileDragLeave(item.id)"
+              @drop.prevent.stop="handleFileDrop(item, $event)"
+            >
+              <FileListItem
+                ref="fileListItemRefs"
+                :file="item"
+                :selected="fileStore.selectedIds.has(item.id)"
+                @click="handleFileClick(item.id, $event)"
+                @dblclick="handleFileDblClick(item)"
+                @contextmenu.prevent="handleFileContextMenu(item, $event)"
+              />
+              <div
+                v-if="activeDropFileId === item.id && dragTagMeta"
+                class="tag-drop-badge"
+                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
+              >
+                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
+                <span v-else class="tag-drop-badge-dot"></span>
+                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
+              </div>
+            </div>
+          </RecycleScroller>
+
+          <!-- 加载更多提示 -->
+          <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 文件夹浏览模式（仅单工作区时有效） -->
+    <template v-else-if="fileStore.browseMode === 'folder' && appStore.currentWorkspace">
       <div class="tree-view-container">
         <!-- 左侧文件夹树 -->
         <div class="folder-tree-panel">
@@ -515,7 +625,7 @@ import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
+import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search, Folder } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
 import type { TagDragMeta } from '../utils/drag'
@@ -1089,7 +1199,22 @@ async function handleFileDblClick(file: FileSummary) {
 }
 
 // 处理文件夹选择
+// 全局视图多工作区树：记录当前激活的工作区（高亮用）
+const activeMultiTreeWorkspace = ref<string>('')
+
+function getWorkspaceName(ws: string): string {
+  return ws.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ws
+}
+
 async function handleFolderSelect(folderPath: string) {
+  // 记录选中的工作区（用于高亮）
+  for (const ws of appStore.workspaces) {
+    const normalized = ws.replace(/\\/g, '/')
+    if (folderPath.replace(/\\/g, '/').startsWith(normalized)) {
+      activeMultiTreeWorkspace.value = ws
+      break
+    }
+  }
   await fileStore.loadFolderContents(folderPath)
 }
 
@@ -1576,6 +1701,49 @@ async function handleExternalDrop(event: DragEvent) {
   overflow-y: auto;
 }
 
+/* 全局视图：多工作区并列树面板 */
+.folder-tree-panel--multi {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+}
+
+.multi-workspace-tree {
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.multi-workspace-tree--active > .multi-workspace-label {
+  color: var(--color-accent);
+}
+
+.multi-workspace-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  user-select: none;
+}
+
+.multi-workspace-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tree-view-container .scroller-container {
   flex: 1;
   min-width: 0;
@@ -1801,6 +1969,10 @@ async function handleExternalDrop(event: DragEvent) {
 @media (max-width: 480px) {
   .folder-tree-panel {
     width: 160px;
+  }
+
+  .folder-tree-panel--multi {
+    width: 200px;
   }
 }
 

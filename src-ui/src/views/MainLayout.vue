@@ -9,6 +9,48 @@
         </h1>
       </div>
 
+      <!-- 工作区管理面板 -->
+      <div class="workspace-panel" v-show="!appStore.sidebarCollapsed">
+        <!-- 全局视图按钮 -->
+        <div
+          class="workspace-item workspace-global"
+          :class="{ active: appStore.isGlobalView }"
+          @click="handleSetGlobalView()"
+          :title="'全局视图（跨所有工作区）'"
+          v-if="appStore.workspaces.length > 1"
+        >
+          <el-icon class="workspace-icon"><Grid /></el-icon>
+          <span class="workspace-name">全局视图</span>
+        </div>
+
+        <!-- 工作区列表 -->
+        <div
+          v-for="ws in appStore.workspaces"
+          :key="ws"
+          class="workspace-item"
+          :class="{ active: !appStore.isGlobalView && appStore.activeWorkspace === ws }"
+          @click="handleSwitchWorkspace(ws)"
+          :title="ws"
+        >
+          <el-icon class="workspace-icon"><Folder /></el-icon>
+          <span class="workspace-name">{{ getWorkspaceName(ws) }}</span>
+          <el-button
+            class="workspace-remove-btn"
+            :icon="Close"
+            circle
+            size="small"
+            @click.stop="handleRemoveWorkspace(ws)"
+            :title="'移除工作区'"
+          />
+        </div>
+
+        <!-- 添加工作区按钮 -->
+        <div class="workspace-add" @click="handleAddWorkspace" :title="'添加工作区'">
+          <el-icon><Plus /></el-icon>
+          <span>添加工作区</span>
+        </div>
+      </div>
+
       <div class="sidebar-content">
         <TagPanel />
       </div>
@@ -56,8 +98,8 @@
             circle
             @click="handleRescan"
             :loading="fileStore.isScanning"
-            :disabled="!appStore.currentWorkspace"
-            :title="'重新扫描工作区'"
+            :disabled="appStore.workspaces.length === 0"
+            :title="appStore.isGlobalView ? '重新扫描所有工作区' : '重新扫描工作区'"
           />
 
           <!-- 排序下拉菜单 -->
@@ -263,6 +305,8 @@ import {
   Folder,
   ScaleToOriginal,
   MoreFilled,
+  Plus,
+  Close,
 } from '@element-plus/icons-vue'
 
 import { useAppStore } from '../stores/app'
@@ -382,18 +426,67 @@ const getSortLabel = () => {
 
 // 处理重新扫描
 const handleRescan = () => {
-  if (!appStore.currentWorkspace) {
-    ElMessage.warning('请先选择工作区')
-    return
+  if (appStore.isGlobalView) {
+    // 全局视图：扫描所有工作区
+    if (appStore.workspaces.length === 0) {
+      ElMessage.warning('请先添加工作区')
+      return
+    }
+    wsClient.connect()
+    fileStore.startScanning()
+    for (const ws of appStore.workspaces) {
+      wsClient.startScan(ws)
+    }
+    ElMessage.success('开始扫描所有工作区...')
+  } else {
+    if (!appStore.activeWorkspace) {
+      ElMessage.warning('请先选择工作区')
+      return
+    }
+    wsClient.connect()
+    fileStore.startScanning()
+    wsClient.startScan(appStore.activeWorkspace)
+    ElMessage.success('开始扫描工作区...')
   }
-  
-  // 连接 WebSocket
-  wsClient.connect()
-  
-  // 开始扫描
-  fileStore.startScanning()
-  wsClient.startScan(appStore.currentWorkspace)
-  ElMessage.success('开始扫描工作区...')
+}
+
+// ===== 工作区管理 =====
+function getWorkspaceName(ws: string): string {
+  // 取路径最后一段作为显示名
+  return ws.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ws
+}
+
+async function handleAddWorkspace() {
+  const selected = await appStore.selectFolder()
+  if (selected) {
+    // 切换到新工作区并刷新
+    refreshForWorkspace()
+  }
+}
+
+function handleSwitchWorkspace(ws: string) {
+  appStore.switchWorkspace(ws)
+  refreshForWorkspace()
+}
+
+function handleSetGlobalView() {
+  appStore.setGlobalView(true)
+  refreshForWorkspace()
+}
+
+async function handleRemoveWorkspace(ws: string) {
+  appStore.removeWorkspace(ws)
+  refreshForWorkspace()
+}
+
+function refreshForWorkspace() {
+  const root = appStore.currentWorkspace || undefined
+  tagStore.loadTags(root)
+  tagStore.clearSelection()
+  if (fileStore.browseMode === 'folder' && !root) {
+    fileStore.setBrowseMode('all')
+  }
+  fileStore.search({ root })
 }
 
 // 扫描事件处理 - 使用变量跟踪是否已显示提示
@@ -412,14 +505,13 @@ onMounted(() => {
     // 避免重复显示提示
     if (scanCompletedShown) return
     scanCompletedShown = true
-    
+
     fileStore.completeScanning()
     ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
     // 刷新文件列表
-    if (appStore.currentWorkspace) {
-      fileStore.search({ root: appStore.currentWorkspace })
-    }
-    
+    const root = appStore.currentWorkspace || undefined
+    fileStore.search({ root })
+
     // 重置标志，允许下次扫描显示提示
     setTimeout(() => {
       scanCompletedShown = false
@@ -465,19 +557,16 @@ const toggleBrowseMode = () => {
 // 折叠状态下点击标签图标：切换选中并触发搜索
 function handleCollapsedTagClick(tagId: number) {
   const multi = false
+  const root = appStore.currentWorkspace || undefined
   if (tagStore.selectedTagIds.has(tagId) && tagStore.selectedTagIds.size === 1) {
     tagStore.clearSelection()
-    if (appStore.currentWorkspace) {
-      fileStore.search({ root: appStore.currentWorkspace })
-    } else {
-      fileStore.search({})
-    }
+    fileStore.search({ root })
     return
   }
   tagStore.selectTag(tagId, multi)
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
-      root: appStore.currentWorkspace || undefined,
+      root,
       tags: Array.from(tagStore.selectedTagIds),
       match_all_tags: false,
     })
@@ -491,6 +580,103 @@ function handleCollapsedTagClick(tagId: number) {
   height: 100vh;
   overflow: hidden;
   background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 50%, var(--color-bg-tertiary) 100%);
+}
+
+/* ===== 工作区管理面板 ===== */
+.workspace-panel {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.workspace-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  transition: all 0.15s ease;
+  position: relative;
+  min-width: 0;
+}
+
+.workspace-item:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.workspace-item.active {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  color: white;
+}
+
+.workspace-item.active .workspace-remove-btn {
+  color: white;
+}
+
+.workspace-global {
+  font-weight: 500;
+}
+
+.workspace-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.workspace-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-remove-btn {
+  flex-shrink: 0;
+  width: 18px !important;
+  height: 18px !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-size: 10px !important;
+}
+
+.workspace-item:hover .workspace-remove-btn {
+  opacity: 0.7;
+}
+
+.workspace-remove-btn:hover {
+  opacity: 1 !important;
+  background: rgba(0,0,0,0.1) !important;
+}
+
+.workspace-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  transition: all 0.15s ease;
+  border: 1px dashed var(--color-border);
+  margin-top: 2px;
+}
+
+.workspace-add:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(99, 102, 241, 0.05);
 }
 
 /* ===== 侧边栏 ===== */

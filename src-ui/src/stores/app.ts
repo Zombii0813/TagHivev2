@@ -7,7 +7,9 @@ export interface AppState {
   sidebarCollapsed: boolean
   detailPanelVisible: boolean
   isLoading: boolean
-  currentWorkspace: string | null
+  workspaces: string[]
+  activeWorkspace: string | null
+  isGlobalView: boolean
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -16,16 +18,24 @@ export const useAppStore = defineStore('app', () => {
   const sidebarCollapsed = ref(false)
   const detailPanelVisible = ref(true)
   const isLoading = ref(false)
-  const currentWorkspace = ref<string | null>(null)
+
+  // Multi-workspace state
+  const workspaces = ref<string[]>([])
+  const activeWorkspace = ref<string | null>(null)
+  const isGlobalView = ref(false)
 
   // Getters
   const isDark = computed(() => theme.value === 'dark')
+
+  // currentWorkspace: backward-compat — returns activeWorkspace, or null in global view
+  const currentWorkspace = computed(() =>
+    isGlobalView.value ? null : activeWorkspace.value
+  )
 
   // Actions
   function setTheme(newTheme: AppState['theme']) {
     theme.value = newTheme
     document.documentElement.setAttribute('data-theme', newTheme)
-    // 保存到本地存储
     localStorage.setItem('taghive-theme', newTheme)
   }
 
@@ -45,11 +55,52 @@ export const useAppStore = defineStore('app', () => {
     isLoading.value = loading
   }
 
+  function _saveWorkspaces() {
+    localStorage.setItem('taghive-workspaces', JSON.stringify(workspaces.value))
+    localStorage.setItem('taghive-active-workspace', activeWorkspace.value || '')
+    localStorage.setItem('taghive-global-view', isGlobalView.value ? '1' : '0')
+  }
+
   function setWorkspace(path: string | null) {
-    currentWorkspace.value = path
-    if (path) {
-      localStorage.setItem('taghive-workspace', path)
+    if (!path) return
+    if (!workspaces.value.includes(path)) {
+      workspaces.value.push(path)
     }
+    activeWorkspace.value = path
+    isGlobalView.value = false
+    _saveWorkspaces()
+    // backward-compat key
+    localStorage.setItem('taghive-workspace', path)
+  }
+
+  function switchWorkspace(path: string) {
+    if (!workspaces.value.includes(path)) return
+    activeWorkspace.value = path
+    isGlobalView.value = false
+    _saveWorkspaces()
+    localStorage.setItem('taghive-workspace', path)
+  }
+
+  function removeWorkspace(path: string) {
+    const idx = workspaces.value.indexOf(path)
+    if (idx === -1) return
+    workspaces.value.splice(idx, 1)
+    if (activeWorkspace.value === path) {
+      if (workspaces.value.length > 0) {
+        activeWorkspace.value = workspaces.value[0]
+        isGlobalView.value = false
+      } else {
+        activeWorkspace.value = null
+        isGlobalView.value = false
+      }
+    }
+    _saveWorkspaces()
+  }
+
+  function setGlobalView(enabled: boolean) {
+    if (enabled && workspaces.value.length === 0) return
+    isGlobalView.value = enabled
+    _saveWorkspaces()
   }
 
   async function initialize() {
@@ -59,10 +110,39 @@ export const useAppStore = defineStore('app', () => {
       setTheme(savedTheme)
     }
 
-    // 加载保存的工作区
-    const savedWorkspace = localStorage.getItem('taghive-workspace')
-    if (savedWorkspace) {
-      currentWorkspace.value = savedWorkspace
+    // 加载多工作区（新格式）
+    const savedWorkspacesRaw = localStorage.getItem('taghive-workspaces')
+    if (savedWorkspacesRaw) {
+      try {
+        const parsed = JSON.parse(savedWorkspacesRaw)
+        if (Array.isArray(parsed)) {
+          workspaces.value = parsed.filter((p): p is string => typeof p === 'string' && p.length > 0)
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 兼容旧的单工作区格式
+    if (workspaces.value.length === 0) {
+      const legacyWorkspace = localStorage.getItem('taghive-workspace')
+      if (legacyWorkspace) {
+        workspaces.value = [legacyWorkspace]
+      }
+    }
+
+    // 加载激活的工作区
+    const savedActive = localStorage.getItem('taghive-active-workspace')
+    if (savedActive && workspaces.value.includes(savedActive)) {
+      activeWorkspace.value = savedActive
+    } else if (workspaces.value.length > 0) {
+      activeWorkspace.value = workspaces.value[0]
+    }
+
+    // 加载全局视图状态
+    const savedGlobalView = localStorage.getItem('taghive-global-view')
+    if (savedGlobalView === '1' && workspaces.value.length > 0) {
+      isGlobalView.value = true
     }
 
     // 检测系统主题偏好
@@ -77,7 +157,7 @@ export const useAppStore = defineStore('app', () => {
         setTheme(e.matches ? 'dark' : 'light')
       }
     }
-    
+
     if (mediaQuery.addEventListener) {
       mediaQuery.addEventListener('change', handleChange)
     } else {
@@ -88,7 +168,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function selectFolder() {
     console.log('[app.ts] selectFolder called')
-    
+
     try {
       const selected = await invoke<string | null>('select_folder')
       console.log('[app.ts] select_folder returned:', selected)
@@ -108,6 +188,9 @@ export const useAppStore = defineStore('app', () => {
     sidebarCollapsed,
     detailPanelVisible,
     isLoading,
+    workspaces,
+    activeWorkspace,
+    isGlobalView,
     currentWorkspace,
     isDark,
     setTheme,
@@ -116,6 +199,9 @@ export const useAppStore = defineStore('app', () => {
     toggleDetailPanel,
     setLoading,
     setWorkspace,
+    switchWorkspace,
+    removeWorkspace,
+    setGlobalView,
     initialize,
     selectFolder,
   }
