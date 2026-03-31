@@ -622,19 +622,20 @@ fn get_sidecar_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(PathBuf, P
         } else {
             "taghive-sidecar"
         };
-        
+
         // 获取资源目录
         let resource_dir = app.path().resource_dir()?;
         println!("Resource directory: {:?}", resource_dir);
-        
-        // 手动拼接 sidecar 路径（资源文件在 resources 子目录中）
-        let sidecar_path = resource_dir.join("resources").join(&sidecar_name);
+
+        // onedir 模式：sidecar 在 resources/taghive-sidecar/ 子目录中
+        let sidecar_dir = resource_dir.join("resources").join("taghive-sidecar");
+        let sidecar_path = sidecar_dir.join(sidecar_name);
         println!("Looking for bundled sidecar at: {:?}", sidecar_path);
-        
-        // 如果打包的 sidecar 存在，使用它
+
+        // 如果打包的 sidecar 存在，使用它（working_dir 设为 sidecar 目录，让动态库能被找到）
         if sidecar_path.exists() {
-            println!("Using bundled sidecar: {:?}", sidecar_path);
-            return Ok((sidecar_path, resource_dir, true));
+            println!("Using bundled sidecar (onedir): {:?}", sidecar_path);
+            return Ok((sidecar_path, sidecar_dir, true));
         }
         
         // 否则，尝试查找系统 Python（与开发模式相同的逻辑）

@@ -14,16 +14,18 @@ if getattr(sys, 'frozen', False):
 
 # Add the src-python directory to Python path so 'app' package can be found
 if getattr(sys, 'frozen', False):
-    # Running in a PyInstaller bundle
-    bundle_dir = os.path.dirname(sys.executable)
+    # Running in a PyInstaller bundle (onedir mode)
+    # sys.executable is <sidecar_dir>/taghive-sidecar.exe
+    # _MEIPASS is the temp extraction dir in onefile, or the exe dir in onedir
+    bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
 else:
     # Running in normal Python environment
     bundle_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Add the parent directory to path so we can import 'app'
-parent_dir = os.path.dirname(bundle_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# In onedir mode, 'app' package is placed directly inside bundle_dir via --add-data
+# In normal mode, 'app' is a sibling of this file (both in src-python/)
+if bundle_dir not in sys.path:
+    sys.path.insert(0, bundle_dir)
 
 # Now import and run the main application
 from app.main import main

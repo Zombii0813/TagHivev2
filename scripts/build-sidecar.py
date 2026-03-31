@@ -46,7 +46,7 @@ def build_sidecar():
     cmd = [
         "pyinstaller",
         "--name", "taghive-sidecar",
-        "--onefile",  # 打包成单个文件
+        "--onedir",   # 目录模式：启动更快，无需每次解压到临时目录
         "--noconsole",  # 隐藏控制台窗口（生产环境）
         "--clean",
         "--noconfirm",
@@ -99,21 +99,29 @@ def build_sidecar():
         print("ERROR: PyInstaller build failed!")
         sys.exit(1)
     
-    # 复制生成的可执行文件到 resources 目录
-    exe_name = "taghive-sidecar.exe" if sys.platform == "win32" else "taghive-sidecar"
-    source_exe = dist_dir / exe_name
-    target_exe = resources_dir / exe_name
-    
-    if not source_exe.exists():
-        print(f"ERROR: Expected executable not found: {source_exe}")
+    # 复制生成的目录到 resources 目录（onedir 模式输出整个目录）
+    source_dir = dist_dir / "taghive-sidecar"
+    target_dir = resources_dir / "taghive-sidecar"
+
+    if not source_dir.exists():
+        print(f"ERROR: Expected sidecar directory not found: {source_dir}")
         sys.exit(1)
-    
-    print(f"Copying {source_exe} to {target_exe}")
-    shutil.copy2(source_exe, target_exe)
-    
-    print(f"\n✅ Sidecar built successfully!")
-    print(f"   Location: {target_exe}")
-    print(f"   Size: {target_exe.stat().st_size / 1024 / 1024:.1f} MB")
+
+    # 清理旧的目标目录
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+
+    print(f"Copying {source_dir} -> {target_dir}")
+    shutil.copytree(source_dir, target_dir)
+
+    # 计算目录总大小
+    total_size = sum(f.stat().st_size for f in target_dir.rglob("*") if f.is_file())
+    exe_name = "taghive-sidecar.exe" if sys.platform == "win32" else "taghive-sidecar"
+
+    print(f"\n✅ Sidecar built successfully! (onedir mode)")
+    print(f"   Location: {target_dir}")
+    print(f"   Total size: {total_size / 1024 / 1024:.1f} MB")
+    print(f"   Executable: {target_dir / exe_name}")
 
 
 if __name__ == "__main__":

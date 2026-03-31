@@ -47,7 +47,7 @@
       placement="bottom-start"
       :width="148"
       popper-class="context-menu-popover"
-      @update:visible="(v) => { if (!v) contextMenuVisible = false }"
+      @update:visible="(v: boolean) => { if (!v) contextMenuVisible = false }"
     >
       <div class="context-menu">
         <div class="context-menu-item" @click="openCreateSubdirDialog">
