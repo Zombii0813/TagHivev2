@@ -168,6 +168,7 @@ class TagDTO(BaseModel):
     color: Optional[str] = None
     icon: Optional[str] = None
     description: Optional[str] = None
+    parent_id: Optional[int] = None
     created_at: datetime
     file_count: int = 0
 
@@ -182,6 +183,7 @@ class TagCreateDTO(BaseModel):
     icon: Optional[str] = None
     description: Optional[str] = None
     workspace: Optional[str] = None  # 工作目录路径，用于标签隔离
+    parent_id: Optional[int] = None  # 父标签ID，null 表示顶级标签
 
 
 class TagUpdateDTO(BaseModel):
@@ -190,6 +192,7 @@ class TagUpdateDTO(BaseModel):
     color: Optional[str] = None
     icon: Optional[str] = None
     description: Optional[str] = None
+    parent_id: Optional[int] = None  # 传 None 不更新，传 0 清除父标签（设为顶级）
 
 
 # ========== 工作区相关 DTO ==========

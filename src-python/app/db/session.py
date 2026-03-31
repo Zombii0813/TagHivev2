@@ -102,6 +102,16 @@ def _ensure_schema() -> None:
             connection.execute(text("ALTER TABLE tags ADD COLUMN icon TEXT"))
         except Exception:
             pass
+        # 添加 tags.parent_id 列（如果缺失）- 用于标签层级嵌套
+        try:
+            connection.execute(text("ALTER TABLE tags ADD COLUMN parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL"))
+        except Exception:
+            pass
+        # 添加 parent_id 索引（如果不存在）
+        try:
+            connection.execute(text("CREATE INDEX idx_tags_parent_id ON tags(parent_id)"))
+        except Exception:
+            pass
         session.commit()
     except Exception:
         session.rollback()
@@ -132,6 +142,7 @@ def _migrate_tags_table(connection) -> None:
                     icon TEXT,
                     description VARCHAR,
                     workspace TEXT,
+                    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """))

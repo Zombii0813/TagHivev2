@@ -593,6 +593,7 @@ async def list_tags(
             color=tag.color,
             icon=tag.icon,
             description=tag.description,
+            parent_id=tag.parent_id,
             created_at=tag.created_at,
             file_count=file_count,
         ))
@@ -620,7 +621,7 @@ async def create_tag(
         color=spec.color,
         icon=spec.icon,
         description=spec.description,
-    ), workspace=spec.workspace)
+    ), workspace=spec.workspace, parent_id=spec.parent_id)
     repo.session.commit()
 
     return TagDTO(
@@ -629,6 +630,7 @@ async def create_tag(
         color=tag.color,
         icon=tag.icon,
         description=tag.description,
+        parent_id=tag.parent_id,
         created_at=tag.created_at,
         file_count=0,
     )
@@ -651,6 +653,7 @@ async def get_tag(
         color=tag.color,
         icon=tag.icon,
         description=tag.description,
+        parent_id=tag.parent_id,
         created_at=tag.created_at,
         file_count=len(tag.files),
     )
@@ -676,6 +679,9 @@ async def update_tag(
         tag.icon = update.icon
     if update.description is not None:
         tag.description = update.description
+    # parent_id: None 表示不更新；0 表示清除父标签；正整数表示设置父标签
+    if update.parent_id is not None:
+        tag.parent_id = None if update.parent_id == 0 else update.parent_id
 
     repo.session.commit()
 
@@ -685,6 +691,7 @@ async def update_tag(
         color=tag.color,
         icon=tag.icon,
         description=tag.description,
+        parent_id=tag.parent_id,
         created_at=tag.created_at,
         file_count=len(tag.files),
     )

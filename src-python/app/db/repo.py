@@ -390,13 +390,14 @@ class Repo:
                 )
             ).scalar_one_or_none()
 
-    def create_tag(self, spec: TagSpec, workspace: str | None = None) -> Tag:
+    def create_tag(self, spec: TagSpec, workspace: str | None = None, parent_id: int | None = None) -> Tag:
         """创建新标签
-        
+
         Args:
             spec: 标签规格
             workspace: 工作目录路径，None 表示全局标签
-            
+            parent_id: 父标签ID，None 表示顶级标签
+
         Returns:
             创建的标签对象
         """
@@ -406,24 +407,26 @@ class Repo:
             color=spec.color,
             icon=spec.icon,
             description=spec.description,
-            workspace=Path(workspace).as_posix() if workspace else None
+            workspace=Path(workspace).as_posix() if workspace else None,
+            parent_id=parent_id,
         )
         self.session.add(tag)
         # 清除缓存
         self.clear_search_cache()
         return tag
 
-    def get_or_create_tag(self, spec: TagSpec, workspace: str | None = None) -> Tag:
+    def get_or_create_tag(self, spec: TagSpec, workspace: str | None = None, parent_id: int | None = None) -> Tag:
         """获取或创建标签
-        
+
         Args:
             spec: 标签规格
             workspace: 工作目录路径，None 表示全局标签
+            parent_id: 父标签ID
         """
         existing = self.get_tag_by_name_and_workspace(spec.name, workspace)
         if existing is not None:
             return existing
-        return self.create_tag(spec, workspace)
+        return self.create_tag(spec, workspace, parent_id)
 
     def delete_tag(self, tag_id: int) -> None:
         """删除标签及其关联"""

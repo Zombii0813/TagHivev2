@@ -8,6 +8,56 @@ function buildTagOrderKey(root?: string | null) {
   return `taghive:tag-order:${root || '__global__'}`
 }
 
+export interface TagTreeNode {
+  tag: Tag
+  children: TagTreeNode[]
+  depth: number
+}
+
+/** 将平铺的标签列表构建为树形结构（顶级 → children） */
+function buildTagTree(tags: Tag[]): TagTreeNode[] {
+  const map = new Map<number, TagTreeNode>()
+  const roots: TagTreeNode[] = []
+
+  for (const tag of tags) {
+    map.set(tag.id, { tag, children: [], depth: 0 })
+  }
+
+  for (const tag of tags) {
+    const node = map.get(tag.id)!
+    if (tag.parent_id != null && map.has(tag.parent_id)) {
+      const parentNode = map.get(tag.parent_id)!
+      node.depth = parentNode.depth + 1
+      parentNode.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+
+  // 递归设置正确的 depth
+  function setDepth(nodes: TagTreeNode[], depth: number) {
+    for (const n of nodes) {
+      n.depth = depth
+      setDepth(n.children, depth + 1)
+    }
+  }
+  setDepth(roots, 0)
+
+  return roots
+}
+
+/** 将树形结构展开为有序的平铺列表（尊重折叠状态） */
+function flattenTree(nodes: TagTreeNode[], expandedIds: Set<number>): TagTreeNode[] {
+  const result: TagTreeNode[] = []
+  for (const node of nodes) {
+    result.push(node)
+    if (node.children.length > 0 && expandedIds.has(node.tag.id)) {
+      result.push(...flattenTree(node.children, expandedIds))
+    }
+  }
+  return result
+}
+
 export const useTagStore = defineStore('tags', () => {
   // State
   const tags = ref<Tag[]>([])
@@ -15,6 +65,7 @@ export const useTagStore = defineStore('tags', () => {
   const isLoading = ref(false)
   const orderIds = ref<number[]>([])
   const lastLoadedRoot = ref<string>()
+  const expandedTagIds = ref<Set<number>>(new Set())
 
   // Getters
   const tagMap = computed(() => {
@@ -44,6 +95,29 @@ export const useTagStore = defineStore('tags', () => {
       return left.name.localeCompare(right.name, 'zh-CN')
     })
   })
+
+  /** 树形结构（按 orderedTags 顺序构建） */
+  const tagTree = computed<TagTreeNode[]>(() => buildTagTree(orderedTags.value))
+
+  /** 展开后的平铺列表（用于渲染） */
+  const flatTagList = computed<TagTreeNode[]>(() =>
+    flattenTree(tagTree.value, expandedTagIds.value)
+  )
+
+  /** 所有子标签的ID（递归） */
+  function getDescendantIds(tagId: number): number[] {
+    const result: number[] = []
+    function collect(id: number) {
+      for (const tag of tags.value) {
+        if (tag.parent_id === id) {
+          result.push(tag.id)
+          collect(tag.id)
+        }
+      }
+    }
+    collect(tagId)
+    return result
+  }
 
   function syncTagOrder(root?: string) {
     const storageKey = buildTagOrderKey(root)
@@ -79,6 +153,12 @@ export const useTagStore = defineStore('tags', () => {
     try {
       tags.value = await tagApi.getAll(root)
       syncTagOrder(root)
+      // 默认展开所有有子标签的父标签
+      expandedTagIds.value = new Set(
+        tags.value
+          .filter(t => tags.value.some(c => c.parent_id === t.id))
+          .map(t => t.id)
+      )
     } catch (error) {
       console.error('Failed to load tags:', error)
     } finally {
@@ -90,9 +170,9 @@ export const useTagStore = defineStore('tags', () => {
     await loadTags(lastLoadedRoot.value)
   }
 
-  async function createTag(name: string, color?: string, description?: string, workspace?: string, icon?: string) {
+  async function createTag(name: string, color?: string, description?: string, workspace?: string, icon?: string, parentId?: number | null) {
     try {
-      const tag = await tagApi.create({ name, color, description, workspace, icon })
+      const tag = await tagApi.create({ name, color, description, workspace, icon, parent_id: parentId })
       tags.value.push(tag)
       syncTagOrder(workspace)
       return tag
@@ -102,7 +182,7 @@ export const useTagStore = defineStore('tags', () => {
     }
   }
 
-  async function updateTag(id: number, updates: Partial<Tag>) {
+  async function updateTag(id: number, updates: Partial<Tag> & { parent_id?: number | null }) {
     try {
       const tag = await tagApi.update(id, updates)
       const index = tags.value.findIndex(t => t.id === id)
@@ -131,16 +211,30 @@ export const useTagStore = defineStore('tags', () => {
     }
   }
 
+  function toggleExpand(tagId: number) {
+    if (expandedTagIds.value.has(tagId)) {
+      expandedTagIds.value.delete(tagId)
+    } else {
+      expandedTagIds.value.add(tagId)
+    }
+  }
+
   function selectTag(id: number, multi: boolean = false) {
     if (multi) {
       if (selectedTagIds.value.has(id)) {
         selectedTagIds.value.delete(id)
+        // 取消父标签时也取消所有子标签
+        getDescendantIds(id).forEach(cid => selectedTagIds.value.delete(cid))
       } else {
         selectedTagIds.value.add(id)
+        // 选中父标签时同时选中所有子标签
+        getDescendantIds(id).forEach(cid => selectedTagIds.value.add(cid))
       }
     } else {
       selectedTagIds.value.clear()
       selectedTagIds.value.add(id)
+      // 选中父标签时同时选中所有子标签
+      getDescendantIds(id).forEach(cid => selectedTagIds.value.add(cid))
     }
   }
 
@@ -213,6 +307,9 @@ export const useTagStore = defineStore('tags', () => {
     selectedTags,
     hasSelection,
     orderedTags,
+    tagTree,
+    flatTagList,
+    expandedTagIds,
     lastLoadedRoot,
     loadTags,
     reloadTags,
@@ -224,6 +321,8 @@ export const useTagStore = defineStore('tags', () => {
     selectAll,
     getTagById,
     getTagsByIds,
+    getDescendantIds,
+    toggleExpand,
     reorderTags,
     assignTagsToFiles,
   }

@@ -57,28 +57,40 @@
       :class="{ 'manage-mode': isManageMode }"
       v-loading="tagStore.isLoading"
     >
-      <template v-for="(tag, index) in tagStore.orderedTags" :key="tag.id">
+      <template v-for="(node, index) in tagStore.flatTagList" :key="node.tag.id">
         <div
           class="tag-item"
           :class="{
-            selected: !isManageMode && tagStore.selectedTagIds.has(tag.id),
-            'manage-dragging': isManageMode && manageDragState.sourceId === tag.id,
+            selected: !isManageMode && tagStore.selectedTagIds.has(node.tag.id),
+            'manage-dragging': isManageMode && manageDragState.sourceId === node.tag.id,
             'manage-item': isManageMode,
           }"
-          :style="getTagItemStyle(tag, index)"
-          :data-tag-id="tag.id"
+          :style="{ ...getTagItemStyle(node.tag, index), paddingLeft: `${10 + node.depth * 16}px` }"
+          :data-tag-id="node.tag.id"
           :draggable="!isManageMode"
-          @click="!isManageMode && handleTagClick(tag.id, $event)"
-          @contextmenu.prevent="!isManageMode && handleContextMenu(tag, $event)"
-          @dragstart="!isManageMode && handleTagDragStart(tag.id, $event)"
+          @click="!isManageMode && handleTagClick(node.tag.id, $event)"
+          @contextmenu.prevent="!isManageMode && handleContextMenu(node.tag, $event)"
+          @dragstart="!isManageMode && handleTagDragStart(node.tag.id, $event)"
           @dragend="!isManageMode && clearTagDragState()"
-          @pointerdown="isManageMode && handleManagePointerDown(tag.id, $event)"
+          @pointerdown="isManageMode && handleManagePointerDown(node.tag.id, $event)"
         >
           <span v-if="isManageMode" class="manage-drag-handle">⠿</span>
-          <span v-if="tag.icon" class="tag-icon">{{ tag.icon }}</span>
-          <span v-else class="tag-dot" :style="{ backgroundColor: tag.color }"></span>
-          <span class="tag-name">{{ tag.name }}</span>
-          <span class="tag-count">{{ tag.file_count }}</span>
+          <!-- 展开/折叠按钮（有子标签时显示） -->
+          <span
+            v-if="node.children.length > 0 && !isManageMode"
+            class="tag-expand-btn"
+            @click.stop="tagStore.toggleExpand(node.tag.id)"
+          >
+            <el-icon :size="10">
+              <ArrowDown v-if="tagStore.expandedTagIds.has(node.tag.id)" />
+              <ArrowRight v-else />
+            </el-icon>
+          </span>
+          <span v-else-if="!isManageMode && node.depth > 0" class="tag-child-indent"></span>
+          <span v-if="node.tag.icon" class="tag-icon">{{ node.tag.icon }}</span>
+          <span v-else class="tag-dot" :style="{ backgroundColor: node.tag.color }"></span>
+          <span class="tag-name">{{ node.tag.name }}</span>
+          <span class="tag-count">{{ node.tag.file_count }}</span>
         </div>
       </template>
     </div>
@@ -120,6 +132,17 @@
             type="textarea"
             placeholder="可选描述"
           />
+        </el-form-item>
+        <el-form-item label="父标签">
+          <el-select v-model="newTag.parentId" placeholder="无（顶级标签）" clearable style="width:100%">
+            <el-option :value="null" label="无（顶级标签）" />
+            <el-option
+              v-for="t in tagStore.tags.filter(t => t.id !== 0)"
+              :key="t.id"
+              :value="t.id"
+              :label="t.name"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -189,6 +212,17 @@
             placeholder="可选描述"
           />
         </el-form-item>
+        <el-form-item label="父标签">
+          <el-select v-model="editingTag.parent_id" placeholder="无（顶级标签）" clearable style="width:100%">
+            <el-option :value="null" label="无（顶级标签）" />
+            <el-option
+              v-for="t in tagStore.tags.filter(t => t.id !== editingTag.id)"
+              :key="t.id"
+              :value="t.id"
+              :label="t.name"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
@@ -230,7 +264,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Plus, Close, Edit, Delete } from '@element-plus/icons-vue'
+import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
@@ -249,6 +283,7 @@ const newTag = ref({
   color: '#409EFF',
   icon: '',
   description: '',
+  parentId: null as number | null,
 })
 
 const editingTag = ref<Tag & { description?: string }>({
@@ -257,6 +292,7 @@ const editingTag = ref<Tag & { description?: string }>({
   color: '#409EFF',
   icon: '',
   description: '',
+  parent_id: null,
   created_at: '',
   file_count: 0,
 })
@@ -525,8 +561,8 @@ function handleManagePointerDown(tagId: number, event: PointerEvent) {
   if (!isManageMode.value) return
   event.preventDefault()
 
-  const tags = tagStore.orderedTags
-  const sourceIndex = tags.findIndex(t => t.id === tagId)
+  const tags = tagStore.flatTagList
+  const sourceIndex = tags.findIndex(n => n.tag.id === tagId)
   if (sourceIndex === -1) return
 
   // 快照所有 item 的中点 Y（此时 DOM 尚未变化）
@@ -623,7 +659,7 @@ function endManageDrag(commit: boolean) {
     ds.ghostEl.remove()
   }
   if (commit && ds.sourceId !== null && ds.insertIndex !== null) {
-    const tags = tagStore.orderedTags
+    const nodes = tagStore.flatTagList
     // 将 insertIndex 转换为目标 tag id
     let targetId: number | null = null
     const ii = ds.insertIndex
@@ -632,8 +668,8 @@ function endManageDrag(commit: boolean) {
     if (ii !== si && ii !== si + 1) {
       // insertIndex 是在原始数组中的位置
       // 注意：insertIndex 可能等于 sourceIndex（不动）或 sourceIndex+1（相当于不动）
-      if (ii < tags.length) {
-        targetId = tags[ii].id
+      if (ii < nodes.length) {
+        targetId = nodes[ii].tag.id
       } else {
         targetId = null // 移到末尾
       }
@@ -750,10 +786,11 @@ async function createTag() {
       newTag.value.description,
       workspace,
       newTag.value.icon || undefined,
+      newTag.value.parentId,
     )
     ElMessage.success('标签创建成功')
     showCreateDialog.value = false
-    newTag.value = { name: '', color: '#409EFF', icon: '', description: '' }
+    newTag.value = { name: '', color: '#409EFF', icon: '', description: '', parentId: null }
   } catch (error: any) {
     // 处理 409 冲突错误
     if (error?.response?.status === 409) {
@@ -819,6 +856,7 @@ async function saveTagEdit() {
       color: editingTag.value.color,
       icon: editingTag.value.icon || undefined,
       description: editingTag.value.description,
+      parent_id: editingTag.value.parent_id === undefined ? null : editingTag.value.parent_id,
     })
     ElMessage.success('标签更新成功')
     showEditDialog.value = false
@@ -992,6 +1030,37 @@ async function confirmDeleteTag() {
   padding: 2px 6px;
   border-radius: 10px;
 }
+
+.tag-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.15s;
+}
+
+.tag-expand-btn:hover {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.tag-child-indent {
+  width: 14px;
+  flex-shrink: 0;
+}
+
+/* 子标签左侧竖线 */
+.tag-item[style*="padding-left: 26px"],
+.tag-item[style*="padding-left: 42px"] {
+  position: relative;
+}
+
+
 
 /* 对话框图标区域 */
 .dialog-icon-section {

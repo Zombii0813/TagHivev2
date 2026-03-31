@@ -41,9 +41,10 @@ class File(Base):
 
 class Tag(Base):
     """标签模型 - 存储标签信息
-    
+
     标签按工作目录隔离，不同工作目录可以有相同名称的标签。
     workspace 字段存储创建该标签时的工作目录路径。
+    parent_id 字段支持标签层级（父子嵌套），null 表示顶级标签。
     """
 
     __tablename__ = "tags"
@@ -54,9 +55,22 @@ class Tag(Base):
     icon = Column(Text, nullable=True)   # emoji 图标
     description = Column(Text, nullable=True)
     workspace = Column(Text, nullable=True)  # 工作目录路径，null 表示全局标签
+    parent_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True)  # 父标签ID
     created_at = Column(DateTime, default=datetime.utcnow)
 
     files = relationship("File", secondary="file_tags", back_populates="tags")
+    children = relationship(
+        "Tag",
+        primaryjoin="Tag.id == foreign(Tag.parent_id)",
+        back_populates="parent",
+        lazy="select",
+    )
+    parent = relationship(
+        "Tag",
+        primaryjoin="Tag.parent_id == remote(Tag.id)",
+        back_populates="children",
+        lazy="select",
+    )
 
     # 数据库索引优化 - 提升标签查询性能
     # 使用联合唯一约束：同一工作目录下标签名称唯一
@@ -64,6 +78,7 @@ class Tag(Base):
         Index("idx_tags_name", "name"),  # 按标签名称搜索
         Index("idx_tags_workspace", "workspace"),  # 按工作目录筛选
         Index("idx_tags_name_workspace", "name", "workspace"),  # 联合查询
+        Index("idx_tags_parent_id", "parent_id"),  # 按父标签查询子标签
     )
 
 

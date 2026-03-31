@@ -24,6 +24,7 @@ export interface Tag {
   color?: string
   icon?: string
   description?: string
+  parent_id?: number | null
   created_at: string
   file_count: number
 }
@@ -34,6 +35,7 @@ export interface CreateTagRequest {
   icon?: string
   description?: string
   workspace?: string  // 工作目录路径，用于标签隔离
+  parent_id?: number | null  // 父标签ID
 }
 
 export interface UpdateTagRequest {
@@ -41,6 +43,7 @@ export interface UpdateTagRequest {
   color?: string
   icon?: string
   description?: string
+  parent_id?: number | null  // null 不更新；0 清除父标签；正整数设置父标签
 }
 
 // 搜索类型
