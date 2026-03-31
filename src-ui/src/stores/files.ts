@@ -225,6 +225,15 @@ export const useFileStore = defineStore('files', () => {
     })
   }
 
+  function removeTagFromAllFiles(tagId: number) {
+    files.value.forEach(file => {
+      const idx = file.tag_ids.indexOf(tagId)
+      if (idx !== -1) {
+        file.tag_ids.splice(idx, 1)
+      }
+    })
+  }
+
   function removeFile(fileId: number) {
     const index = files.value.findIndex(f => f.id === fileId)
     if (index !== -1) {
@@ -312,6 +321,7 @@ export const useFileStore = defineStore('files', () => {
     updateBatchFileTags,
     addTagsToFile,
     addTagsToFiles,
+    removeTagFromAllFiles,
     removeFile,
     removeBatchFiles,
     startScanning,

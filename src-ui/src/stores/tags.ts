@@ -123,6 +123,8 @@ export const useTagStore = defineStore('tags', () => {
       selectedTagIds.value.delete(id)
       orderIds.value = orderIds.value.filter(tagId => tagId !== id)
       persistTagOrder(lastLoadedRoot.value)
+      const fileStore = useFileStore()
+      fileStore.removeTagFromAllFiles(id)
     } catch (error) {
       console.error('Failed to delete tag:', error)
       throw error
