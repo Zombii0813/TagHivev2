@@ -19,29 +19,17 @@
       />
     </div>
 
-    <!-- 文件夹浏览模式 - 全局视图（多工作区并列） -->
+    <!-- 文件夹浏览模式 - 全局视图（多工作区蜂巢） -->
     <template v-else-if="fileStore.browseMode === 'folder' && appStore.isGlobalView">
       <div class="tree-view-container">
-        <!-- 左侧：多工作区文件夹树并列 -->
-        <div class="folder-tree-panel folder-tree-panel--multi">
-          <div
-            v-for="ws in appStore.workspaces"
-            :key="ws"
-            class="multi-workspace-tree"
-            :class="{ 'multi-workspace-tree--active': activeMultiTreeWorkspace === ws }"
-          >
-            <div class="multi-workspace-label" :title="ws">
-              <el-icon><Folder /></el-icon>
-              <span>{{ getWorkspaceName(ws) }}</span>
-            </div>
-            <FolderTree
-              :root-path="ws"
-              @select="handleFolderSelect"
-            />
-          </div>
-        </div>
+        <!-- 蜂巢导航（teleport 到 body，浮动在全局） -->
+        <HoneycombTree
+          :workspaces="appStore.workspaces"
+          :boundary="scrollerRef"
+          @select="handleFolderSelect"
+        />
 
-        <!-- 右侧文件列表 -->
+        <!-- 文件列表全宽 -->
         <div ref="scrollerRef" class="scroller-container">
           <!-- Grid 模式 -->
           <RecycleScroller
@@ -132,15 +120,14 @@
     <!-- 文件夹浏览模式（仅单工作区时有效） -->
     <template v-else-if="fileStore.browseMode === 'folder' && appStore.currentWorkspace">
       <div class="tree-view-container">
-        <!-- 左侧文件夹树 -->
-        <div class="folder-tree-panel">
-          <FolderTree
-            :root-path="appStore.currentWorkspace"
-            @select="handleFolderSelect"
-          />
-        </div>
-        
-        <!-- 右侧文件列表 -->
+        <!-- 蜂巢导航（teleport 到 body，浮动在全局） -->
+        <HoneycombTree
+          :root-path="appStore.currentWorkspace"
+          :boundary="scrollerRef"
+          @select="handleFolderSelect"
+        />
+
+        <!-- 文件列表全宽 -->
         <div ref="scrollerRef" class="scroller-container">
           <!-- Grid 模式 -->
           <RecycleScroller
@@ -617,7 +604,7 @@ import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import FileCard from '../components/FileCard.vue'
 import FileListItem from '../components/FileListItem.vue'
-import FolderTree from '../components/FolderTree.vue'
+import HoneycombTree from '../components/HoneycombTree.vue'
 import EmptyState from '../components/EmptyState.vue'
 import type { FileSummary, FolderNode } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
@@ -625,7 +612,7 @@ import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search, Folder } from '@element-plus/icons-vue'
+import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
 import type { TagDragMeta } from '../utils/drag'
@@ -1202,11 +1189,7 @@ async function handleFileDblClick(file: FileSummary) {
 // 全局视图多工作区树：记录当前激活的工作区（高亮用）
 const activeMultiTreeWorkspace = ref<string>('')
 
-function getWorkspaceName(ws: string): string {
-  return ws.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ws
-}
-
-async function handleFolderSelect(folderPath: string) {
+async function handleFolderSelect(folderPath: string, _wsPath?: string) {
   // 记录选中的工作区（用于高亮）
   for (const ws of appStore.workspaces) {
     const normalized = ws.replace(/\\/g, '/')
@@ -1688,7 +1671,7 @@ async function handleExternalDrop(event: DragEvent) {
 
 /* 树形视图样式 */
 .tree-view-container {
-  display: flex;
+  position: relative;
   height: 100%;
   overflow: hidden;
 }
@@ -1745,8 +1728,8 @@ async function handleExternalDrop(event: DragEvent) {
 }
 
 .tree-view-container .scroller-container {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .import-dialog-body {
