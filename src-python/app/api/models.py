@@ -136,6 +136,12 @@ class FolderCreateResultDTO(BaseModel):
     path: str
 
 
+class FolderDeleteRequestDTO(BaseModel):
+    """删除文件夹请求 DTO"""
+    root_path: str   # 工作区根目录（用于路径安全校验）
+    folder_path: str # 要删除的目录路径
+
+
 class FileRenameRequestDTO(BaseModel):
     """重命名文件请求 DTO"""
     new_name: str  # 仅文件名，不含路径

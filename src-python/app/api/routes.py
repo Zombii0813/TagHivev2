@@ -38,6 +38,7 @@ from .models import (
     FolderContentsDTO,
     FolderCreateRequestDTO,
     FolderCreateResultDTO,
+    FolderDeleteRequestDTO,
     FileRenameRequestDTO,
     FileMoveRequestDTO,
     FileCopyRequestDTO,
@@ -958,6 +959,42 @@ async def create_folder(
         raise HTTPException(status_code=500, detail=f"Failed to create folder: {exc}") from exc
 
     return FolderCreateResultDTO(name=target_path.name, path=target_path.as_posix())
+
+
+@router.post("/folders/delete")
+async def delete_folder(
+    payload: FolderDeleteRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """删除目录及其下所有文件（物理删除 + DB 清理）。"""
+    root_path = Path(payload.root_path)
+    folder_path = Path(payload.folder_path)
+
+    if not root_path.exists() or not root_path.is_dir():
+        raise HTTPException(status_code=404, detail="Workspace root not found")
+
+    if not folder_path.exists() or not folder_path.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    _ensure_path_within_root(folder_path, root_path)
+
+    # 收集该目录下所有 DB 文件记录（路径前缀匹配）
+    folder_posix = folder_path.as_posix().rstrip("/")
+    files_in_folder = repo.session.query(File).filter(
+        File.path.like(folder_posix + "/%") | (File.path == folder_posix)
+    ).all()
+    file_ids = [f.id for f in files_in_folder]
+    if file_ids:
+        repo.delete_files(file_ids)
+        repo.session.commit()
+
+    # 物理删除目录
+    try:
+        shutil.rmtree(str(folder_path))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete folder: {exc}") from exc
+
+    return {"deleted": folder_path.as_posix(), "files_removed": len(file_ids)}
 
 
 # ========== 健康检查 ==========

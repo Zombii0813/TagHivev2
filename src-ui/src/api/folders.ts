@@ -35,4 +35,11 @@ export const folderApi = {
       name,
     })
   },
+
+  async deleteFolder(rootPath: string, folderPath: string): Promise<void> {
+    return apiClient.post('/api/folders/delete', {
+      root_path: rootPath,
+      folder_path: folderPath,
+    })
+  },
 }

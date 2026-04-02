@@ -11,7 +11,7 @@
       :style="floatStyle"
     >
       <!-- 图标（始终可见，可拖拽）：裸六边形，无背景方框 -->
-      <div class="hc-icon" @mousedown.left.prevent="startDrag" @mouseenter="onEnter" @mouseleave="onLeave">
+      <div class="hc-icon" @mousedown.left.prevent="startDrag" @mouseenter="onEnter" @mouseleave="onLeave" @contextmenu.prevent.stop="handleIconCtx">
         <svg
           :viewBox="`${-R-2} ${-R-2} ${(R+2)*2} ${(R+2)*2}`"
           :width="ICON_W + 4"
@@ -19,13 +19,21 @@
           class="hc-icon-svg"
           style="overflow:visible"
         >
+          <defs>
+            <filter id="hc-icon-glass" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+              <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+            </filter>
+          </defs>
           <!-- 脉冲波纹（悬停时） -->
           <circle v-if="isExpanded" class="hc-ripple r1" cx="0" cy="0" :r="R * 0.8"/>
           <circle v-if="isExpanded" class="hc-ripple r2" cx="0" cy="0" :r="R * 0.8"/>
-          <!-- 六边形填充 -->
+          <!-- 毛玻璃底层 -->
+          <polygon :points="hexPts(R - 1)" class="hc-icon-glass" filter="url(#hc-icon-glass)"/>
+          <!-- 半透明色彩层 -->
           <polygon :points="hexPts(R - 1)" class="hc-icon-poly"/>
           <!-- 文字标签 -->
-          <text class="hc-icon-txt" text-anchor="middle" dy="4">{{ iconLabel }}</text>
+          <text class="hc-icon-txt" text-anchor="middle" dy="5">{{ iconLabel }}</text>
         </svg>
         <!-- 返回上级徽章（有上级时显示） -->
         <div
@@ -49,23 +57,20 @@
         @mouseenter="onEnter"
         @mouseleave="onLeave"
       >
-        <!-- 连线 -->
-        <line
-          v-for="e in edges"
-          :key="e.id"
-          :x1="e.x1" :y1="e.y1" :x2="e.x2" :y2="e.y2"
-          class="hc-edge"
-          :class="{ ring2: e.ring === 2 }"
-          :style="{ animationDelay: `${e.ring * 60}ms` }"
-        />
+        <!-- 毛玻璃滤镜定义 -->
+        <defs>
+          <filter id="hc-glass" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
 
-        <!-- 节点 -->
+<!-- 节点 -->
         <g
           v-for="node in visibleNodes"
           :key="node.path"
           :transform="`translate(${node.cx},${node.cy})`"
         >
-          <!-- 内层 g 负责动画（不含 translate，避免与 CSS transform 冲突） -->
           <g
             class="hc-node-g"
             :class="{
@@ -78,28 +83,51 @@
             @click.stop="handleClick(node)"
             @contextmenu.prevent.stop="handleCtx(node, $event)"
           >
-            <!-- 描边六边形 -->
+            <!-- 毛玻璃底层（模糊背景） -->
+            <polygon
+              :points="hexPts(node.r)"
+              class="hc-hex-glass"
+              :class="{ 'glass-selected': selectedPath === node.path }"
+              :style="hexFillStyle(node)"
+              filter="url(#hc-glass)"
+            />
+            <!-- 填色层（半透明，叠在模糊层上方） -->
+            <polygon
+              :points="hexPts(node.r)"
+              class="hc-hex-fill"
+              :class="{ 'fill-selected': selectedPath === node.path }"
+              :style="hexFillStyle(node)"
+            />
+            <!-- 描边层 -->
             <polygon
               :points="hexPts(node.r)"
               class="hc-hex-stroke"
               :class="{ 'stroke-selected': selectedPath === node.path }"
             />
-            <!-- 填色六边形 -->
-            <polygon
-              :points="hexPts(node.r - 2)"
-              class="hc-hex-fill"
-              :class="{ 'fill-selected': selectedPath === node.path }"
-              :style="hexFillStyle(node)"
-            />
             <!-- 翻页按钮：仅显示箭头符号 -->
             <text v-if="node.type === 'prev' || node.type === 'next'"
-              class="hc-page-arrow" text-anchor="middle" dy="5">{{ node.shortName }}</text>
-            <!-- 普通节点：文字 -->
+              class="hc-page-arrow" text-anchor="middle" dy="6">{{ node.shortName }}</text>
+            <!-- 普通节点：foreignObject 内嵌 HTML 文字 -->
             <template v-else>
-              <text class="hc-lbl" :class="{ 'hc-lbl-sm': node.ring === 2 }" text-anchor="middle" dy="-4">{{ node.shortName }}</text>
-              <text class="hc-cnt" text-anchor="middle" dy="10">{{ node.file_count }}</text>
+              <!-- 名称（支持 overflow ellipsis + 悬停滚动） -->
+              <foreignObject
+                :x="-node.r * 0.78"
+                :y="-node.r * 0.38"
+                :width="node.r * 1.56"
+                :height="node.r * 0.46"
+              >
+                <div class="hc-label-wrap" :class="{ 'hc-label-sm': node.ring === 2 }">
+                  <span
+                    class="hc-label-text"
+                    @mouseenter="startScroll"
+                    @mouseleave="stopScroll"
+                  >{{ node.name }}</span>
+                </div>
+              </foreignObject>
+              <!-- 文件数 -->
+              <text class="hc-cnt" text-anchor="middle" :dy="node.r * 0.22">{{ node.file_count }}</text>
               <!-- 有子目录指示点 -->
-              <circle v-if="node.hasChildren" class="hc-dot" cx="0" :cy="node.r*0.74" r="2.5"/>
+              <circle v-if="node.hasChildren" class="hc-dot" cx="0" :cy="node.r * 0.58" r="3"/>
             </template>
           </g>
         </g>
@@ -121,17 +149,22 @@
     placement="bottom-start"
     :width="148"
     popper-class="context-menu-popover"
-    @update:visible="(v:boolean)=>{ if(!v) ctxVisible=false }"
+    @update:visible="(v:boolean)=>{ if(!v){ ctxVisible=false; if(!showDlg) unlockExpanded() } }"
   >
     <div class="context-menu">
       <div class="context-menu-item" @click="openCreateDlg">
         <el-icon><FolderAdd /></el-icon>
         <span>新建子目录</span>
       </div>
+      <div class="context-menu-item context-menu-item--danger" @click="openDeleteDlg">
+        <el-icon><Delete /></el-icon>
+        <span>{{ isCtxNodeRoot ? '删除工作区' : '删除目录' }}</span>
+      </div>
     </div>
   </el-popover>
 
-  <el-dialog v-model="showDlg" title="新建子目录" width="400px" append-to-body destroy-on-close>
+  <el-dialog v-model="showDlg" title="新建子目录" width="400px" append-to-body destroy-on-close
+    @open="lockExpanded" @closed="unlockExpanded">
     <div class="create-hint">在 <strong>{{ ctxNode?.name }}</strong> 下创建</div>
     <el-input v-model="newName" placeholder="输入目录名称" maxlength="80" clearable style="margin-top:12px" @keyup.enter="confirmCreate"/>
     <template #footer>
@@ -143,10 +176,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Loading, FolderAdd } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Loading, FolderAdd, Delete } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
+import { useAppStore } from '../stores/app'
 import type { FolderNode } from '../types'
 
 // ─── Props & Emits ────────────────────────────────────────────
@@ -158,11 +192,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [path: string, wsPath?: string]
+  'workspace-removed': [wsPath: string]
 }>()
 
+const appStore = useAppStore()
+
 // ─── 几何 ─────────────────────────────────────────────────────
-const R    = 36          // 六边形外接圆半径（缩小，原44）
-const GAP  = 3           // 间距（缩小，原6）
+const R    = 45          // 六边形外接圆半径（+25%，原36）
+const GAP  = 4           // 间距
 const STEP = R * 2 + GAP // 相邻中心距
 
 // 图标六边形尺寸（与蜂巢中心节点同尺寸，直接裸露无背景）
@@ -193,7 +230,6 @@ interface HcNode {
   parentPath?: string  // ring-2 节点的父节点路径（用于 navStack）
 }
 interface StackEntry { node:FolderNode; wsPath:string }
-interface Edge { id:string; x1:number; y1:number; x2:number; y2:number; ring:number }
 interface Crumb { name:string; path:string; wsPath:string }
 
 // ─── 状态 ─────────────────────────────────────────────────────
@@ -225,7 +261,19 @@ function onEnter() {
   isExpanded.value = true
 }
 function onLeave() {
+  if (expandLocked.value) return  // 弹窗/菜单打开时不收起
   leaveTimer = setTimeout(() => { isExpanded.value = false }, 280)
+}
+
+// 锁定展开：弹窗打开期间阻止 onLeave 收起蜂巢
+const expandLocked = ref(false)
+function lockExpanded() {
+  expandLocked.value = true
+  isExpanded.value = true
+  if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+}
+function unlockExpanded() {
+  expandLocked.value = false
 }
 
 function clampToBoundary(x: number, y: number) {
@@ -516,6 +564,22 @@ function mkGrandNode(folder:FolderNode, cx:number, cy:number, wsIndex:number, ws
   }
 }
 
+// ─── 名称滚动（悬停时滚动显示全称） ─────────────────────────
+function startScroll(e: MouseEvent) {
+  const span = e.currentTarget as HTMLElement
+  const wrap = span.parentElement
+  if (!wrap) return
+  const overflow = span.scrollWidth - wrap.clientWidth
+  if (overflow <= 2) return  // 未截断，无需滚动
+  span.style.transition = `transform ${Math.max(1.2, overflow / 40)}s ease-in-out`
+  span.style.transform = `translateX(${-overflow}px)`
+}
+function stopScroll(e: MouseEvent) {
+  const span = e.currentTarget as HTMLElement
+  span.style.transition = 'transform 0.3s ease'
+  span.style.transform = 'translateX(0)'
+}
+
 function wsIdx(ws:string) {
   const list = props.workspaces ?? []
   const i = list.indexOf(ws)
@@ -523,33 +587,10 @@ function wsIdx(ws:string) {
 }
 
 // ─── 连线 ─────────────────────────────────────────────────────
-// 无中心节点，连线从图标原点(0,0)出发到各子节点
-const edges = computed<Edge[]>(() => {
-  const result: Edge[] = []
-  for (const n of visibleNodes.value) {
-    if (n.ring === 2 && n.parentPath) {
-      const parent = visibleNodes.value.find(p => p.path === n.parentPath)
-      if (parent) {
-        result.push({ id:`${parent.path}→${n.path}`, x1:parent.cx,y1:parent.cy, x2:n.cx,y2:n.cy, ring:2 })
-      }
-    } else {
-      result.push({ id:`__icon__→${n.path}`, x1:0,y1:0, x2:n.cx,y2:n.cy, ring:1 })
-    }
-  }
-  return result
-})
-
 // ─── 样式辅助 ─────────────────────────────────────────────────
 function hexFillStyle(node:HcNode): Record<string,string> {
-  if (node.ring === 2) {
-    return { fill: 'color-mix(in srgb, var(--color-bg-secondary) 55%, transparent)', opacity: '0.85' }
-  }
   if (node.type === 'prev' || node.type === 'next') {
-    const active = node.parentPath === 'active'
-    return { fill: active
-      ? 'color-mix(in srgb, var(--color-accent-light) 60%, transparent)'
-      : 'color-mix(in srgb, var(--color-bg-secondary) 40%, transparent)',
-      opacity: active ? '1' : '0.5' }
+    return { opacity: node.parentPath === 'active' ? '1' : '0.4' }
   }
   return {}
 }
@@ -677,8 +718,82 @@ function handleCtx(node:HcNode, e:MouseEvent) {
   window.dispatchEvent(new Event('close-context-menus'))
   ctxEl.style.left=`${e.clientX}px`; ctxEl.style.top=`${e.clientY}px`
   ctxAnchorEl.value = ctxEl; ctxVisible.value = true
+  lockExpanded()  // 右键菜单打开时锁定展开，防止鼠标移到 popover 上收起
 }
+
+// 图标右键：在当前根目录（navStack 底层）新建子目录
+function handleIconCtx(e: MouseEvent) {
+  const root = navStack.value[0]
+  if (!root) return
+  // 构造一个对应根目录的 HcNode 作为 ctxNode
+  ctxNode.value = {
+    path: root.node.path, name: root.node.name,
+    shortName: truncate(root.node.name, 7),
+    file_count: root.node.file_count, hasChildren: true,
+    children: root.node.children ?? [],
+    cx: 0, cy: 0, ring: 0, isCenter: true, isChild: false,
+    wsIndex: wsIdx(root.wsPath), wsPath: root.wsPath,
+    type: 'normal', r: R,
+  }
+  window.dispatchEvent(new Event('close-context-menus'))
+  ctxEl.style.left=`${e.clientX}px`; ctxEl.style.top=`${e.clientY}px`
+  ctxAnchorEl.value = ctxEl; ctxVisible.value = true
+  lockExpanded()
+}
+
 function openCreateDlg() { ctxVisible.value=false; newName.value=''; showDlg.value=true }
+
+// 当前右键节点是否是工作区根目录
+const isCtxNodeRoot = computed(() => {
+  const node = ctxNode.value
+  if (!node) return false
+  const wsList = props.workspaces ?? (props.rootPath ? [props.rootPath] : [])
+  return wsList.includes(node.path)
+})
+
+function openDeleteDlg() {
+  ctxVisible.value = false
+  const node = ctxNode.value
+  if (!node) return
+  const isRoot = isCtxNodeRoot.value
+  const label = isRoot ? `工作区「${node.name}」及其所有内容` : `目录「${node.name}」及其所有内容`
+  ElMessageBox.confirm(
+    `确定要删除${label}吗？此操作不可恢复。`,
+    isRoot ? '删除工作区' : '删除目录',
+    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' }
+  ).then(() => confirmDelete()).catch(() => { unlockExpanded() })
+}
+
+async function confirmDelete() {
+  const node = ctxNode.value
+  if (!node) return
+  const ws = node.wsPath
+  const isRoot = isCtxNodeRoot.value
+  try {
+    await folderApi.deleteFolder(ws, node.path)
+    ElMessage.success(`已删除：${node.name}`)
+    if (isRoot) {
+      // 删除工作区：从 store 移除，重置本地状态
+      appStore.removeWorkspace(ws)
+      wsTreeMap.value = new Map([...wsTreeMap.value].filter(([k]) => k !== ws))
+      navStack.value = navStack.value.filter(e => e.wsPath !== ws)
+      emit('workspace-removed', ws)
+    } else {
+      // 删除子目录：刷新工作区树，并修正 navStack（若被删目录在栈中则弹出）
+      await loadWs(ws)
+      navStack.value = navStack.value.filter(e => !e.node.path.startsWith(node.path))
+      const cur = navStack.value[navStack.value.length - 1]
+      if (cur) {
+        const rf = findNode(cur.node.path, cur.wsPath)
+        if (rf) navStack.value = [...navStack.value.slice(0, -1), { node: rf, wsPath: cur.wsPath }]
+      }
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || '删除失败')
+  } finally {
+    unlockExpanded()
+  }
+}
 
 async function confirmCreate() {
   const name = newName.value.trim()
@@ -774,16 +889,23 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   transform: scale(1.1);
 }
 .hc-icon-svg { display: block; }
+.hc-icon-glass {
+  fill: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
+}
 .hc-icon-poly {
-  fill: color-mix(in srgb, var(--color-accent-light) 90%, transparent);
+  fill: color-mix(in srgb, var(--color-accent-light) 45%, transparent);
   stroke: var(--color-accent);
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 .hc-icon-txt {
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
   fill: var(--color-accent);
   pointer-events: none;
+  paint-order: stroke fill;
+  stroke: color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
+  stroke-width: 3;
+  stroke-linejoin: round;
 }
 /* 返回上级徽章 */
 .hc-back-badge {
@@ -834,22 +956,21 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
               top  0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
-/* ─── 连线 ──────────────────────────────────── */
+/* ─── 连线（细实线，无虚线） ─────────────────── */
 .hc-edge {
-  stroke: color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
-  stroke-width: 1.4;
-  stroke-dasharray: 4 3;
+  stroke: color-mix(in srgb, var(--color-accent) 25%, var(--color-border));
+  stroke-width: 1;
+  opacity: 0.5;
   animation: edgeFadeIn 0.3s ease both;
 }
 .hc-edge.ring2 {
-  stroke: color-mix(in srgb, var(--color-border) 50%, transparent);
-  stroke-width: 0.8;
-  stroke-dasharray: 3 4;
-  opacity: 0.6;
+  stroke: color-mix(in srgb, var(--color-border) 60%, transparent);
+  stroke-width: 0.7;
+  opacity: 0.35;
 }
 @keyframes edgeFadeIn {
-  from { opacity: 0; stroke-dashoffset: 20; }
-  to   { opacity: 1; stroke-dashoffset: 0; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ─── 节点 ──────────────────────────────────── */
@@ -860,7 +981,7 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
 
 /* ring-2 孙节点 */
 .hc-node-g.is-ring2 {
-  opacity: 0.82;
+  opacity: 0.88;
 }
 .hc-node-g.is-ring2:hover { opacity: 1; }
 
@@ -873,59 +994,106 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   to   { opacity: 1; transform: scale(1); }
 }
 
-.hc-hex-stroke {
-  fill: none;
-  stroke: color-mix(in srgb, var(--color-border) 70%, transparent);
-  stroke-width: 1.2;
-  transition: stroke 0.18s;
+/* 毛玻璃底层：模糊背景色，形成磨砂质感 */
+.hc-hex-glass {
+  fill: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
+  transition: fill 0.15s;
 }
-.hc-hex-stroke.stroke-selected {
-  stroke: var(--color-accent);
-  stroke-width: 2;
+.hc-node-g:hover .hc-hex-glass {
+  fill: color-mix(in srgb, var(--color-bg-primary) 85%, transparent);
+}
+.hc-hex-glass.glass-selected {
+  fill: color-mix(in srgb, var(--color-accent-light) 55%, var(--color-bg-primary));
+}
+/* 翻页按钮毛玻璃底层：active 时强调色调 */
+.hc-node-g.is-page-btn .hc-hex-glass {
+  fill: color-mix(in srgb, var(--color-accent-light) 30%, var(--color-bg-primary));
+}
+.hc-node-g.is-page-btn:hover .hc-hex-glass {
+  fill: color-mix(in srgb, var(--color-accent-light) 50%, var(--color-bg-primary));
 }
 
+/* 半透明色彩层（叠在毛玻璃上） */
 .hc-hex-fill {
-  fill: color-mix(in srgb, var(--color-bg-secondary) 80%, transparent);
+  fill: color-mix(in srgb, var(--color-bg-secondary) 45%, transparent);
   transition: fill 0.15s;
 }
 .hc-node-g:hover .hc-hex-fill {
-  fill: color-mix(in srgb, var(--color-bg-hover) 88%, transparent);
+  fill: color-mix(in srgb, var(--color-bg-hover) 55%, transparent);
 }
 .hc-hex-fill.fill-selected {
-  fill: color-mix(in srgb, var(--color-accent-light) 85%, transparent);
+  fill: color-mix(in srgb, var(--color-accent-light) 40%, transparent);
 }
 
-/* 毛玻璃滤镜（SVG filter） */
-.hc-scene { filter: drop-shadow(0 4px 16px rgba(0,0,0,0.22)); }
+.hc-hex-stroke {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-border) 80%, transparent);
+  stroke-width: 1.5;
+  transition: stroke 0.18s, stroke-width 0.18s;
+}
+.hc-node-g:hover .hc-hex-stroke {
+  stroke: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  stroke-width: 2;
+}
+.hc-hex-stroke.stroke-selected {
+  stroke: var(--color-accent);
+  stroke-width: 2.5;
+}
 
-/* ─── 文字 ──────────────────────────────────── */
-.hc-lbl {
-  font-size: 11px;
-  font-weight: 500;
-  fill: var(--color-text-primary);
+/* 毛玻璃整体投影 */
+.hc-scene { filter: drop-shadow(0 6px 20px rgba(0,0,0,0.28)); }
+
+/* ─── 文字（foreignObject 内 HTML） ─────────── */
+.hc-label-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.hc-label-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
+  text-align: center;
+  /* 文字描边模拟（背景混合）用 text-shadow 代替 */
+  text-shadow: 0 0 6px var(--color-bg-primary), 0 0 6px var(--color-bg-primary);
   pointer-events: none;
-  paint-order: stroke fill;
-  stroke: color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
-  stroke-width: 3;
-  stroke-linejoin: round;
 }
-.hc-lbl-sm {
-  font-size: 9px;
+.hc-label-sm .hc-label-text {
+  font-size: 10px;
+  font-weight: 500;
 }
+/* 悬停时由 JS 驱动 translateX 滚动，CSS 只需保持 overflow hidden */
+.hc-node-g:hover .hc-label-wrap {
+  overflow: hidden;
+}
+.hc-node-g:hover .hc-label-text {
+  text-overflow: clip;
+  display: inline-block;
+}
+
 .hc-cnt {
-  font-size: 9.5px;
+  font-size: 11px;
   fill: var(--color-text-secondary);
   pointer-events: none;
+  font-weight: 400;
 }
 .hc-dot {
   fill: var(--color-accent);
-  opacity: 0.7;
+  opacity: 0.8;
 }
 .hc-page-arrow {
-  font-size: 16px;
+  font-size: 18px;
   fill: var(--color-accent);
   pointer-events: none;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* ─── 加载 ──────────────────────────────────── */
@@ -947,5 +1115,7 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   border-radius: 6px; transition: background 0.12s;
 }
 .context-menu-item:hover { background: var(--color-bg-secondary); }
+.context-menu-item--danger { color: var(--el-color-danger); }
+.context-menu-item--danger:hover { background: color-mix(in srgb, var(--el-color-danger) 10%, transparent); }
 .create-hint { font-size: 13px; color: var(--color-text-secondary); }
 </style>
