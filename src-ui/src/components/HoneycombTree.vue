@@ -10,15 +10,31 @@
       :class="{ expanded: isExpanded, dragging: isDragging }"
       :style="floatStyle"
     >
-      <!-- 图标（始终可见，可拖拽） -->
+      <!-- 图标（始终可见，可拖拽）：裸六边形，无背景方框 -->
       <div class="hc-icon" @mousedown.left.prevent="startDrag" @mouseenter="onEnter" @mouseleave="onLeave">
-        <svg viewBox="-13 -11 26 22" class="hc-icon-svg">
+        <svg
+          :viewBox="`${-R-2} ${-R-2} ${(R+2)*2} ${(R+2)*2}`"
+          :width="ICON_W + 4"
+          :height="ICON_H + 4"
+          class="hc-icon-svg"
+          style="overflow:visible"
+        >
           <!-- 脉冲波纹（悬停时） -->
-          <circle v-if="isExpanded" class="hc-ripple r1" cx="0" cy="0" r="11"/>
-          <circle v-if="isExpanded" class="hc-ripple r2" cx="0" cy="0" r="11"/>
-          <polygon :points="iconHexPts" class="hc-icon-poly"/>
-          <text class="hc-icon-txt" text-anchor="middle" dy="3.5">{{ iconLabel }}</text>
+          <circle v-if="isExpanded" class="hc-ripple r1" cx="0" cy="0" :r="R * 0.8"/>
+          <circle v-if="isExpanded" class="hc-ripple r2" cx="0" cy="0" :r="R * 0.8"/>
+          <!-- 六边形填充 -->
+          <polygon :points="hexPts(R - 1)" class="hc-icon-poly"/>
+          <!-- 文字标签 -->
+          <text class="hc-icon-txt" text-anchor="middle" dy="4">{{ iconLabel }}</text>
         </svg>
+        <!-- 返回上级徽章（有上级时显示） -->
+        <div
+          v-if="canGoBack"
+          class="hc-back-badge"
+          title="返回上级"
+          @mousedown.stop
+          @click.stop="goBack"
+        >↩</div>
       </div>
 
       <!-- 蜂巢 SVG（展开时，以图标为原点向外扩散） -->
@@ -53,31 +69,26 @@
           <g
             class="hc-node-g"
             :class="{
-              'is-center': node.isCenter,
-              'is-child': node.isChild,
               'is-ring2': node.ring === 2,
               'is-page-btn': node.type === 'prev' || node.type === 'next',
               'is-page-inactive': (node.type === 'prev' || node.type === 'next') && node.parentPath !== 'active',
+              'is-selected': selectedPath === node.path,
             }"
             :style="{ animationDelay: `${node.ring * 60}ms` }"
             @click.stop="handleClick(node)"
             @contextmenu.prevent.stop="handleCtx(node, $event)"
           >
-            <!-- 描边六边形（尺寸按 node.r） -->
+            <!-- 描边六边形 -->
             <polygon
               :points="hexPts(node.r)"
               class="hc-hex-stroke"
-              :class="{ 'stroke-center': node.isCenter, 'stroke-selected': selectedPath === node.path }"
-              :style="node.isCenter ? { stroke: centerColor(node) } : {}"
+              :class="{ 'stroke-selected': selectedPath === node.path }"
             />
             <!-- 填色六边形 -->
             <polygon
               :points="hexPts(node.r - 2)"
               class="hc-hex-fill"
-              :class="{
-                'fill-center': node.isCenter,
-                'fill-selected': selectedPath === node.path,
-              }"
+              :class="{ 'fill-selected': selectedPath === node.path }"
               :style="hexFillStyle(node)"
             />
             <!-- 翻页按钮：仅显示箭头符号 -->
@@ -88,7 +99,7 @@
               <text class="hc-lbl" :class="{ 'hc-lbl-sm': node.ring === 2 }" text-anchor="middle" dy="-4">{{ node.shortName }}</text>
               <text class="hc-cnt" text-anchor="middle" dy="10">{{ node.file_count }}</text>
               <!-- 有子目录指示点 -->
-              <circle v-if="node.isChild && node.hasChildren" class="hc-dot" cx="0" :cy="node.r*0.74" r="2.5"/>
+              <circle v-if="node.hasChildren" class="hc-dot" cx="0" :cy="node.r*0.74" r="2.5"/>
             </template>
           </g>
         </g>
@@ -150,9 +161,14 @@ const emit = defineEmits<{
 }>()
 
 // ─── 几何 ─────────────────────────────────────────────────────
-const R    = 44          // 六边形外接圆半径
-const GAP  = 6           // 间距
+const R    = 36          // 六边形外接圆半径（缩小，原44）
+const GAP  = 3           // 间距（缩小，原6）
 const STEP = R * 2 + GAP // 相邻中心距
+
+// 图标六边形尺寸（与蜂巢中心节点同尺寸，直接裸露无背景）
+const ICON_R = R         // 图标六边形半径与节点一致
+const ICON_W = ICON_R * 2
+const ICON_H = ICON_R * Math.sqrt(3)
 
 function makePts(r: number) {
   return Array.from({length:6},(_,i)=>{
@@ -160,16 +176,9 @@ function makePts(r: number) {
     return `${(r*Math.cos(a)).toFixed(2)},${(r*Math.sin(a)).toFixed(2)}`
   }).join(' ')
 }
-const iconHexPts  = makePts(10)
 // 动态生成任意半径的六边形顶点字符串
 function hexPts(r: number) { return makePts(r) }
 
-// 轴坐标 → 像素（相对中心 0,0）
-function axial(q:number, r:number) {
-  return { x: STEP*(q + r*0.5), y: STEP*(r*Math.sqrt(3)/2) }
-}
-
-const wsColors = ['#5b8dee','#e85d75','#f7b731','#20bf6b','#a55eea','#fd9644']
 
 // ─── 类型 ─────────────────────────────────────────────────────
 type NodeType = 'normal' | 'prev' | 'next'
@@ -193,7 +202,7 @@ const wsTreeMap   = ref<Map<string,FolderNode>>(new Map())
 const navStack    = ref<StackEntry[]>([])
 const selectedPath = ref('')
 const pageOffset  = ref(0)   // 分页：当前页起始索引
-const PAGE_SIZE   = 6        // 每页最多6个子节点（第1环槽位数）
+const PAGE_SIZE   = 12       // 每页最多12个子节点（ring-1 有6个槽 + ring-2 外圈的12个方向）
 
 // 展开/收起：用 document mousemove 检测鼠标是否在浮层任意子元素范围内
 const isExpanded = ref(false)
@@ -205,9 +214,6 @@ const isDragging = ref(false)
 const posX = ref(-9999)
 const posY = ref(-9999)
 const posInitialized = ref(false)
-
-const ICON_W = 44
-const ICON_H = 50
 
 const floatStyle = computed(() => ({
   transform: `translate(${posX.value}px, ${posY.value}px)`,
@@ -268,13 +274,10 @@ const breadcrumbs = computed<Crumb[]>(() =>
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 void breadcrumbs  // 抑制未使用警告
 
-// ─── 蜂巢场景：SVG 位置相对 icon 中心偏移 ────────────────────
-// icon 中心在 floatRef 坐标系中大约是 (ICON_W/2, ICON_H/2)
-// SVG 以该点为原点（即蜂巢中心 = 图标中心 = 坐标系原点）
-// 通过 position: absolute + top/left 偏移定位
-
+// ─── 蜂巢场景：SVG 位置相对 icon 中心偏移，并感知边界 ──────────
 const PAD = R + 8
 
+// 边界感知偏移：计算将蜂巢整体平移多少才能不溢出边界
 const bounds = computed(() => {
   if (!visibleNodes.value.length) return { minX:0, maxX:0, minY:0, maxY:0 }
   let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity
@@ -293,17 +296,85 @@ const sceneViewBox = computed(() => {
   return `${b.minX} ${b.minY} ${b.maxX-b.minX} ${b.maxY-b.minY}`
 })
 
-// SVG 左上角相对 hc-float 的偏移（让 0,0 = 图标中心）
+// SVG 左上角相对 hc-float 的偏移：让 SVG 坐标(0,0) 始终对准图标中心
+// 边界感知完全由 BFS 的 slotMargin 负责，此处不做额外平移
 const sceneStyle = computed(() => {
   const b = bounds.value
-  // 图标中心在 hc-float 中的坐标
   const icx = ICON_W / 2
   const icy = ICON_H / 2
   return {
-    left: `${icx - (-b.minX)}px`,
-    top:  `${icy - (-b.minY)}px`,
+    left: `${icx + b.minX}px`,
+    top:  `${icy + b.minY}px`,
   }
 })
+
+
+// ─── 几何辅助 ─────────────────────────────────────────────────
+// 六边形轴坐标系的6个相邻方向（pointy-top）
+const DIRS6: [number,number][] = [[1,-1],[1,0],[0,1],[-1,1],[-1,0],[0,-1]]
+
+// 轴坐标 key（整数，无浮点误差）
+function axKey(q: number, r: number): string { return `${q},${r}` }
+
+// 轴坐标 → 像素（相对 SVG 原点，即图标中心）
+function axialPx(q: number, r: number): {x:number, y:number} {
+  return { x: STEP*(q + r*0.5), y: STEP*(r*Math.sqrt(3)/2) }
+}
+
+// 某轴坐标位置的节点在边界内的富裕距离（越大越安全，负值=溢出）
+function slotMargin(q: number, r: number): number {
+  const el = props.boundary
+  if (!el) return Infinity
+  const br = el.getBoundingClientRect()
+  const icx = posX.value + ICON_W / 2
+  const icy = posY.value + ICON_H / 2
+  const margin = R + 4
+  const px = axialPx(q, r)
+  const sx = icx + px.x
+  const sy = icy + px.y
+  return Math.min(sx - margin - br.left, br.right - (sx + margin),
+                  sy - margin - br.top,  br.bottom - (sy + margin))
+}
+
+// ─── BFS 槽位生成：从中心(0,0)向外波浪扩散，保证结构连续 ──────
+// 返回按扩散顺序排列的轴坐标列表（已剔除中心自身）
+// 策略：同一波内优先选边界内的格子（margin >= 0）；边界外的格子不放节点，
+// 但仍加入 frontier 继续向外探索，从而能绕过边缘找到更内侧的格子
+function bfsSlots(maxSlots: number): {q:number, r:number}[] {
+  const result: {q:number, r:number}[] = []
+  // seen：防止同一格子重复进入候选队列
+  const seen = new Set<string>()
+  seen.add(axKey(0, 0))
+
+  let frontier: {q:number, r:number}[] = [{q:0, r:0}]
+
+  while (result.length < maxSlots && frontier.length > 0) {
+    const candidates: {q:number, r:number, margin:number}[] = []
+    for (const {q, r} of frontier) {
+      for (const [dq, dr] of DIRS6) {
+        const nq = q + dq, nr = r + dr
+        const k = axKey(nq, nr)
+        if (!seen.has(k)) {
+          seen.add(k)
+          candidates.push({ q: nq, r: nr, margin: slotMargin(nq, nr) })
+        }
+      }
+    }
+    // 同一波内按 margin 降序：边界内(margin>=0)在前，边界外在后
+    candidates.sort((a, b) => b.margin - a.margin)
+
+    // 下一波的 frontier 包含本波所有候选格（无论是否在边界内，都继续扩散）
+    frontier = candidates.map(c => ({ q: c.q, r: c.r }))
+
+    // 只把边界内的格子放入 result；边界外的跳过（但 frontier 仍保留，用于绕行）
+    for (const c of candidates) {
+      if (c.margin < 0) continue
+      result.push({ q: c.q, r: c.r })
+      if (result.length >= maxSlots) break
+    }
+  }
+  return result
+}
 
 // ─── 布局 ─────────────────────────────────────────────────────
 const visibleNodes = computed<HcNode[]>(() => {
@@ -320,108 +391,91 @@ function layoutRoots(): HcNode[] {
     if (!root) return []
     return layoutCenter({ node:root, wsPath:ws })
   }
+  // 多工作区：BFS 扩散分配槽位
+  const slots = bfsSlots(wsList.length)
   return wsList.flatMap((ws, wi) => {
     const root = wsTreeMap.value.get(ws)
     if (!root) return []
-    const total = wsList.length
-    const ang = (2*Math.PI*wi)/total - Math.PI/2
-    const dist = total<=3 ? STEP : STEP*1.4
-    return [mkNode(root, dist*Math.cos(ang), dist*Math.sin(ang), 0, false, true, wi, ws)]
+    const s = slots[wi] ?? slots[0]
+    const px = axialPx(s.q, s.r)
+    return [mkNode(root, px.x, px.y, 1, false, true, wi, ws)]
   })
 }
 
 function layoutCenter(entry: StackEntry): HcNode[] {
-  const { node:center, wsPath:ws } = entry
+  const { node: center, wsPath: ws } = entry
   const wi = wsIdx(ws)
   const nodes: HcNode[] = []
 
-  // 中心节点（ring=0）
-  nodes.push(mkNode(center, 0, 0, 0, true, false, wi, ws))
-
-  // 按文件数降序排列子目录（最重要的优先展示）
-  const allChildren = [...(center.children ?? [])].sort((a,b) => (b.file_count??0) - (a.file_count??0))
+  const allChildren = [...(center.children ?? [])].sort((a, b) => (b.file_count ?? 0) - (a.file_count ?? 0))
   const total = allChildren.length
-
   if (total === 0) return nodes
 
-  // 当前页的子节点
   const pageCh = allChildren.slice(pageOffset.value, pageOffset.value + PAGE_SIZE)
   const needPaging = total > PAGE_SIZE
 
-  // 生成第1环的6个轴坐标槽位（固定方向）
-  const ring1Slots = getRing1Slots()
-
-  // 分配槽位：翻页按钮占两个槽位（当需要分页时）
   if (needPaging) {
-    // prev 按钮（仅当不在第一页时显示为激活状态）
-    const prevSlot = ring1Slots[5]  // 左下方向
-    const nextSlot = ring1Slots[2]  // 右下方向
-    nodes.push(mkPageNode('prev', prevSlot.x, prevSlot.y, wi, ws, pageOffset.value > 0))
-    nodes.push(mkPageNode('next', nextSlot.x, nextSlot.y, wi, ws, pageOffset.value + PAGE_SIZE < total))
-
-    // 剩余4个槽位给子节点（槽位 0,1,3,4）
-    const childSlots = [ring1Slots[0], ring1Slots[1], ring1Slots[3], ring1Slots[4]]
-    pageCh.slice(0, 4).forEach((child, i) => {
-      nodes.push(mkNode(child, childSlots[i].x, childSlots[i].y, 1, false, true, wi, ws))
+    // 分页模式：用 BFS 获取足够槽位，最后两个给翻页按钮
+    const need = pageCh.length + 2
+    const slots = bfsSlots(need)
+    // 翻页按钮放在 BFS 最末两个槽（最远/最边缘，不占中心好位置）
+    const prevS = slots[need - 2]
+    const nextS = slots[need - 1]
+    const prevPx = axialPx(prevS.q, prevS.r)
+    const nextPx = axialPx(nextS.q, nextS.r)
+    nodes.push(mkPageNode('prev', prevPx.x, prevPx.y, wi, ws, pageOffset.value > 0))
+    nodes.push(mkPageNode('next', nextPx.x, nextPx.y, wi, ws, pageOffset.value + PAGE_SIZE < total))
+    slots.slice(0, pageCh.length).forEach((s, i) => {
+      const px = axialPx(s.q, s.r)
+      nodes.push(mkNode(pageCh[i], px.x, px.y, 1, false, true, wi, ws))
     })
   } else {
-    // 不分页：所有槽位给子节点（≤6个）
-    pageCh.forEach((child, i) => {
-      nodes.push(mkNode(child, ring1Slots[i].x, ring1Slots[i].y, 1, false, true, wi, ws))
+    // 无分页：BFS 扩散填充子节点
+    const slots = bfsSlots(pageCh.length)
+    const occupied = new Set<string>(['0,0'])
+    slots.forEach((s, i) => {
+      occupied.add(axKey(s.q, s.r))
+      const px = axialPx(s.q, s.r)
+      nodes.push(mkNode(pageCh[i], px.x, px.y, 1, false, true, wi, ws))
     })
 
-    // 动态决定是否展示 ring-2（孙节点）
-    const grandTotal = pageCh.reduce((s, c) => s + (c.children?.length ?? 0), 0)
-    if (grandTotal > 0 && grandTotal <= 12) {
-      const ring1Nodes = nodes.filter(n => n.ring === 1)
-      const slots2 = getRing2Slots(ring1Nodes, ring1Slots.slice(0, pageCh.length))
-      ring1Nodes.forEach((r1Node, idx) => {
-        const grandChildren = (r1Node.children ?? [])
-          .slice(0, Math.max(1, Math.floor(12 / ring1Nodes.length)))
-        grandChildren.forEach((gc, gi) => {
-          const slot = slots2[idx]?.[gi]
-          if (!slot) return
-          nodes.push(mkGrandNode(gc, slot.x, slot.y, wi, ws, r1Node.path))
+    // 孙节点：仅当子节点 ≤ 6 且总孙节点不多时展示
+    if (pageCh.length <= 6) {
+      const grandTotal = pageCh.reduce((s, c) => s + (c.children?.length ?? 0), 0)
+      if (grandTotal > 0 && grandTotal <= 12) {
+        // 从每个 ring-1 子节点出发，BFS 找其外侧未占用槽
+        const ring1Nodes = nodes.filter(n => n.ring === 1)
+        ring1Nodes.forEach(r1Node => {
+          const grandChildren = (r1Node.children ?? [])
+            .slice(0, Math.max(1, Math.floor(12 / ring1Nodes.length)))
+          // 找 r1Node 轴坐标反推的邻格
+          const candidates: {q:number,r:number,margin:number}[] = []
+          for (const [dq, dr] of DIRS6) {
+            // 从 r1Node 像素坐标推算邻格轴坐标（逆变换 axialPx）
+            const nx = r1Node.cx + STEP*(dq + dr*0.5)
+            const ny = r1Node.cy + STEP*(dr*Math.sqrt(3)/2)
+            // 用像素坐标近似还原轴坐标（已知网格，直接算）
+            const nr = Math.round(ny / (STEP * Math.sqrt(3) / 2))
+            const nq = Math.round(nx / STEP - nr * 0.5)
+            const k = axKey(nq, nr)
+            if (!occupied.has(k)) {
+              candidates.push({ q: nq, r: nr, margin: slotMargin(nq, nr) })
+            }
+          }
+          candidates.sort((a, b) => b.margin - a.margin)
+          grandChildren.forEach((gc, gi) => {
+            const s = candidates[gi]
+            if (!s) return
+            occupied.add(axKey(s.q, s.r))
+            const px = axialPx(s.q, s.r)
+            nodes.push(mkGrandNode(gc, px.x, px.y, wi, ws, r1Node.path))
+          })
         })
-      })
+      }
     }
   }
 
   return nodes
-}
-
-// 第1环的6个轴坐标（固定方向，平顶六边形邻居方向）
-function getRing1Slots(): {x:number, y:number}[] {
-  // 6个方向的轴坐标 (q, r)，从右上顺时针
-  const dirs: [number,number][] = [[1,-1],[1,0],[0,1],[-1,1],[-1,0],[0,-1]]
-  return dirs.map(([q,r]) => axial(q, r))
-}
-
-// 为 ring-1 节点计算 ring-2 的可用槽位
-// 每个 ring-1 节点向外延伸，取不与其他 ring-1 冲突的位置
-function getRing2Slots(ring1Nodes: HcNode[], ring1Positions: {x:number, y:number}[]): {x:number, y:number}[][] {
-  const occupied = new Set(ring1Positions.map(p => `${Math.round(p.x)},${Math.round(p.y)}`))
-  occupied.add('0,0')  // 中心也排除
-
-  // ring-2 方向：从 ring-1 轴坐标继续向外延伸的相邻方向
-  // 每个 ring-1 节点的轴坐标 (q,r)，其外侧邻居（排除中心方向）
-  const dirs6: [number,number][] = [[1,-1],[1,0],[0,1],[-1,1],[-1,0],[0,-1]]
-
-  return ring1Nodes.map(n => {
-    // 找到该节点在 ring-1 中对应的轴坐标（通过像素坐标反推）
-    const candidates: {x:number, y:number}[] = []
-    // 从节点位置出发，向6个方向各延伸一步 STEP，取不冲突的
-    for (const [dq, dr] of dirs6) {
-      const nx = n.cx + STEP * (dq + dr * 0.5)
-      const ny = n.cy + STEP * (dr * Math.sqrt(3) / 2)
-      const key = `${Math.round(nx)},${Math.round(ny)}`
-      if (!occupied.has(key)) {
-        candidates.push({ x: nx, y: ny })
-      }
-    }
-    // 最多返回3个候选槽位
-    return candidates.slice(0, 3)
-  })
 }
 
 function mkNode(folder:FolderNode, cx:number, cy:number, ring:number, isCenter:boolean, isChild:boolean, wsIndex:number, wsPath:string): HcNode {
@@ -469,36 +523,24 @@ function wsIdx(ws:string) {
 }
 
 // ─── 连线 ─────────────────────────────────────────────────────
+// 无中心节点，连线从图标原点(0,0)出发到各子节点
 const edges = computed<Edge[]>(() => {
-  const center = visibleNodes.value.find(n=>n.isCenter)
-  if (!center) return []
   const result: Edge[] = []
   for (const n of visibleNodes.value) {
-    if (n.isCenter) continue
     if (n.ring === 2 && n.parentPath) {
-      // ring-2：连到父 ring-1 节点
       const parent = visibleNodes.value.find(p => p.path === n.parentPath)
       if (parent) {
         result.push({ id:`${parent.path}→${n.path}`, x1:parent.cx,y1:parent.cy, x2:n.cx,y2:n.cy, ring:2 })
       }
-    } else if (n.type !== 'prev' && n.type !== 'next') {
-      // ring-1：连到中心
-      result.push({ id:`${center.path}→${n.path}`, x1:0,y1:0, x2:n.cx,y2:n.cy, ring:n.ring })
+    } else {
+      result.push({ id:`__icon__→${n.path}`, x1:0,y1:0, x2:n.cx,y2:n.cy, ring:1 })
     }
   }
   return result
 })
 
 // ─── 样式辅助 ─────────────────────────────────────────────────
-function centerColor(node:HcNode) {
-  return wsColors[node.wsIndex % wsColors.length]
-}
-
 function hexFillStyle(node:HcNode): Record<string,string> {
-  if (node.isCenter) {
-    const c = wsColors[node.wsIndex % wsColors.length]
-    return { fill: c + '30' }
-  }
   if (node.ring === 2) {
     return { fill: 'color-mix(in srgb, var(--color-bg-secondary) 55%, transparent)', opacity: '0.85' }
   }
@@ -513,6 +555,16 @@ function hexFillStyle(node:HcNode): Record<string,string> {
 }
 
 // ─── 交互 ─────────────────────────────────────────────────────
+const canGoBack = computed(() => navStack.value.length > 1)
+
+function goBack() {
+  if (!canGoBack.value) return
+  navStack.value = navStack.value.slice(0, -1)
+  const top = navStack.value[navStack.value.length - 1]
+  selectedPath.value = top.node.path
+  emit('select', top.node.path, top.wsPath)
+}
+
 function handleClick(node: HcNode) {
   // 翻页按钮
   if (node.type === 'prev') {
@@ -528,20 +580,7 @@ function handleClick(node: HcNode) {
 
   if (node.path === '__ws_root__') { navStack.value = []; return }
 
-  if (node.isCenter) {
-    // 点击中心 = 返回上一级
-    if (navStack.value.length > 1) {
-      navStack.value = navStack.value.slice(0,-1)
-      const top = navStack.value[navStack.value.length-1]
-      selectedPath.value = top.node.path
-      emit('select', top.node.path, top.wsPath)
-    } else if (navStack.value.length===1 && (props.workspaces??[]).length>1) {
-      navStack.value = []
-    }
-    return
-  }
-
-  // ring-2 孙节点：push ring-1 父节点 + 自身
+  // ring-2 孙节点
   if (node.ring === 2 && node.parentPath) {
     const parentFound = findNode(node.parentPath, node.wsPath)
     const selfFound   = findNode(node.path, node.wsPath)
@@ -714,8 +753,6 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
 
 /* ─── 图标 ──────────────────────────────────── */
 .hc-icon {
-  width: 44px;
-  height: 50px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -723,49 +760,68 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   pointer-events: all;
   cursor: grab;
   user-select: none;
-  border-radius: 14px;
   position: relative;
   z-index: 1;
-  backdrop-filter: blur(18px) saturate(1.9);
-  -webkit-backdrop-filter: blur(18px) saturate(1.9);
-  background: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.2), 0 1px 4px rgba(0,0,0,0.1);
-  transition: transform 0.15s, box-shadow 0.15s;
+  /* 无背景、无边框、无圆角——直接裸露六边形 */
+  transition: transform 0.15s;
+  filter: drop-shadow(0 3px 10px rgba(0,0,0,0.28));
 }
 .hc-float.expanded .hc-icon {
   transform: scale(1.06);
-  box-shadow: 0 6px 24px rgba(0,0,0,0.26);
 }
 .hc-float.dragging .hc-icon {
   cursor: grabbing;
   transform: scale(1.1);
 }
-.hc-icon-svg { width: 28px; height: 24px; overflow: visible; }
+.hc-icon-svg { display: block; }
 .hc-icon-poly {
-  fill: var(--color-accent-light);
+  fill: color-mix(in srgb, var(--color-accent-light) 90%, transparent);
   stroke: var(--color-accent);
-  stroke-width: 1.4;
+  stroke-width: 1.8;
 }
 .hc-icon-txt {
-  font-size: 7px;
+  font-size: 12px;
   font-weight: 700;
   fill: var(--color-accent);
   pointer-events: none;
+}
+/* 返回上级徽章 */
+.hc-back-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: all;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  transition: transform 0.12s, background 0.12s;
+  z-index: 2;
+}
+.hc-back-badge:hover {
+  transform: scale(1.18);
+  background: var(--color-accent-hover, var(--color-accent));
 }
 
 /* 脉冲波纹 */
 .hc-ripple {
   fill: none;
   stroke: var(--color-accent);
-  stroke-width: 1;
+  stroke-width: 1.2;
   opacity: 0;
+  transform-origin: 0 0;
   animation: ripple 1.6s ease-out infinite;
 }
 .hc-ripple.r2 { animation-delay: 0.8s; }
 @keyframes ripple {
-  0%   { r: 11; opacity: 0.55; }
-  100% { r: 22; opacity: 0; }
+  0%   { opacity: 0.5; transform: scale(1); }
+  100% { opacity: 0;   transform: scale(1.8); }
 }
 
 /* ─── 蜂巢场景 SVG ──────────────────────────── */
@@ -774,6 +830,8 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   pointer-events: all;
   overflow: visible;
   /* left/top 由 sceneStyle 控制，让 SVG 原点 = 图标中心 */
+  transition: left 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              top  0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* ─── 连线 ──────────────────────────────────── */
@@ -799,16 +857,14 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   cursor: pointer;
   animation: nodeSpawn 0.32s cubic-bezier(0.34,1.56,0.64,1) both;
 }
-.hc-node-g.is-center { cursor: pointer; }
 
-/* ring-2 孙节点：整体半透明，动画延迟更长 */
+/* ring-2 孙节点 */
 .hc-node-g.is-ring2 {
   opacity: 0.82;
-  animation: nodeSpawn 0.32s cubic-bezier(0.34,1.56,0.64,1) both;
 }
 .hc-node-g.is-ring2:hover { opacity: 1; }
 
-/* 翻页按钮：不激活时半透明 */
+/* 翻页按钮 */
 .hc-node-g.is-page-btn { cursor: pointer; }
 .hc-node-g.is-page-inactive { cursor: default; pointer-events: none; }
 
@@ -823,10 +879,6 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   stroke-width: 1.2;
   transition: stroke 0.18s;
 }
-.hc-hex-stroke.stroke-center {
-  stroke-width: 2.2;
-  /* stroke 由 inline style 给出（工作区颜色） */
-}
 .hc-hex-stroke.stroke-selected {
   stroke: var(--color-accent);
   stroke-width: 2;
@@ -838,9 +890,6 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
 }
 .hc-node-g:hover .hc-hex-fill {
   fill: color-mix(in srgb, var(--color-bg-hover) 88%, transparent);
-}
-.hc-hex-fill.fill-center {
-  /* fill 由 inline style 给出 */
 }
 .hc-hex-fill.fill-selected {
   fill: color-mix(in srgb, var(--color-accent-light) 85%, transparent);
