@@ -726,19 +726,33 @@ watch(() => appStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
   }
 })
 
+function restoreCurrentView() {
+  // folder 模式且在子目录中：回到该子目录的文件列表
+  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
+    fileStore.loadFolderContents(fileStore.currentFolderPath)
+  } else if (appStore.currentWorkspace) {
+    fileStore.search({ root: appStore.currentWorkspace })
+  } else {
+    fileStore.search({})
+  }
+}
+
+function getSearchRoot(): string | undefined {
+  // folder 模式且在子目录中：搜索范围限定在当前子目录
+  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
+    return fileStore.currentFolderPath
+  }
+  return appStore.currentWorkspace || undefined
+}
+
 function handleTagClick(tagId: number, event: MouseEvent) {
   const multi = event.ctrlKey || event.metaKey
 
   // 检查是否点击的是已选中的标签
   if (tagStore.selectedTagIds.has(tagId) && !multi) {
-    // 如果是已选中的标签且没有按多选键，则取消选择
+    // 如果是已选中的标签且没有按多选键，则取消选择，回到当前目录视图
     tagStore.clearSelection()
-    // 重新搜索当前工作区的文件
-    if (appStore.currentWorkspace) {
-      fileStore.search({ root: appStore.currentWorkspace })
-    } else {
-      fileStore.search({})
-    }
+    restoreCurrentView()
     return
   }
 
@@ -747,28 +761,18 @@ function handleTagClick(tagId: number, event: MouseEvent) {
   // 更新文件搜索
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
-      root: appStore.currentWorkspace || undefined,
+      root: getSearchRoot(),
       tags: Array.from(tagStore.selectedTagIds),
       match_all_tags: false,
     })
   } else {
-    // 如果没有选中任何标签，搜索当前工作区
-    if (appStore.currentWorkspace) {
-      fileStore.search({ root: appStore.currentWorkspace })
-    } else {
-      fileStore.search({})
-    }
+    restoreCurrentView()
   }
 }
 
 function clearFilter() {
   tagStore.clearSelection()
-  // 重新搜索当前工作区的文件
-  if (appStore.currentWorkspace) {
-    fileStore.search({ root: appStore.currentWorkspace })
-  } else {
-    fileStore.search({})
-  }
+  restoreCurrentView()
 }
 
 async function createTag() {
@@ -887,11 +891,7 @@ async function confirmDeleteTag() {
     // 如果该标签正在被过滤，清除过滤
     if (tagStore.selectedTagIds.has(tag.id)) {
       tagStore.clearSelection()
-      if (appStore.currentWorkspace) {
-        fileStore.search({ root: appStore.currentWorkspace })
-      } else {
-        fileStore.search({})
-      }
+      restoreCurrentView()
     }
 
     ElMessage.success('标签删除成功')

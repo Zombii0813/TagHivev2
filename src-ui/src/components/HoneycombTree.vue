@@ -80,6 +80,8 @@
               'is-selected': selectedPath === node.path,
             }"
             :style="{ animationDelay: `${node.ring * 60}ms` }"
+            @mouseenter="startScroll"
+            @mouseleave="stopScroll"
             @click.stop="handleClick(node)"
             @contextmenu.prevent.stop="handleCtx(node, $event)"
           >
@@ -115,17 +117,17 @@
                 :y="-node.r * 0.38"
                 :width="node.r * 1.56"
                 :height="node.r * 0.46"
+                style="overflow: visible"
               >
-                <div class="hc-label-wrap" :class="{ 'hc-label-sm': node.ring === 2 }">
-                  <span
-                    class="hc-label-text"
-                    @mouseenter="startScroll"
-                    @mouseleave="stopScroll"
-                  >{{ node.name }}</span>
+                <div
+                  class="hc-label-wrap"
+                  :class="{ 'hc-label-sm': node.ring === 2 }"
+                >
+                  <span class="hc-label-text">{{ node.name }}</span>
                 </div>
               </foreignObject>
               <!-- 文件数 -->
-              <text class="hc-cnt" text-anchor="middle" :dy="node.r * 0.22">{{ node.file_count }}</text>
+              <text class="hc-cnt" text-anchor="middle" :dy="node.r * 0.42">{{ node.file_count }}</text>
               <!-- 有子目录指示点 -->
               <circle v-if="node.hasChildren" class="hc-dot" cx="0" :cy="node.r * 0.58" r="3"/>
             </template>
@@ -565,20 +567,59 @@ function mkGrandNode(folder:FolderNode, cx:number, cy:number, wsIndex:number, ws
   }
 }
 
-// ─── 名称滚动（悬停时滚动显示全称） ─────────────────────────
+// ─── 名称滚动（悬停时循环往返滚动显示全称） ─────────────────────────
+const scrollTimers = new WeakMap<HTMLElement, ReturnType<typeof setInterval>>()
+
 function startScroll(e: MouseEvent) {
-  const span = e.currentTarget as HTMLElement
-  const wrap = span.parentElement
+  const wrap = (e.currentTarget as Element).querySelector('.hc-label-wrap') as HTMLElement | null
   if (!wrap) return
-  const overflow = span.scrollWidth - wrap.clientWidth
+  const span = wrap.querySelector('.hc-label-text') as HTMLElement | null
+  if (!span) return
+
+  const wrapW = wrap.offsetWidth || wrap.getBoundingClientRect().width
+  const overflow = span.scrollWidth - wrapW
   if (overflow <= 2) return  // 未截断，无需滚动
-  span.style.transition = `transform ${Math.max(1.2, overflow / 40)}s ease-in-out`
-  span.style.transform = `translateX(${-overflow}px)`
+
+  const duration = Math.max(1200, overflow * 25)  // ms
+  const pauseMs  = 600
+
+  // 重置到初始位置（保留 Y 轴居中）
+  span.style.transition = 'none'
+  span.style.transform = 'translateY(-50%) translateX(0)'
+
+  let goingLeft = true
+  const run = () => {
+    span.style.transition = `transform ${duration}ms linear`
+    span.style.transform = goingLeft
+      ? `translateY(-50%) translateX(${-overflow}px)`
+      : 'translateY(-50%) translateX(0)'
+    goingLeft = !goingLeft
+  }
+
+  const t0 = setTimeout(() => {
+    run()
+    const interval = setInterval(run, duration + pauseMs)
+    scrollTimers.set(wrap, interval)
+  }, pauseMs)
+  ;(wrap as any).__scrollT0 = t0
 }
+
 function stopScroll(e: MouseEvent) {
-  const span = e.currentTarget as HTMLElement
+  const wrap = (e.currentTarget as Element).querySelector('.hc-label-wrap') as HTMLElement | null
+  const span = wrap?.querySelector('.hc-label-text') as HTMLElement | null
+
+  if (wrap) {
+    clearTimeout((wrap as any).__scrollT0)
+    const interval = scrollTimers.get(wrap)
+    if (interval !== undefined) {
+      clearInterval(interval)
+      scrollTimers.delete(wrap)
+    }
+  }
+
+  if (!span) return
   span.style.transition = 'transform 0.3s ease'
-  span.style.transform = 'translateX(0)'
+  span.style.transform = 'translateY(-50%) translateX(0)'
 }
 
 function wsIdx(ws:string) {
@@ -1055,10 +1096,10 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
 .hc-label-wrap {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
   overflow: hidden;
+  pointer-events: all;
+  cursor: pointer;
 }
 .hc-label-text {
   font-size: 13px;
@@ -1067,24 +1108,25 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+  width: 100%;
   display: block;
   text-align: center;
-  /* 文字描边模拟（背景混合）用 text-shadow 代替 */
   text-shadow: 0 0 6px var(--color-bg-primary), 0 0 6px var(--color-bg-primary);
   pointer-events: none;
+  /* 绝对定位撑满 wrap，居中文字 */
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .hc-label-sm .hc-label-text {
   font-size: 10px;
   font-weight: 500;
 }
-/* 悬停时由 JS 驱动 translateX 滚动，CSS 只需保持 overflow hidden */
-.hc-node-g:hover .hc-label-wrap {
-  overflow: hidden;
-}
+/* 悬停时允许文字溢出 wrap（由 JS translateX 驱动，wrap overflow:hidden 负责裁剪） */
 .hc-node-g:hover .hc-label-text {
   text-overflow: clip;
-  display: inline-block;
+  overflow: visible;
 }
 
 .hc-cnt {

@@ -1199,6 +1199,8 @@ async function handleFolderSelect(folderPath: string, _wsPath?: string) {
       break
     }
   }
+  // 切换目录时清除标签过滤，避免状态不一致
+  tagStore.clearSelection()
   await fileStore.loadFolderContents(folderPath)
 }
 

@@ -15,11 +15,15 @@ TagHive is a desktop file management app built on **Tauri 2.0** (Rust shell) + *
 ### Full dev environment (recommended)
 
 ```bash
-# From project root
-# 一键构建项目并启动
-cd src-tauri
+# From project root — Tauri auto-starts Python sidecar + frontend
 cargo tauri dev
 ```
+
+### Python environment configuration (priority order)
+
+1. **Env var** (highest): `TAGHIVE_PYTHON_PATH=/path/to/python`
+2. **Config file**: edit `src-tauri/config.json` → `python.path` and `data_dir`
+3. **Auto-detect**: checks `~/.conda/envs/taghive_env`, then `src-python/venv`, then system `python`
 
 ### Individual layer startup
 ```bash
