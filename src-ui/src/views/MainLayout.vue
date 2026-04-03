@@ -483,7 +483,7 @@ function refreshForWorkspace() {
   const root = appStore.currentWorkspace || undefined
   tagStore.loadTags(root)
   tagStore.clearSelection()
-  if (fileStore.browseMode === 'folder' && !root) {
+  if (fileStore.browseMode === 'folder' && !root && !appStore.isGlobalView) {
     fileStore.setBrowseMode('all')
   }
   fileStore.search({ root })

@@ -193,6 +193,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [path: string, wsPath?: string]
   'workspace-removed': [wsPath: string]
+  'switch-workspace': [wsPath: string]
 }>()
 
 const appStore = useAppStore()
@@ -620,6 +621,13 @@ function handleClick(node: HcNode) {
   }
 
   if (node.path === '__ws_root__') { navStack.value = []; return }
+
+  // 全局多工作区模式：点击工作区根节点 → 切换工作区标签页
+  const isMultiWs = (props.workspaces?.length ?? 0) > 1
+  if (isMultiWs && navStack.value.length === 0 && props.workspaces?.includes(node.path)) {
+    emit('switch-workspace', node.wsPath)
+    return
+  }
 
   // ring-2 孙节点
   if (node.ring === 2 && node.parentPath) {

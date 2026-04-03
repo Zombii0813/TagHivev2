@@ -27,6 +27,7 @@
           :workspaces="appStore.workspaces"
           :boundary="scrollerRef"
           @select="handleFolderSelect"
+          @switch-workspace="handleSwitchWorkspaceFromTree"
         />
 
         <!-- 文件列表全宽 -->
@@ -1199,6 +1200,14 @@ async function handleFolderSelect(folderPath: string, _wsPath?: string) {
     }
   }
   await fileStore.loadFolderContents(folderPath)
+}
+
+function handleSwitchWorkspaceFromTree(wsPath: string) {
+  // 全局视图中点击工作区节点 → 切换到该工作区标签页
+  appStore.switchWorkspace(wsPath)
+  tagStore.loadTags(wsPath)
+  tagStore.clearSelection()
+  fileStore.search({ root: wsPath })
 }
 
 // ===== 文件右键菜单 =====
