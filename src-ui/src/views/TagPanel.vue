@@ -119,12 +119,34 @@
         <span v-if="newTag.icon" class="dialog-icon-clear" @click.stop="newTag.icon = ''">移除图标</span>
       </div>
 
-      <el-form :model="newTag" label-width="80px">
+      <el-form :model="newTag" label-position="top">
+        <el-form-item label="颜色">
+          <div class="color-picker-panel">
+            <div class="color-preset-grid">
+              <div
+                v-for="c in PRESET_COLORS"
+                :key="c"
+                class="color-preset-swatch"
+                :class="{ active: newTag.color === c }"
+                :style="{ backgroundColor: c }"
+                :title="c"
+                @click="newTag.color = c"
+              />
+            </div>
+            <div class="color-custom-row">
+              <div class="color-custom-preview" :style="{ backgroundColor: newTag.color }" />
+              <el-input
+                v-model="newTag.color"
+                placeholder="#409EFF"
+                size="small"
+                class="color-custom-input"
+                @blur="validateColor(newTag, 'color')"
+              />
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="newTag.name" placeholder="输入标签名称" />
-        </el-form-item>
-        <el-form-item label="颜色">
-          <el-color-picker v-model="newTag.color" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -198,12 +220,34 @@
         <span v-if="editingTag.icon" class="dialog-icon-clear" @click.stop="editingTag.icon = ''">移除图标</span>
       </div>
 
-      <el-form :model="editingTag" label-width="80px">
+      <el-form :model="editingTag" label-position="top">
+        <el-form-item label="颜色">
+          <div class="color-picker-panel">
+            <div class="color-preset-grid">
+              <div
+                v-for="c in PRESET_COLORS"
+                :key="c"
+                class="color-preset-swatch"
+                :class="{ active: editingTag.color === c }"
+                :style="{ backgroundColor: c }"
+                :title="c"
+                @click="editingTag.color = c"
+              />
+            </div>
+            <div class="color-custom-row">
+              <div class="color-custom-preview" :style="{ backgroundColor: editingTag.color }" />
+              <el-input
+                v-model="editingTag.color"
+                placeholder="#409EFF"
+                size="small"
+                class="color-custom-input"
+                @blur="validateColor(editingTag, 'color')"
+              />
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editingTag.name" placeholder="输入标签名称" />
-        </el-form-item>
-        <el-form-item label="颜色">
-          <el-color-picker v-model="editingTag.color" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -275,6 +319,26 @@ import { setTagDragData, clearTagDragState, isTagDragInProgress } from '../utils
 const tagStore = useTagStore()
 const fileStore = useFileStore()
 const appStore = useAppStore()
+
+// ─── 预设颜色 ──────────────────────────────────────────────────
+const PRESET_COLORS = [
+  '#F44336','#E91E63','#9C27B0','#673AB7','#3F51B5','#2196F3','#03A9F4','#00BCD4',
+  '#009688','#4CAF50','#8BC34A','#CDDC39','#FFEB3B','#FFC107','#FF9800','#FF5722',
+  '#795548','#9E9E9E','#607D8B','#000000','#CA7DF9','#F48FB1','#CE93D8','#90CAF9',
+  '#A5D6A7','#FFF176','#FFCC80','#BCAAA4',
+]
+
+function validateColor(obj: Record<string, any>, key: string) {
+  const val: string = (obj[key] || '').trim()
+  if (!val) { obj[key] = '#409EFF'; return }
+  // 补全 # 前缀
+  const normalized = val.startsWith('#') ? val : '#' + val
+  if (/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(normalized)) {
+    obj[key] = normalized.toUpperCase()
+  } else {
+    obj[key] = '#409EFF'
+  }
+}
 
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
@@ -1222,5 +1286,61 @@ async function confirmDeleteTag() {
 .emoji-picker-item.active {
   background: var(--color-accent-light);
   border-color: var(--color-accent);
+}
+
+/* ─── 颜色选择面板 ─────────────────────────────── */
+.color-picker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.color-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(14, 1fr);
+  gap: 5px;
+}
+
+.color-preset-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.color-preset-swatch:hover {
+  transform: scale(1.18);
+  border-color: rgba(0,0,0,0.25);
+}
+
+.color-preset-swatch.active {
+  border-color: var(--color-accent);
+  transform: scale(1.1);
+  box-shadow: 0 0 0 2px var(--color-accent-light);
+}
+
+.color-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.color-custom-preview {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  transition: background-color 0.15s;
+}
+
+.color-custom-input {
+  flex: 1;
 }
 </style>
