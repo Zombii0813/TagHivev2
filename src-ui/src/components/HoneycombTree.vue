@@ -878,8 +878,8 @@ function initPosition() {
   if (!el) return
   const rect = el.getBoundingClientRect()
   if (rect.width === 0 && rect.height === 0) return
-  posX.value = Math.max(rect.left, rect.right - ICON_W - 16)
-  posY.value = Math.max(rect.top, rect.bottom - ICON_H - 16)
+  posX.value = Math.min(rect.right, rect.left + ICON_W - 20)
+  posY.value = Math.max(rect.top, rect.bottom - ICON_H - 20)
   posInitialized.value = true
 }
 

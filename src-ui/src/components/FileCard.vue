@@ -1,7 +1,7 @@
 <template>
   <div
     class="file-card"
-    :class="{ selected }"
+    :class="{ selected, 'multi-select': multiSelect }"
     :title="file.name"
     :style="cardStyle"
   >
@@ -16,9 +16,9 @@
           <div class="loading-spinner"></div>
         </div>
         <!-- 实际图片 -->
-        <img 
-          :src="thumbnailUrl" 
-          :alt="file.name" 
+        <img
+          :src="thumbnailUrl"
+          :alt="file.name"
           loading="lazy"
           @load="handleImageLoad"
           @error="handleImageError"
@@ -49,6 +49,17 @@
         :style="{ backgroundColor: getTagColor(tagId) }"
       ></span>
     </div>
+
+    <!-- 右下角选择框 -->
+    <div
+      class="select-checkbox"
+      :class="{ checked: selected }"
+      @click.stop="emit('checkbox-click', file.id)"
+    >
+      <svg v-if="selected" viewBox="0 0 12 12" class="check-icon">
+        <polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
   </div>
 </template>
 
@@ -62,7 +73,12 @@ import type { FileItem } from '../types'
 const props = defineProps<{
   file: FileItem
   selected: boolean
+  multiSelect?: boolean
   size?: number
+}>()
+
+const emit = defineEmits<{
+  'checkbox-click': [id: number]
 }>()
 
 const tagStore = useTagStore()
@@ -99,10 +115,8 @@ const cardStyle = computed(() => {
 // 缩略图样式
 const thumbnailStyle = computed(() => {
   if (props.size) {
-    return {
-      width: `${props.size - 16}px`, // 减去 padding
-      height: `${props.size - 16}px`
-    }
+    const inner = props.size - 20 // 两侧 padding 各 10px
+    return { width: `${inner}px`, height: `${inner}px` }
   }
   return {}
 })
@@ -133,6 +147,7 @@ function getTagColor(tagId: number): string {
 
 <style scoped>
 .file-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -166,11 +181,11 @@ function getTagColor(tagId: number): string {
 }
 
 .thumbnail {
-  width: 100%;
   aspect-ratio: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  align-self: center;
   background: var(--color-bg-secondary);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -304,5 +319,47 @@ function getTagColor(tagId: number): string {
 
 .file-card.selected {
   animation: selectPulse 0.6s ease-out;
+}
+
+/* 右下角选择框 */
+.select-checkbox {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s, transform 0.15s;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.file-card:hover .select-checkbox,
+.file-card.selected .select-checkbox,
+.file-card.multi-select .select-checkbox {
+  opacity: 1;
+}
+
+.select-checkbox.checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  transform: scale(1.1);
+}
+
+.select-checkbox:hover {
+  border-color: var(--color-accent);
+  transform: scale(1.15);
+}
+
+.check-icon {
+  width: 12px;
+  height: 12px;
 }
 </style>

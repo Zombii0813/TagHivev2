@@ -31,7 +31,9 @@
         />
 
         <!-- 文件列表全宽 -->
-        <div ref="scrollerRef" class="scroller-container">
+        <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
+          <!-- 框选遮罩 -->
+          <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <!-- Grid 模式 -->
           <RecycleScroller
             v-if="fileStore.viewMode === 'grid'"
@@ -48,6 +50,7 @@
                 class="grid-cell"
                 :class="{ 'file-drop-active': activeDropFileId === file.id }"
                 :style="gridCellStyle"
+                :data-file-id="file.id"
                 @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
                 @dragleave="handleFileDragLeave(file.id)"
                 @drop.prevent.stop="handleFileDrop(file, $event)"
@@ -55,8 +58,10 @@
                 <FileCard
                   :file="file"
                   :selected="fileStore.selectedIds.has(file.id)"
+                  :multi-select="multiSelectMode"
                   :size="gridItemWidth"
                   @click="handleFileClick(file.id, $event)"
+                  @checkbox-click="handleCheckboxClick"
                   @dblclick="handleFileDblClick(file)"
                   @contextmenu.prevent="handleFileContextMenu(file, $event)"
                 />
@@ -129,7 +134,9 @@
         />
 
         <!-- 文件列表全宽 -->
-        <div ref="scrollerRef" class="scroller-container">
+        <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
+          <!-- 框选遮罩 -->
+          <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <!-- Grid 模式 -->
           <RecycleScroller
             v-if="fileStore.viewMode === 'grid'"
@@ -146,6 +153,7 @@
                 class="grid-cell"
                 :class="{ 'file-drop-active': activeDropFileId === file.id }"
                 :style="gridCellStyle"
+                :data-file-id="file.id"
                 @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
                 @dragleave="handleFileDragLeave(file.id)"
                 @drop.prevent.stop="handleFileDrop(file, $event)"
@@ -153,8 +161,10 @@
                 <FileCard
                   :file="file"
                   :selected="fileStore.selectedIds.has(file.id)"
+                  :multi-select="multiSelectMode"
                   :size="gridItemWidth"
                   @click="handleFileClick(file.id, $event)"
+                  @checkbox-click="handleCheckboxClick"
                   @dblclick="handleFileDblClick(file)"
                   @contextmenu.prevent="handleFileContextMenu(file, $event)"
                 />
@@ -218,7 +228,9 @@
 
     <!-- 文件列表 -->
     <template v-else>
-      <div ref="scrollerRef" class="scroller-container">
+      <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
+        <!-- 框选遮罩 -->
+        <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
         <!-- Grid 模式 - 使用 CSS Grid 布局 -->
         <RecycleScroller
           v-if="fileStore.viewMode === 'grid'"
@@ -235,6 +247,7 @@
               class="grid-cell"
               :class="{ 'file-drop-active': activeDropFileId === file.id }"
               :style="gridCellStyle"
+              :data-file-id="file.id"
               @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
               @dragleave="handleFileDragLeave(file.id)"
               @drop.prevent.stop="handleFileDrop(file, $event)"
@@ -242,8 +255,10 @@
               <FileCard
                 :file="file"
                 :selected="fileStore.selectedIds.has(file.id)"
+                :multi-select="multiSelectMode"
                 :size="gridItemWidth"
                 @click="handleFileClick(file.id, $event)"
+                @checkbox-click="handleCheckboxClick"
                 @dblclick="handleFileDblClick(file)"
                 @contextmenu.prevent="handleFileContextMenu(file, $event)"
               />
@@ -762,14 +777,12 @@ let lastHandledExternalDropResetTimer: ReturnType<typeof setTimeout> | null = nu
 
 // Grid 布局配置
 const GAP = 16 // 间距
-const PADDING = 32 // 左右 padding 总和
 const INFO_HEIGHT = 80 // 文件名等信息区域高度（包含标签区域）
 
 // 计算每行显示的列数（根据固定卡片尺寸和容器宽度自动决定列数）
 const gridColumns = computed(() => {
   if (containerWidth.value === 0) return 4
-  const availableWidth = containerWidth.value - PADDING
-  const columns = Math.floor((availableWidth + GAP) / (fileStore.gridItemSize + GAP))
+  const columns = Math.floor((containerWidth.value + GAP) / (fileStore.gridItemSize + GAP))
   return Math.max(columns, 1) // 最少显示 1 列
 })
 
@@ -806,7 +819,7 @@ const gridRows = computed<GridRow[]>(() => {
 const gridRowStyle = computed(() => ({
   display: 'flex',
   gap: `${GAP}px`,
-  padding: `0 ${PADDING / 2}px`,
+  justifyContent: 'center',
   height: `${gridItemHeight.value}px`
 }))
 
@@ -1037,6 +1050,7 @@ onMounted(() => {
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
   window.addEventListener('close-context-menus', closeFileContextMenu)
+  window.addEventListener('keydown', handleGlobalKeyDown)
   
   // 使用 ResizeObserver 监听容器大小变化
   if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
@@ -1059,6 +1073,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateContainerWidth)
   window.removeEventListener('close-context-menus', closeFileContextMenu)
+  window.removeEventListener('keydown', handleGlobalKeyDown)
   
   // 移除 ResizeObserver
   if (resizeObserver) {
@@ -1132,6 +1147,11 @@ watch(() => fileStore.browseMode, async (newMode) => {
   }
 })
 
+// 当选中数量归零时，自动退出多选模式
+watch(() => fileStore.selectedCount, (count) => {
+  if (count === 0) multiSelectMode.value = false
+})
+
 async function selectWorkspace() {
   console.log('[BrowserView] selectWorkspace called')
   try {
@@ -1165,16 +1185,122 @@ async function selectWorkspace() {
 function handleFileClick(fileId: number, event: MouseEvent) {
   const multi = event.ctrlKey || event.metaKey
   const range = event.shiftKey
-  
+
   if (range && fileStore.selectedIds.size > 0) {
-    // 范围选择
+    // Shift 点击：范围选择，进入多选模式
     const lastSelected = Array.from(fileStore.selectedIds).pop()
     if (lastSelected) {
       fileStore.selectRange(lastSelected, fileId)
     }
+    multiSelectMode.value = true
+  } else if (multi) {
+    // Ctrl/Meta 点击：追加/取消单个，进入多选模式
+    fileStore.selectFile(fileId, true)
+    multiSelectMode.value = true
+  } else if (multiSelectMode.value) {
+    // 已在多选模式：直接追加选中（无需按 Ctrl）
+    fileStore.selectFile(fileId, true)
   } else {
-    fileStore.selectFile(fileId, multi)
+    // 普通点击：单选，不进入多选模式（选择框不高亮）
+    fileStore.selectFile(fileId, false)
+    multiSelectMode.value = false
   }
+}
+
+// 复选框点击：进入多选模式，切换该文件的选中状态
+function handleCheckboxClick(fileId: number) {
+  fileStore.selectFile(fileId, true)
+  multiSelectMode.value = true
+}
+
+// Ctrl+A 全选，进入多选模式
+function handleGlobalKeyDown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    const active = document.activeElement
+    // 焦点在输入框时不拦截
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return
+    e.preventDefault()
+    fileStore.selectAll()
+    multiSelectMode.value = true
+  }
+}
+
+// ─── 多选模式 ────────────────────────────────────────────────
+// 点击选择框 / Ctrl+点击 / Shift+点击 / 框选 / Ctrl+A 时激活
+// 普通单击卡片时不激活（选择框不高亮）
+const multiSelectMode = ref(false)
+
+// ─── 框选（lasso）────────────────────────────────────────────
+interface LassoState { active: boolean; x0: number; y0: number; x1: number; y1: number }
+const lasso = ref<LassoState>({ active: false, x0: 0, y0: 0, x1: 0, y1: 0 })
+
+const lassoStyle = computed(() => {
+  const { x0, y0, x1, y1 } = lasso.value
+  const l = Math.min(x0, x1), t = Math.min(y0, y1)
+  const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0)
+  return { left: `${l}px`, top: `${t}px`, width: `${w}px`, height: `${h}px` }
+})
+
+function handleGridMouseDown(e: MouseEvent) {
+  // 只响应左键在空白处的拖拽（不是在卡片上）
+  if (e.button !== 0) return
+  const target = e.target as HTMLElement
+  if (target.closest('.file-card') || target.closest('.select-checkbox')) return
+  if (fileStore.viewMode !== 'grid') return
+
+  const container = scrollerRef.value
+  if (!container) return
+
+  const rect = container.getBoundingClientRect()
+  const x0 = e.clientX - rect.left + container.scrollTop  // 用 scrollTop 对齐虚拟滚动
+  const y0 = e.clientY - rect.top
+
+  // 清除现有选择（除非按住 Ctrl），并退出多选模式
+  if (!e.ctrlKey && !e.metaKey) {
+    fileStore.clearSelection()
+    multiSelectMode.value = false
+  }
+
+  lasso.value = { active: false, x0, y0, x1: x0, y1: y0 }
+
+  const onMove = (ev: MouseEvent) => {
+    const x1 = ev.clientX - rect.left + container.scrollTop
+    const y1 = ev.clientY - rect.top
+    const moved = Math.abs(x1 - x0) > 4 || Math.abs(y1 - y0) > 4
+    lasso.value = { active: moved, x0, y0, x1, y1 }
+
+    if (!moved) return
+
+    // 命中检测：遍历所有 grid-cell，判断是否与框选矩形相交
+    const lx0 = Math.min(x0, x1) + rect.left - container.scrollTop
+    const ly0 = Math.min(y0, y1) + rect.top
+    const lx1 = Math.max(x0, x1) + rect.left - container.scrollTop
+    const ly1 = Math.max(y0, y1) + rect.top
+
+    const cells = container.querySelectorAll<HTMLElement>('.grid-cell')
+    cells.forEach(cell => {
+      const cr = cell.getBoundingClientRect()
+      const hit = cr.left < lx1 && cr.right > lx0 && cr.top < ly1 && cr.bottom > ly0
+      const id = parseInt(cell.dataset.fileId!)
+      if (!isNaN(id)) {
+        if (hit) fileStore.selectedIds.add(id)
+        else if (!e.ctrlKey && !e.metaKey) fileStore.selectedIds.delete(id)
+      }
+    })
+  }
+
+  const onUp = () => {
+    // 框选结束后，若选中了文件则进入多选模式
+    if (lasso.value.active && fileStore.selectedIds.size > 0) {
+      multiSelectMode.value = true
+    }
+    lasso.value.active = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
 }
 
 async function handleFileDblClick(file: FileSummary) {
@@ -1542,6 +1668,7 @@ async function handleExternalDrop(event: DragEvent) {
 .scroller-container {
   height: 100%;
   width: 100%;
+  position: relative;
 }
 
 .scroller {
@@ -1557,6 +1684,16 @@ async function handleExternalDrop(event: DragEvent) {
   width: 100% !important;
   position: absolute !important;
   left: 0 !important;
+}
+
+/* 框选遮罩 */
+.lasso-rect {
+  position: absolute;
+  border: 1px solid var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 3px;
 }
 
 /* Grid 行容器 */
