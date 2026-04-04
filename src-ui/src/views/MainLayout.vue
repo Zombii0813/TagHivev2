@@ -263,12 +263,21 @@
           </span>
         </div>
         <div class="status-bar-right">
-          <span class="status-text" v-if="fileStore.selectedCount > 0">
-            已选中 {{ fileStore.selectedCount }} 个文件 / 共 {{ fileStore.totalCount }} 个文件
-          </span>
-          <span class="status-text" v-else>
-            共 {{ fileStore.totalCount }} 个文件
-          </span>
+          <template v-if="fileStore.selectedCount > 0">
+            <span class="status-text">已选中 {{ fileStore.selectedCount }} 个 / 共 {{ fileStore.totalCount }} 个</span>
+            <div class="status-bar-actions">
+              <el-button size="small" @click="batchOpsRef?.openAddTags()">
+                <el-icon><CollectionTag /></el-icon>
+                批量添加标签
+              </el-button>
+              <el-button size="small" type="danger" @click="batchOpsRef?.confirmDelete()">
+                <el-icon><Delete /></el-icon>
+                批量删除
+              </el-button>
+              <el-button size="small" @click="fileStore.clearSelection">取消选择</el-button>
+            </div>
+          </template>
+          <span v-else class="status-text">共 {{ fileStore.totalCount }} 个文件</span>
         </div>
       </footer>
     </main>
@@ -279,14 +288,15 @@
       :class="{ visible: appStore.detailPanelVisible }"
     />
 
-    <!-- 批量操作面板 -->
-    <BatchOperations />
+    <!-- 批量操作对话框 -->
+    <BatchOperations ref="batchOpsRef" />
   </div>
 </template>
 
 <script setup lang="ts">
 import {
   CollectionTag,
+  Delete,
   Expand,
   Fold,
   Grid,
@@ -323,6 +333,7 @@ import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
 import { isTagDragInProgress } from '../utils/drag'
 
+const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -1016,7 +1027,7 @@ function handleCollapsedTagClick(tagId: number) {
 
 /* ===== 底部状态栏 ===== */
 .status-bar {
-  height: 28px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1032,7 +1043,13 @@ function handleCollapsedTagClick(tagId: number) {
 .status-bar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.status-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .status-text {
