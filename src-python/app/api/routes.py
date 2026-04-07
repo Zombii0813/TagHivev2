@@ -856,52 +856,48 @@ async def get_folder_contents(
     sort_desc: bool = False,
     repo: Repo = Depends(get_repo),
 ):
-    """获取指定文件夹的内容"""
+    """获取指定文件夹的直接子文件（SQL 层过滤，不加载深层文件）"""
+    from sqlalchemy import func, asc, desc as sa_desc
+
     folder_path = Path(path)
     if not folder_path.exists():
         raise HTTPException(status_code=404, detail="Folder not found")
-    
-    # 构建查询
-    folder_posix = folder_path.as_posix()
-    # 匹配直接在该文件夹下的文件（不包括子文件夹）
-    stmt = select(File).where(
-        File.path.like(folder_posix.rstrip("/") + "/%")
-    )
-    
-    # 排除子文件夹中的文件 - 只获取直接子文件
-    from sqlalchemy import func
-    
-    # 获取所有候选文件
-    all_files = list(repo.session.execute(stmt).scalars())
-    
-    # 过滤出直接在该文件夹下的文件
-    direct_files = []
-    for f in all_files:
-        file_parent = Path(f.path).parent.as_posix()
-        if file_parent == folder_posix:
-            direct_files.append(f)
-    
-    total = len(direct_files)
-    
-    # 排序
-    sort_key_map = {
-        "name": lambda f: f.name.lower(),
-        "size": lambda f: f.size,
-        "modified_at": lambda f: f.modified_at or 0,
-        "duration": lambda f: f.duration or 0,
+
+    folder_posix = folder_path.as_posix().rstrip("/")
+    prefix = folder_posix + "/"
+    # 匹配直接子文件：以 prefix 开头，且路径中 prefix 之后不再有 /
+    # 等价于：parent_path == folder_posix
+    base_where = [
+        File.path.like(prefix + "%"),
+        File.path.not_like(prefix + "%/%"),
+    ]
+
+    # COUNT
+    count_stmt = select(func.count()).select_from(File).where(*base_where)
+    total = repo.session.execute(count_stmt).scalar() or 0
+
+    # 排序列映射
+    sort_col_map = {
+        "name": File.name,
+        "size": File.size,
+        "modified_at": File.modified_at,
+        "duration": File.duration,
     }
-    
-    sort_key = sort_key_map.get(sort_by, sort_key_map["name"])
-    direct_files.sort(key=sort_key, reverse=sort_desc)
-    
-    # 分页
-    page_files = direct_files[offset:offset + limit]
-    
-    # 转换为 DTO
-    file_dtos = []
-    for f in page_files:
-        tag_ids = [t.id for t in f.tags]
-        file_dtos.append(FileSummaryDTO(
+    sort_col = sort_col_map.get(sort_by, File.name)
+    order_expr = sa_desc(sort_col) if sort_desc else asc(sort_col)
+
+    # 数据查询（LIMIT/OFFSET 在 SQL 层）
+    data_stmt = (
+        select(File)
+        .where(*base_where)
+        .order_by(order_expr)
+        .offset(offset)
+        .limit(limit)
+    )
+    page_files = list(repo.session.execute(data_stmt).scalars())
+
+    file_dtos = [
+        FileSummaryDTO(
             id=f.id,
             name=f.name,
             path=f.path,
@@ -909,9 +905,11 @@ async def get_folder_contents(
             size=f.size,
             modified_at=f.modified_at,
             duration=f.duration,
-            tag_ids=tag_ids,
-        ))
-    
+            tag_ids=[t.id for t in f.tags],
+        )
+        for f in page_files
+    ]
+
     return FolderContentsDTO(
         path=path,
         files=file_dtos,

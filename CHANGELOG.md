@@ -9,7 +9,11 @@
 
 ### Changed
 
-- **搜索性能优化** (`src-python/app/api/routes.py`, `src-python/app/db/repo.py`)
+- **文件夹内容查询优化** (`src-python/app/api/routes.py`)
+  - 修复 `get_folder_contents` 全量加载问题：原实现用 `LIKE 'path/%'` 取出所有深层文件后在 Python 中过滤直接子文件，现改为 SQL 双条件精准过滤
+  - 新 WHERE 条件：`path LIKE 'dir/%' AND path NOT LIKE 'dir/%/%'`，直接在 SQL 层还原"直接子文件"语义
+  - 排序（`ORDER BY`）和分页（`LIMIT/OFFSET`）同步下推到 SQL，去除 Python 端 `list.sort()` 和切片
+  - 深层目录场景下大幅减少无效数据传输
   - 修复搜索接口全量加载问题：原实现将所有搜索结果加载至 Python 内存后再切片分页，现改为 SQL 层直接分页
   - 新增 `Repo.count_search()` 方法，执行纯 COUNT SQL 获取总数，不加载任何行数据
   - `_build_search_result` 改为调用 `repo.count_search()` + `repo.search_with_offset()` 两条独立 SQL
