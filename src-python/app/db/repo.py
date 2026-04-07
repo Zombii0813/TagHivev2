@@ -805,6 +805,45 @@ class Repo:
             mapper=mapper,
         )
 
+    def count_search(self, query: SearchQuery) -> int:
+        """计算搜索结果总数（纯 COUNT SQL，不加载任何行数据）"""
+        stmt = select(func.count()).select_from(File)
+
+        if query.text:
+            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
+                fts_ids = self._fts_search(query.text)
+                if fts_ids:
+                    stmt = stmt.where(File.id.in_(fts_ids))
+                else:
+                    stmt = stmt.where(File.name.ilike(f"%{query.text}%"))
+            else:
+                stmt = stmt.where(File.name.ilike(f"%{query.text}%"))
+
+        if query.root:
+            root_posix = Path(query.root).as_posix()
+            stmt = stmt.where(File.path.like(root_posix.rstrip("/") + "/%"))
+
+        if query.types:
+            stmt = stmt.where(File.type.in_(query.types))
+
+        if query.tags:
+            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
+                Tag, Tag.id == FileTag.tag_id
+            )
+            stmt = stmt.where(Tag.id.in_(query.tags))
+            if query.match_all_tags:
+                stmt = select(func.count()).select_from(
+                    select(File.id)
+                    .join(FileTag, FileTag.file_id == File.id)
+                    .join(Tag, Tag.id == FileTag.tag_id)
+                    .where(Tag.id.in_(query.tags))
+                    .group_by(File.id)
+                    .having(func.count(func.distinct(Tag.id)) == len(query.tags))
+                    .subquery()
+                )
+
+        return self.session.execute(stmt).scalar() or 0
+
     def search_with_offset(
         self,
         query: SearchQuery,
@@ -872,21 +911,19 @@ class Repo:
         else:
             stmt = stmt.order_by(File.name.asc())
 
-        # 使用 OFFSET 分页
-        def mapper(row) -> SearchResult:
-            return SearchResult(
+        # 直接用 SQLAlchemy 2.x execute 分页，避免旧版 Query.count() 兼容问题
+        stmt = stmt.offset(offset).limit(limit)
+        rows = list(self.session.execute(stmt).scalars())
+        items = [
+            SearchResult(
                 file_id=int(row.id),
                 path=str(row.path),
                 name=str(row.name),
                 type=str(row.type),
             )
-
-        return paginate_with_offset(
-            query=stmt,
-            offset=offset,
-            limit=limit,
-            mapper=mapper,
-        )
+            for row in rows
+        ]
+        return OffsetPage(items=items, offset=offset, limit=limit, total=None, has_more=False)
 
     def search_optimized(
         self,

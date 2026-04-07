@@ -90,7 +90,7 @@ def get_repo(db: Session = Depends(get_db)) -> Repo:
 # ========== 文件相关 API ==========
 
 def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
-    """构建搜索结果"""
+    """构建搜索结果（SQL 层分页，不全量加载）"""
     search_query = SearchQuery(
         text=query.text,
         root=query.root,
@@ -101,27 +101,23 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
         sort_desc=query.sort_desc,
         use_fts=query.use_fts,
     )
-    
-    # 获取总数
-    all_results = repo.search(search_query)
-    total = len(all_results)
-    
-    # 分页 - 默认每次加载 500 条，支持最大 10000 条
+
     limit = query.limit or 500
-    start = query.offset
-    end = start + limit
-    page_results = all_results[start:end]
-    
+    offset = query.offset
+
+    # 两条独立 SQL：COUNT(*) 获取总数，LIMIT/OFFSET 获取当页数据
+    total = repo.count_search(search_query)
+    page = repo.search_with_offset(search_query, offset=offset, limit=limit)
+
     # 转换为 DTO
-    file_ids = [r.file_id for r in page_results]
+    file_ids = [r.file_id for r in page.items]
     files = repo.get_files_by_ids(file_ids)
     file_map = {f.id: f for f in files}
-    
+
     file_dtos = []
-    for r in page_results:
+    for r in page.items:
         f = file_map.get(r.file_id)
         if f:
-            tag_ids = [t.id for t in f.tags]
             file_dtos.append(FileSummaryDTO(
                 id=f.id,
                 name=f.name,
@@ -130,13 +126,13 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
                 size=f.size,
                 modified_at=f.modified_at,
                 duration=f.duration,
-                tag_ids=tag_ids,
+                tag_ids=[t.id for t in f.tags],
             ))
-    
+
     return SearchResultDTO(
         files=file_dtos,
         total=total,
-        has_more=end < total,
+        has_more=offset + limit < total,
     )
 
 
