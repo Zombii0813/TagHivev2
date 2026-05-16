@@ -34,85 +34,26 @@
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <!-- 框选遮罩 -->
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
-          <!-- Grid 模式 -->
-          <RecycleScroller
-            v-if="fileStore.viewMode === 'grid'"
-            class="scroller grid-view"
-            :items="gridRows"
-            :item-size="gridItemHeight"
-            key-field="rowIndex"
-            v-slot="{ item: row }"
-          >
-            <div class="grid-row" :style="gridRowStyle">
-              <div
-                v-for="file in row.files"
-                :key="file.id"
-                class="grid-cell"
-                :class="{ 'file-drop-active': activeDropFileId === file.id }"
-                :style="gridCellStyle"
-                :data-file-id="file.id"
-                @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
-                @dragleave="handleFileDragLeave(file.id)"
-                @drop.prevent.stop="handleFileDrop(file, $event)"
-              >
-                <FileCard
-                  :file="file"
-                  :selected="fileStore.selectedIds.has(file.id)"
-                  :multi-select="multiSelectMode"
-                  :size="gridItemWidth"
-                  @click="handleFileClick(file.id, $event)"
-                  @checkbox-click="handleCheckboxClick"
-                  @dblclick="handleFileDblClick(file)"
-                  @contextmenu.prevent="handleFileContextMenu(file, $event)"
-                />
-                <div
-                  v-if="activeDropFileId === file.id && dragTagMeta"
-                  class="tag-drop-badge"
-                  :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-                >
-                  <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-                  <span v-else class="tag-drop-badge-dot"></span>
-                  <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-                </div>
-              </div>
-            </div>
-          </RecycleScroller>
-
-          <!-- List 模式 -->
-          <RecycleScroller
-            v-else
-            class="scroller list-view"
-            :items="fileStore.files"
-            :item-size="60"
-            key-field="id"
-            v-slot="{ item }"
-          >
-            <div
-              class="list-drop-target"
-              :class="{ 'file-drop-active': activeDropFileId === item.id }"
-              @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
-              @dragleave="handleFileDragLeave(item.id)"
-              @drop.prevent.stop="handleFileDrop(item, $event)"
-            >
-              <FileListItem
-                ref="fileListItemRefs"
-                :file="item"
-                :selected="fileStore.selectedIds.has(item.id)"
-                @click="handleFileClick(item.id, $event)"
-                @dblclick="handleFileDblClick(item)"
-                @contextmenu.prevent="handleFileContextMenu(item, $event)"
-              />
-              <div
-                v-if="activeDropFileId === item.id && dragTagMeta"
-                class="tag-drop-badge"
-                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-              >
-                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-                <span v-else class="tag-drop-badge-dot"></span>
-                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-              </div>
-            </div>
-          </RecycleScroller>
+          <FileScrollerArea
+            :view-mode="fileStore.viewMode"
+            :files="fileStore.files"
+            :grid-rows="gridRows"
+            :grid-item-height="gridItemHeight"
+            :grid-item-width="gridItemWidth"
+            :grid-row-style="gridRowStyle"
+            :grid-cell-style="gridCellStyle"
+            :selected-ids="fileStore.selectedIds"
+            :multi-select-mode="multiSelectMode"
+            :active-drop-file-id="activeDropFileId"
+            :drag-tag-meta="dragTagMeta"
+            @file-click="handleFileClick"
+            @file-dblclick="handleFileDblClick"
+            @file-contextmenu="handleFileContextMenu"
+            @file-drag-over="handleFileDragOver"
+            @file-drag-leave="handleFileDragLeave"
+            @file-drop="handleFileDrop"
+            @checkbox-click="handleCheckboxClick"
+          />
 
           <!-- 加载更多提示 -->
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
@@ -137,85 +78,26 @@
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <!-- 框选遮罩 -->
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
-          <!-- Grid 模式 -->
-          <RecycleScroller
-            v-if="fileStore.viewMode === 'grid'"
-            class="scroller grid-view"
-            :items="gridRows"
-            :item-size="gridItemHeight"
-            key-field="rowIndex"
-            v-slot="{ item: row }"
-          >
-            <div class="grid-row" :style="gridRowStyle">
-              <div
-                v-for="file in row.files"
-                :key="file.id"
-                class="grid-cell"
-                :class="{ 'file-drop-active': activeDropFileId === file.id }"
-                :style="gridCellStyle"
-                :data-file-id="file.id"
-                @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
-                @dragleave="handleFileDragLeave(file.id)"
-                @drop.prevent.stop="handleFileDrop(file, $event)"
-              >
-                <FileCard
-                  :file="file"
-                  :selected="fileStore.selectedIds.has(file.id)"
-                  :multi-select="multiSelectMode"
-                  :size="gridItemWidth"
-                  @click="handleFileClick(file.id, $event)"
-                  @checkbox-click="handleCheckboxClick"
-                  @dblclick="handleFileDblClick(file)"
-                  @contextmenu.prevent="handleFileContextMenu(file, $event)"
-                />
-                <div
-                  v-if="activeDropFileId === file.id && dragTagMeta"
-                  class="tag-drop-badge"
-                  :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-                >
-                  <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-                  <span v-else class="tag-drop-badge-dot"></span>
-                  <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-                </div>
-              </div>
-            </div>
-          </RecycleScroller>
-
-          <!-- List 模式 -->
-          <RecycleScroller
-            v-else
-            class="scroller list-view"
-            :items="fileStore.files"
-            :item-size="60"
-            key-field="id"
-            v-slot="{ item }"
-          >
-            <div
-              class="list-drop-target"
-              :class="{ 'file-drop-active': activeDropFileId === item.id }"
-              @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
-              @dragleave="handleFileDragLeave(item.id)"
-              @drop.prevent.stop="handleFileDrop(item, $event)"
-            >
-              <FileListItem
-                ref="fileListItemRefs"
-                :file="item"
-                :selected="fileStore.selectedIds.has(item.id)"
-                @click="handleFileClick(item.id, $event)"
-                @dblclick="handleFileDblClick(item)"
-                @contextmenu.prevent="handleFileContextMenu(item, $event)"
-              />
-              <div
-                v-if="activeDropFileId === item.id && dragTagMeta"
-                class="tag-drop-badge"
-                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-              >
-                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-                <span v-else class="tag-drop-badge-dot"></span>
-                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-              </div>
-            </div>
-          </RecycleScroller>
+          <FileScrollerArea
+            :view-mode="fileStore.viewMode"
+            :files="fileStore.files"
+            :grid-rows="gridRows"
+            :grid-item-height="gridItemHeight"
+            :grid-item-width="gridItemWidth"
+            :grid-row-style="gridRowStyle"
+            :grid-cell-style="gridCellStyle"
+            :selected-ids="fileStore.selectedIds"
+            :multi-select-mode="multiSelectMode"
+            :active-drop-file-id="activeDropFileId"
+            :drag-tag-meta="dragTagMeta"
+            @file-click="handleFileClick"
+            @file-dblclick="handleFileDblClick"
+            @file-contextmenu="handleFileContextMenu"
+            @file-drag-over="handleFileDragOver"
+            @file-drag-leave="handleFileDragLeave"
+            @file-drop="handleFileDrop"
+            @checkbox-click="handleCheckboxClick"
+          />
 
           <!-- 加载更多提示 -->
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
@@ -226,89 +108,32 @@
       </div>
     </template>
 
-    <!-- 文件列表 -->
+    <!-- 文件列表（all 模式） -->
     <template v-else>
       <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
         <!-- 框选遮罩 -->
         <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
-        <!-- Grid 模式 - 使用 CSS Grid 布局 -->
-        <RecycleScroller
-          v-if="fileStore.viewMode === 'grid'"
-          class="scroller grid-view"
-          :items="gridRows"
-          :item-size="gridItemHeight"
-          key-field="rowIndex"
-          v-slot="{ item: row }"
-        >
-          <div class="grid-row" :style="gridRowStyle">
-            <div
-              v-for="file in row.files"
-              :key="file.id"
-              class="grid-cell"
-              :class="{ 'file-drop-active': activeDropFileId === file.id }"
-              :style="gridCellStyle"
-              :data-file-id="file.id"
-              @dragover.prevent.stop="handleFileDragOver(file.id, $event)"
-              @dragleave="handleFileDragLeave(file.id)"
-              @drop.prevent.stop="handleFileDrop(file, $event)"
-            >
-              <FileCard
-                :file="file"
-                :selected="fileStore.selectedIds.has(file.id)"
-                :multi-select="multiSelectMode"
-                :size="gridItemWidth"
-                @click="handleFileClick(file.id, $event)"
-                @checkbox-click="handleCheckboxClick"
-                @dblclick="handleFileDblClick(file)"
-                @contextmenu.prevent="handleFileContextMenu(file, $event)"
-              />
-              <div
-                v-if="activeDropFileId === file.id && dragTagMeta"
-                class="tag-drop-badge"
-                :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-              >
-                <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-                <span v-else class="tag-drop-badge-dot"></span>
-                <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-              </div>
-            </div>
-          </div>
-        </RecycleScroller>
-
-        <RecycleScroller
-          v-else
-          class="scroller list-view"
-          :items="fileStore.files"
-          :item-size="60"
-          key-field="id"
-          v-slot="{ item }"
-        >
-          <div
-            class="list-drop-target"
-            :class="{ 'file-drop-active': activeDropFileId === item.id }"
-            @dragover.prevent.stop="handleFileDragOver(item.id, $event)"
-            @dragleave="handleFileDragLeave(item.id)"
-            @drop.prevent.stop="handleFileDrop(item, $event)"
-          >
-            <FileListItem
-              ref="fileListItemRefs"
-              :file="item"
-              :selected="fileStore.selectedIds.has(item.id)"
-              @click="handleFileClick(item.id, $event)"
-              @dblclick="handleFileDblClick(item)"
-              @contextmenu.prevent="handleFileContextMenu(item, $event)"
-            />
-            <div
-              v-if="activeDropFileId === item.id && dragTagMeta"
-              class="tag-drop-badge tag-drop-badge--list"
-              :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
-            >
-              <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
-              <span v-else class="tag-drop-badge-dot"></span>
-              <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
-            </div>
-          </div>
-        </RecycleScroller>
+        <FileScrollerArea
+          :view-mode="fileStore.viewMode"
+          :files="fileStore.files"
+          :grid-rows="gridRows"
+          :grid-item-height="gridItemHeight"
+          :grid-item-width="gridItemWidth"
+          :grid-row-style="gridRowStyle"
+          :grid-cell-style="gridCellStyle"
+          :selected-ids="fileStore.selectedIds"
+          :multi-select-mode="multiSelectMode"
+          :active-drop-file-id="activeDropFileId"
+          :drag-tag-meta="dragTagMeta"
+          :list-badge-modifier="true"
+          @file-click="handleFileClick"
+          @file-dblclick="handleFileDblClick"
+          @file-contextmenu="handleFileContextMenu"
+          @file-drag-over="handleFileDragOver"
+          @file-drag-leave="handleFileDragLeave"
+          @file-drop="handleFileDrop"
+          @checkbox-click="handleCheckboxClick"
+        />
       </div>
 
       <!-- 加载更多提示 -->
@@ -612,14 +437,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, watch, ref, onUnmounted, nextTick } from 'vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
-import FileCard from '../components/FileCard.vue'
-import FileListItem from '../components/FileListItem.vue'
+import FileScrollerArea from '../components/FileScrollerArea.vue'
 import HoneycombTree from '../components/HoneycombTree.vue'
 import EmptyState from '../components/EmptyState.vue'
 import type { FileSummary, FolderNode } from '../types'
@@ -642,7 +465,6 @@ const fileStore = useFileStore()
 const tagStore = useTagStore()
 
 const scrollerRef = ref<HTMLElement | null>(null)
-const fileListItemRefs = ref<InstanceType<typeof FileListItem>[]>([])
 const containerWidth = ref(0)
 const activeDropFileId = ref<number | null>(null)
 const dragTagMeta = ref<TagDragMeta | null>(null)
