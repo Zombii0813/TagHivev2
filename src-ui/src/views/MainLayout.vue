@@ -504,48 +504,59 @@ function refreshForWorkspace() {
 let scanCompletedShown = false
 let scanErrorShown = false
 
+// 保存 wsClient.on 返回的取消订阅函数，便于卸载时清理
+const wsUnsubscribers: Array<() => void> = []
+
 onMounted(() => {
   // 订阅扫描事件
   wsClient.connect()
-  
-  wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
-    fileStore.updateScanProgress(data.count, data.total, data.percentage, data.current_file)
-  })
-  
-  wsClient.on<ScanCompletedEvent>('scan_completed', (data) => {
-    // 避免重复显示提示
-    if (scanCompletedShown) return
-    scanCompletedShown = true
 
-    fileStore.completeScanning()
-    ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-    // 刷新文件列表
-    const root = appStore.currentWorkspace || undefined
-    fileStore.search({ root })
+  wsUnsubscribers.push(
+    wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
+      fileStore.updateScanProgress(data.count, data.total, data.percentage, data.current_file)
+    })
+  )
 
-    // 重置标志，允许下次扫描显示提示
-    setTimeout(() => {
-      scanCompletedShown = false
-    }, 1000)
-  })
-  
-  wsClient.on<{ message: string }>('scan_error', (error) => {
-    // 避免重复显示提示
-    if (scanErrorShown) return
-    scanErrorShown = true
-    
-    fileStore.resetScanning()
-    ElMessage.error(`扫描失败: ${error.message}`)
-    
-    // 重置标志
-    setTimeout(() => {
-      scanErrorShown = false
-    }, 1000)
-  })
+  wsUnsubscribers.push(
+    wsClient.on<ScanCompletedEvent>('scan_completed', (data) => {
+      // 避免重复显示提示
+      if (scanCompletedShown) return
+      scanCompletedShown = true
+
+      fileStore.completeScanning()
+      ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
+      // 刷新文件列表
+      const root = appStore.currentWorkspace || undefined
+      fileStore.search({ root })
+
+      // 重置标志，允许下次扫描显示提示
+      setTimeout(() => {
+        scanCompletedShown = false
+      }, 1000)
+    })
+  )
+
+  wsUnsubscribers.push(
+    wsClient.on<{ message: string }>('scan_error', (error) => {
+      // 避免重复显示提示
+      if (scanErrorShown) return
+      scanErrorShown = true
+
+      fileStore.resetScanning()
+      ElMessage.error(`扫描失败: ${error.message}`)
+
+      // 重置标志
+      setTimeout(() => {
+        scanErrorShown = false
+      }, 1000)
+    })
+  )
 })
 
 onUnmounted(() => {
-  // WebSocket cleanup handled by wsClient itself
+  // 取消所有 WebSocket 事件订阅，避免组件多次挂载导致监听器累积
+  for (const off of wsUnsubscribers) off()
+  wsUnsubscribers.length = 0
 })
 
 // 截断文件名显示

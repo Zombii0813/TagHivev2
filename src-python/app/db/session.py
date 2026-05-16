@@ -112,6 +112,32 @@ def _ensure_schema() -> None:
             connection.execute(text("CREATE INDEX idx_tags_parent_id ON tags(parent_id)"))
         except Exception:
             pass
+        # 添加 files.parent_dir 列（如果缺失）- 用于 O(1) 直接子文件查询
+        try:
+            connection.execute(text("ALTER TABLE files ADD COLUMN parent_dir TEXT"))
+        except Exception:
+            pass
+        # 创建 parent_dir 索引（如果不存在）
+        try:
+            connection.execute(text("CREATE INDEX idx_files_parent_dir ON files(parent_dir)"))
+        except Exception:
+            pass
+        # 回填 parent_dir：仅对值为 NULL 的旧记录执行（应用层一次性处理）
+        try:
+            rows = connection.execute(text(
+                "SELECT id, path FROM files WHERE parent_dir IS NULL"
+            )).all()
+            if rows:
+                for row in rows:
+                    file_id, p = row[0], row[1] or ""
+                    idx = p.rfind("/")
+                    parent = p[:idx] if idx >= 0 else ""
+                    connection.execute(
+                        text("UPDATE files SET parent_dir = :pd WHERE id = :id"),
+                        {"pd": parent, "id": file_id},
+                    )
+        except Exception:
+            pass
         session.commit()
     except Exception:
         session.rollback()

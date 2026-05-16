@@ -15,6 +15,7 @@ class File(Base):
 
     id = Column(Integer, primary_key=True)
     path = Column(Text, unique=True, nullable=False)
+    parent_dir = Column(Text, nullable=True)  # 文件所在目录（POSIX 形式），用于 O(1) 直接子文件查询
     name = Column(Text, nullable=False)
     ext = Column(Text, nullable=True)
     size = Column(Integer, nullable=False, default=0)
@@ -32,6 +33,7 @@ class File(Base):
         Index("idx_files_type", "type"),  # 按文件类型筛选
         Index("idx_files_name", "name"),  # 按文件名搜索
         Index("idx_files_path", "path"),  # 按路径查找
+        Index("idx_files_parent_dir", "parent_dir"),  # 按所在目录查直接子文件
         Index("idx_files_modified_at", "modified_at"),  # 按修改时间排序
         Index("idx_files_size", "size"),  # 按文件大小排序
         Index("idx_files_duration", "duration"),  # 按时长排序

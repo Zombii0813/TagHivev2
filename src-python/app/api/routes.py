@@ -261,6 +261,9 @@ async def import_files_to_directory(
         ))
 
     repo.session.commit()
+    # 文件结构/数量变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
     return FileImportResultDTO(files=imported_files, target_dir=target_dir.as_posix())
 
 
@@ -427,6 +430,9 @@ async def delete_file(
     # 删除数据库记录
     repo.delete_files([file_id])
     repo.session.commit()
+    # 文件数量变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
     return {"success": True}
 
 
@@ -459,6 +465,10 @@ async def rename_file(
     meta = build_file_meta(new_path)
     file_row = repo.upsert_file(meta, existing_id=file.id)
     repo.session.commit()
+    # 重命名仅改变文件名，不影响目录结构本身，但 folder_tree 节点文件计数无变化；
+    # 仍然失效，避免 file_count 缓存与实际不一致（旧文件名/新文件名属同一目录）
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
 
     return FileSummaryDTO(
         id=file_row.id,
@@ -518,6 +528,9 @@ async def move_files(
         ))
 
     repo.session.commit()
+    # 文件结构/数量变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
     return FileBatchResultDTO(files=moved_files, target_dir=target_dir.as_posix())
 
 
@@ -564,6 +577,9 @@ async def copy_files(
         ))
 
     repo.session.commit()
+    # 文件结构/数量变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
     return FileBatchResultDTO(files=copied_files, target_dir=target_dir.as_posix())
 
 
@@ -825,25 +841,17 @@ async def get_folder_tree(
     root: str,
     repo: Repo = Depends(get_repo),
 ):
-    """获取文件夹树结构"""
+    """获取文件夹树结构（带缓存，文件变更时由 WebSocket 失效）"""
     root_path = Path(root)
     if not root_path.exists():
         raise HTTPException(status_code=404, detail="Root path not found")
-    
-    folders, root_file_count = _build_folder_tree(root, repo)
-    
-    # 计算总文件夹数
-    def count_folders(nodes: List[FolderNodeDTO]) -> int:
-        count = len(nodes)
-        for node in nodes:
-            count += count_folders(node.children)
-        return count
-    
+
+    cached = repo.get_folder_tree_cached(root)
     return FolderTreeDTO(
-        root_path=root,
-        folders=folders,
-        total_folders=count_folders(folders),
-        root_file_count=root_file_count,
+        root_path=cached["root_path"],
+        folders=cached["folders"],
+        total_folders=cached["total_folders"],
+        root_file_count=cached["root_file_count"],
     )
 
 
@@ -864,13 +872,8 @@ async def get_folder_contents(
         raise HTTPException(status_code=404, detail="Folder not found")
 
     folder_posix = folder_path.as_posix().rstrip("/")
-    prefix = folder_posix + "/"
-    # 匹配直接子文件：以 prefix 开头，且路径中 prefix 之后不再有 /
-    # 等价于：parent_path == folder_posix
-    base_where = [
-        File.path.like(prefix + "%"),
-        File.path.not_like(prefix + "%/%"),
-    ]
+    # 直接子文件命中 parent_dir 索引：O(直接子文件数) 而非 O(深层全部文件数)
+    base_where = [File.parent_dir == folder_posix]
 
     # COUNT
     count_stmt = select(func.count()).select_from(File).where(*base_where)
@@ -952,6 +955,10 @@ async def create_folder(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create folder: {exc}") from exc
 
+    # 文件夹结构变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
+
     return FolderCreateResultDTO(name=target_path.name, path=target_path.as_posix())
 
 
@@ -987,6 +994,10 @@ async def delete_folder(
         shutil.rmtree(str(folder_path))
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to delete folder: {exc}") from exc
+
+    # 文件夹结构变化，失效 folder_tree 缓存
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
 
     return {"deleted": folder_path.as_posix(), "files_removed": len(file_ids)}
 

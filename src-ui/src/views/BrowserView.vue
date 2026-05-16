@@ -1095,6 +1095,11 @@ onUnmounted(() => {
     clearTimeout(lastHandledExternalDropResetTimer)
     lastHandledExternalDropResetTimer = null
   }
+
+  // 清理右键菜单锚点 DOM，避免组件多次挂载残留
+  if (fileContextMenuAnchor.parentNode) {
+    fileContextMenuAnchor.parentNode.removeChild(fileContextMenuAnchor)
+  }
 })
 
 // 监听工作区变化

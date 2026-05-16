@@ -52,7 +52,9 @@ class Repo:
         """插入或更新单个文件 - 使用 SQLite UPSERT 避免并发冲突"""
         # 统一使用 POSIX 路径格式
         path_str = meta.path.as_posix()
-        
+        idx = path_str.rfind("/")
+        parent_dir = path_str[:idx] if idx >= 0 else ""
+
         # 首先尝试通过 existing_id 查找
         if existing_id is not None:
             existing = self.session.execute(
@@ -60,6 +62,7 @@ class Repo:
             ).scalar_one_or_none()
             if existing is not None:
                 # 更新现有记录
+                existing.parent_dir = parent_dir  # type: ignore[assignment]
                 existing.name = meta.name  # type: ignore[assignment]
                 existing.ext = meta.ext  # type: ignore[assignment]
                 existing.size = meta.size  # type: ignore[assignment]
@@ -70,10 +73,11 @@ class Repo:
                 existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
                 self.clear_search_cache()
                 return existing
-        
+
         # 使用 SQLite 的 INSERT ... ON CONFLICT 进行原子性 UPSERT
         stmt = sqlite_insert(File).values(
             path=path_str,
+            parent_dir=parent_dir,
             name=meta.name,
             ext=meta.ext,
             size=meta.size,
@@ -84,9 +88,10 @@ class Repo:
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
-        
+
         # 当 path 冲突时更新所有字段
         update_dict = {
+            'parent_dir': parent_dir,
             'name': meta.name,
             'ext': meta.ext,
             'size': meta.size,
@@ -141,9 +146,13 @@ class Repo:
         
         # 批量插入 - 使用 INSERT ... ON CONFLICT DO UPDATE
         if to_insert:
-            insert_values = [
-                {
-                    'path': meta.path.as_posix(),
+            insert_values = []
+            for meta in to_insert:
+                p = meta.path.as_posix()
+                idx = p.rfind("/")
+                insert_values.append({
+                    'path': p,
+                    'parent_dir': p[:idx] if idx >= 0 else "",
                     'name': meta.name,
                     'ext': meta.ext,
                     'size': meta.size,
@@ -153,14 +162,13 @@ class Repo:
                     'duration': meta.duration,
                     'created_at': now,
                     'updated_at': now,
-                }
-                for meta in to_insert
-            ]
-            
+                })
+
             stmt = sqlite_insert(File).values(insert_values)
             stmt = stmt.on_conflict_do_update(
                 index_elements=['path'],
                 set_={
+                    'parent_dir': stmt.excluded.parent_dir,
                     'name': stmt.excluded.name,
                     'ext': stmt.excluded.ext,
                     'size': stmt.excluded.size,
@@ -172,13 +180,16 @@ class Repo:
                 }
             )
             self.session.execute(stmt)
-        
+
         # 批量更新
         if to_update:
             for meta in to_update:
                 path_str = meta.path.as_posix()
+                idx = path_str.rfind("/")
+                parent_dir = path_str[:idx] if idx >= 0 else ""
                 self.session.execute(
                     update(File).where(File.path == path_str).values(
+                        parent_dir=parent_dir,
                         name=meta.name,
                         ext=meta.ext,
                         size=meta.size,
@@ -230,8 +241,11 @@ class Repo:
         
         for meta in batch:
             path_str = meta.path.as_posix()
+            idx = path_str.rfind("/")
+            parent_dir = path_str[:idx] if idx >= 0 else ""
             if path_str in existing_files:
                 file_row = existing_files[path_str]
+                file_row.parent_dir = parent_dir  # type: ignore[assignment]
                 file_row.name = meta.name  # type: ignore[assignment]
                 file_row.ext = meta.ext  # type: ignore[assignment]
                 file_row.size = meta.size  # type: ignore[assignment]
@@ -242,6 +256,7 @@ class Repo:
             else:
                 file_row = File(
                     path=path_str,
+                    parent_dir=parent_dir,
                     name=meta.name,
                     ext=meta.ext,
                     size=meta.size,

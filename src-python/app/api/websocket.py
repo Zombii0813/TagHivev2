@@ -107,13 +107,16 @@ async def _handle_file_change(sid: str, file_path: Path, event_type: str):
         session = get_session()
         try:
             repo = Repo(session)
-            
+
             if event_type == "deleted":
                 # 查找并删除文件记录
                 file_row = repo.get_file_by_path(str(file_path))
                 if file_row:
                     repo.delete_files([file_row.id])
                     session.commit()
+                    # 文件被删，失效 folder_tree 缓存（文件计数变化）
+                    from ..core.query_cache import get_query_cache
+                    get_query_cache().invalidate_pattern("folder:tree:")
                     await sio.emit("file_deleted", {
                         "path": str(file_path),
                         "file_id": file_row.id,
@@ -125,7 +128,12 @@ async def _handle_file_change(sid: str, file_path: Path, event_type: str):
                     existing = repo.get_file_by_path(str(file_path))
                     file_row = repo.upsert_file(meta, existing_id=existing.id if existing else None)
                     session.commit()
-                    
+
+                    # 新建文件时失效 folder_tree 缓存；纯修改不影响目录结构
+                    if existing is None:
+                        from ..core.query_cache import get_query_cache
+                        get_query_cache().invalidate_pattern("folder:tree:")
+
                     # 获取标签信息
                     tags = [{"id": t.id, "name": t.name} for t in file_row.tags]
                     
