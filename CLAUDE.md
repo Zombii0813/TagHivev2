@@ -21,15 +21,17 @@ cargo tauri dev
 
 ### Python environment configuration (priority order)
 
+Python dependencies are managed by **uv** (see `src-python/pyproject.toml`). Initial setup: `cd src-python && uv sync` creates `src-python/.venv/`.
+
 1. **Env var** (highest): `TAGHIVE_PYTHON_PATH=/path/to/python`
-2. **Config file**: edit `src-tauri/config.json` → `python.path` and `data_dir`
+2. **Config file**: edit `src-tauri/config.json` → `python.path` (defaults to `src-python/.venv/Scripts/python.exe`) and `data_dir`
 3. **Auto-detect**: checks `~/.conda/envs/taghive_env`, then `src-python/venv`, then system `python`
 
 ### Individual layer startup
 ```bash
 # Python sidecar only
 cd src-python
-python -m app.main
+uv run python -m app.main
 
 # Frontend only
 cd src-ui
@@ -50,14 +52,17 @@ npm run type-check # TypeScript check
 ### Python sidecar
 ```bash
 cd src-python
-python -m pytest                         # run all tests
-python -m pytest tests/test_foo.py       # single test file
-python -m pytest -k "test_name"          # single test by name
+uv sync                                     # install/sync dependencies (incl. dev group)
+uv run pytest                               # run all tests
+uv run pytest tests/test_foo.py             # single test file
+uv run pytest -k "test_name"                # single test by name
+uv add <package>                            # add a runtime dependency
+uv add --dev <package>                      # add a dev dependency
 ```
 
 ### Production build
 ```bash
-python scripts/build-sidecar.py   # package Python sidecar binary
+python scripts/build-sidecar.py   # package Python sidecar binary (invokes pyinstaller via uv run)
 cargo tauri build                  # full app bundle
 ```
 

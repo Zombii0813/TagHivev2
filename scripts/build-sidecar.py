@@ -43,7 +43,9 @@ def build_sidecar():
     clean_previous_builds(dist_dir, build_dir)
     
     # 构建命令 - 使用 sidecar_entry.py 作为入口
+    # 通过 uv run 调用 pyinstaller，确保使用 src-python/.venv 中的依赖
     cmd = [
+        "uv", "run", "--directory", str(src_python),
         "pyinstaller",
         "--name", "taghive-sidecar",
         "--onedir",   # 目录模式：启动更快，无需每次解压到临时目录
