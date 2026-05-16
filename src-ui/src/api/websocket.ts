@@ -4,6 +4,7 @@ import type {
   FileDeletedEvent,
   ScanProgressEvent,
   ScanCompletedEvent,
+  ThumbnailReadyEvent,
 } from '../types'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'http://127.0.0.1:8721'
@@ -63,6 +64,11 @@ class WebSocketClient {
 
     this.socket.on('scan_error', (error: { message: string }) => {
       this.emit('scan_error', error)
+    })
+
+    // 缩略图异步生成完成
+    this.socket.on('thumbnail_ready', (data: ThumbnailReadyEvent) => {
+      this.emit('thumbnail_ready', data)
     })
   }
 

@@ -28,6 +28,44 @@ sio = socketio.AsyncServer(
 connected_clients: set[str] = set()
 active_watches: dict[str, WatchService] = {}
 
+# 主事件循环引用，供工作线程通过 run_coroutine_threadsafe 调度协程
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def get_main_loop() -> Optional[asyncio.AbstractEventLoop]:
+    return _main_loop
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _main_loop
+    _main_loop = loop
+
+
+async def broadcast_thumbnail_ready(file_path: str, size: str, success: bool) -> None:
+    """向所有连接的客户端广播缩略图就绪事件（在事件循环线程调用）。"""
+    if not connected_clients:
+        return
+    payload = {"file_path": file_path, "size": size, "success": success}
+    await sio.emit("thumbnail_ready", payload)
+
+
+def schedule_thumbnail_broadcast(result, task) -> None:
+    """异步生成器工作线程的回调：把广播协程调度到主事件循环。
+
+    `result` 来自 app.core.async_thumbnail.ThumbnailResult；
+    `task`   来自 app.core.async_thumbnail.ThumbnailTask。
+    """
+    loop = get_main_loop()
+    if loop is None or not connected_clients:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            broadcast_thumbnail_ready(result.file_path, result.size, result.success),
+            loop,
+        )
+    except Exception as e:
+        logger.error(f"schedule_thumbnail_broadcast failed: {e}")
+
 
 @sio.event
 async def connect(sid: str, environ: dict):

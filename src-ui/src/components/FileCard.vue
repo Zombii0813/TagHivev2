@@ -64,11 +64,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { Document, VideoCamera, Headset, Folder, Picture } from '@element-plus/icons-vue'
 import { useTagStore } from '../stores/tags'
 import { thumbnailApi } from '../api/thumbnails'
-import type { FileItem } from '../types'
+import { wsClient } from '../api/websocket'
+import type { FileItem, ThumbnailReadyEvent } from '../types'
 
 const props = defineProps<{
   file: FileItem
@@ -84,13 +85,35 @@ const emit = defineEmits<{
 const tagStore = useTagStore()
 const imageLoaded = ref(false)
 const imageError = ref(false)
+// 用于在异步缩略图生成完成后强制刷新 <img src>
+const cacheBust = ref(0)
 
 const hasThumbnail = computed(() =>
   props.file.type === 'image' || props.file.type === 'video'
 )
 
 const thumbnailUrl = computed(() => {
-  return thumbnailApi.getThumbnailUrl(props.file.id, 'medium')
+  const base = thumbnailApi.getThumbnailUrl(props.file.id, 'medium')
+  return cacheBust.value > 0 ? `${base}&_t=${cacheBust.value}` : base
+})
+
+// 订阅缩略图就绪事件：当后端通知 path 匹配本卡片时，刷新 URL
+let unsubscribeThumbReady: (() => void) | null = null
+
+onMounted(() => {
+  unsubscribeThumbReady = wsClient.on<ThumbnailReadyEvent>('thumbnail_ready', (data) => {
+    if (!data.success) return
+    if (data.size !== 'medium') return
+    // 后端 file_path 与 file.path 都是 POSIX 形式
+    if (data.file_path === props.file.path) {
+      cacheBust.value = Date.now()
+      imageError.value = false
+    }
+  })
+})
+
+onUnmounted(() => {
+  unsubscribeThumbReady?.()
 })
 
 // 计算缩略图尺寸（预留）

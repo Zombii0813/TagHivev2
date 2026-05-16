@@ -141,6 +141,13 @@ export interface ScanCompletedEvent {
   total: number
 }
 
+// 缩略图就绪事件（异步生成完成时由后端推送）
+export interface ThumbnailReadyEvent {
+  file_path: string
+  size: string
+  success: boolean
+}
+
 // 缩略图
 export interface ThumbnailRequest {
   file_id: number

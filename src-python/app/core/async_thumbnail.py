@@ -329,6 +329,13 @@ class AsyncThumbnailGenerator:
             "completed": 0,
             "failed": 0,
         }
+
+        # 全局完成回调：每个任务完成时调用，参数为 ThumbnailResult；用于 WebSocket 广播等
+        self._on_complete_callbacks: List[Callable[["ThumbnailResult", "ThumbnailTask"], None]] = []
+
+    def register_on_complete(self, cb: Callable[["ThumbnailResult", "ThumbnailTask"], None]) -> None:
+        """注册全局完成回调（线程上下文中调用，回调内部需自行处理跨线程）。"""
+        self._on_complete_callbacks.append(cb)
     
     def start(self):
         """启动生成器"""
@@ -451,14 +458,21 @@ class AsyncThumbnailGenerator:
                 )
             
             self.result_queue.put(result)
-            
+
             # 调用用户回调
             if task.callback and thumb_path:
                 try:
                     task.callback(thumb_path)
                 except Exception as e:
                     logger.error(f"[AsyncThumbnail] Callback error: {e}")
-            
+
+            # 调用全局完成回调（用于 WebSocket 广播）
+            for cb in self._on_complete_callbacks:
+                try:
+                    cb(result, task)
+                except Exception as e:
+                    logger.error(f"[AsyncThumbnail] Global callback error: {e}")
+
         except Exception as e:
             logger.error(f"[AsyncThumbnail] Task failed: {e}")
             self._stats["failed"] += 1

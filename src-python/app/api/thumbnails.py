@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..services.thumbnail_service import get_thumbnail_service
 from ..core.async_thumbnail import (
@@ -16,51 +16,66 @@ from ..core.async_thumbnail import (
 
 router = APIRouter(prefix="/api/thumbnails")
 
+# 1×1 透明 PNG，作为缓存未命中时的占位响应
+_PLACEHOLDER_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c6300010000000500010d0a2db40000000049454e44ae42"
+    "6082"
+)
+
+
+def _placeholder_response(file_id: int, file_path: str, size: str) -> Response:
+    """返回透明 PNG 占位 + 标记 header；客户端通过 X-Thumb-Status 识别异步生成中。"""
+    return Response(
+        content=_PLACEHOLDER_PNG,
+        media_type="image/png",
+        headers={
+            "X-Thumb-Status": "pending",
+            "X-Thumb-File-Id": str(file_id),
+            "X-Thumb-Size": size,
+            # 缓存极短时间，避免反复请求；前端会通过 thumbnail_ready 事件主动刷新
+            "Cache-Control": "no-store",
+        },
+    )
+
 
 @router.get("/{file_id}")
 async def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = False):
-    """获取文件缩略图
-    
-    Args:
-        file_id: 文件 ID
-        size: 缩略图尺寸 (xs, small, medium, large, xl)
-        async_mode: 是否使用异步模式生成
-    """
+    """获取文件缩略图（缓存命中即返；未命中异步生成 + 占位响应）"""
     from ..db import get_session, Repo
-    
+
     session = get_session()
     try:
         repo = Repo(session)
         file = repo.get_file_by_id(file_id)
-        
+
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
-        
-        # 检查是否为支持的类型
+
         if file.type not in ("image", "video"):
             raise HTTPException(status_code=400, detail="File type not supported")
-        
+
+        # 显式异步模式：保留旧行为
         if async_mode:
-            # 异步模式：添加到队列，返回占位图
             generator = get_async_thumbnail_generator()
             generator.generate_async(file.path, size, Priority.HIGH, file_id)
             return JSONResponse({
                 "status": "queued",
                 "file_id": file_id,
-                "message": "Thumbnail generation queued"
+                "message": "Thumbnail generation queued",
             })
-        else:
-            # 同步模式：立即生成
-            service = get_thumbnail_service()
-            thumb_url = service.generate_thumbnail(file.path, size)
-            
-            if not thumb_url:
-                raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
-            
-            # 返回文件
-            thumb_path = thumb_url.replace("file://", "")
-            return FileResponse(thumb_path)
-        
+
+        # 默认模式：缓存命中走 FileResponse；未命中则异步入队 + 透明占位
+        service = get_thumbnail_service()
+        thumb_path = service.get_thumbnail_path(file.path, size)
+        if thumb_path.exists():
+            return FileResponse(str(thumb_path))
+
+        # 缓存未命中：入队高优先级（前台请求 = 用户正在看）
+        generator = get_async_thumbnail_generator()
+        generator.generate_async(file.path, size, Priority.HIGH, file_id)
+        return _placeholder_response(file_id, file.path, size)
+
     finally:
         session.close()
 

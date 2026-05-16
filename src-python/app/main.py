@@ -50,17 +50,27 @@ async def lifespan(app: FastAPI):
     # 启动时初始化数据库
     logger.info(f"Initializing database at {settings.db_path}")
     init_db(Path(settings.db_path))
-    
+
     # 启动文件监控服务
     from app.services.watch_service import WatchService
     app.state.watch_service = WatchService()
-    
+
+    # 保存主事件循环引用 + 启动异步缩略图生成器，注册广播回调
+    from app.api.websocket import set_main_loop, schedule_thumbnail_broadcast
+    from app.core.async_thumbnail import get_async_thumbnail_generator
+    set_main_loop(asyncio.get_running_loop())
+    async_thumb = get_async_thumbnail_generator()
+    async_thumb.register_on_complete(schedule_thumbnail_broadcast)
+    app.state.async_thumb = async_thumb
+
     logger.info("TagHive Sidecar started successfully")
     yield
-    
+
     # 关闭时清理资源
     if hasattr(app.state, 'watch_service'):
         app.state.watch_service.stop()
+    if hasattr(app.state, 'async_thumb'):
+        app.state.async_thumb.stop()
     logger.info("TagHive Sidecar stopped")
 
 
