@@ -154,18 +154,24 @@ async fn cmd_stop_sidecar(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn select_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    
+
     log::info!("select_folder called");
-    
+
     let folder = app.dialog()
         .file()
         .blocking_pick_folder();
-    
+
     let result = folder.map(|p| p.into_path().map(|path| path.to_string_lossy().to_string()).ok())
         .flatten();
     log::info!("folder selected: {:?}", result);
-    
+
     Ok(result)
+}
+
+/// 检查路径是否存在（用于过滤已删除的工作区）
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
 }
 
 #[tauri::command]
@@ -412,6 +418,7 @@ pub fn run() {
             open_folder,
             get_sidecar_logs,
             open_logs_folder,
+            path_exists,
         ])
         .setup(|app| {
             // 获取应用数据目录

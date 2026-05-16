@@ -99,23 +99,38 @@ export const useTagStore = defineStore('tags', () => {
   /** 树形结构（按 orderedTags 顺序构建） */
   const tagTree = computed<TagTreeNode[]>(() => buildTagTree(orderedTags.value))
 
+  /** parent_id → 直接子标签 ID 列表，用于 O(1) 父子查找 */
+  const childrenIndex = computed<Map<number, number[]>>(() => {
+    const map = new Map<number, number[]>()
+    for (const tag of tags.value) {
+      if (tag.parent_id != null) {
+        const list = map.get(tag.parent_id)
+        if (list) list.push(tag.id)
+        else map.set(tag.parent_id, [tag.id])
+      }
+    }
+    return map
+  })
+
   /** 展开后的平铺列表（用于渲染） */
   const flatTagList = computed<TagTreeNode[]>(() =>
     flattenTree(tagTree.value, expandedTagIds.value)
   )
 
-  /** 所有子标签的ID（递归） */
+  /** 所有子标签的ID（递归） - 走 childrenIndex，避免 O(n²) */
   function getDescendantIds(tagId: number): number[] {
     const result: number[] = []
-    function collect(id: number) {
-      for (const tag of tags.value) {
-        if (tag.parent_id === id) {
-          result.push(tag.id)
-          collect(tag.id)
-        }
+    const idx = childrenIndex.value
+    const stack = [tagId]
+    while (stack.length) {
+      const cur = stack.pop()!
+      const children = idx.get(cur)
+      if (!children) continue
+      for (const cid of children) {
+        result.push(cid)
+        stack.push(cid)
       }
     }
-    collect(tagId)
     return result
   }
 
@@ -135,9 +150,19 @@ export const useTagStore = defineStore('tags', () => {
       console.warn('Failed to parse tag order:', error)
     }
 
-    const tagIds = tags.value.map(tag => tag.id)
-    const validStored = storedOrder.filter(id => tagIds.includes(id))
-    const missingIds = tagIds.filter(id => !validStored.includes(id))
+    const tagIdSet = new Set(tags.value.map(tag => tag.id))
+    const seen = new Set<number>()
+    const validStored: number[] = []
+    for (const id of storedOrder) {
+      if (tagIdSet.has(id) && !seen.has(id)) {
+        validStored.push(id)
+        seen.add(id)
+      }
+    }
+    const missingIds: number[] = []
+    for (const id of tagIdSet) {
+      if (!seen.has(id)) missingIds.push(id)
+    }
     orderIds.value = [...validStored, ...missingIds]
     localStorage.setItem(storageKey, JSON.stringify(orderIds.value))
   }
@@ -153,12 +178,8 @@ export const useTagStore = defineStore('tags', () => {
     try {
       tags.value = await tagApi.getAll(root)
       syncTagOrder(root)
-      // 默认展开所有有子标签的父标签
-      expandedTagIds.value = new Set(
-        tags.value
-          .filter(t => tags.value.some(c => c.parent_id === t.id))
-          .map(t => t.id)
-      )
+      // 默认展开所有有子标签的父标签 - 走 childrenIndex 避免 O(n²)
+      expandedTagIds.value = new Set(childrenIndex.value.keys())
     } catch (error) {
       console.error('Failed to load tags:', error)
     } finally {

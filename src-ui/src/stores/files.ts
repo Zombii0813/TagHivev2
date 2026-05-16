@@ -1,10 +1,50 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { FileSummary, SearchQuery } from '../types'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 
+// 视图偏好持久化（全局，不按工作区隔离）
+const VIEW_PREF_KEY = 'taghive:view-prefs'
+type ViewMode = 'grid' | 'list'
+type BrowseMode = 'folder' | 'all'
+interface ViewPrefs {
+  viewMode: ViewMode
+  browseMode: BrowseMode
+  gridItemSize: number
+  sortBy: string
+  sortDesc: boolean
+}
+const VIEW_PREF_DEFAULTS: ViewPrefs = {
+  viewMode: 'grid',
+  browseMode: 'all',
+  gridItemSize: 160,
+  sortBy: 'name',
+  sortDesc: false,
+}
+function loadViewPrefs(): ViewPrefs {
+  try {
+    const raw = localStorage.getItem(VIEW_PREF_KEY)
+    if (!raw) return { ...VIEW_PREF_DEFAULTS }
+    const parsed = JSON.parse(raw) as Partial<ViewPrefs>
+    return {
+      viewMode: parsed.viewMode === 'list' ? 'list' : 'grid',
+      browseMode: parsed.browseMode === 'folder' ? 'folder' : 'all',
+      gridItemSize: typeof parsed.gridItemSize === 'number'
+        ? Math.max(80, Math.min(320, parsed.gridItemSize))
+        : VIEW_PREF_DEFAULTS.gridItemSize,
+      sortBy: typeof parsed.sortBy === 'string' ? parsed.sortBy : VIEW_PREF_DEFAULTS.sortBy,
+      sortDesc: typeof parsed.sortDesc === 'boolean' ? parsed.sortDesc : VIEW_PREF_DEFAULTS.sortDesc,
+    }
+  } catch {
+    return { ...VIEW_PREF_DEFAULTS }
+  }
+}
+
 export const useFileStore = defineStore('files', () => {
+  // 从 localStorage 恢复视图偏好
+  const prefs = loadViewPrefs()
+
   // State
   const files = ref<FileSummary[]>([])
   const selectedIds = ref<Set<number>>(new Set())
@@ -13,13 +53,28 @@ export const useFileStore = defineStore('files', () => {
   const hasMore = ref(false)
   const isLoading = ref(false)
   // 视图模式：grid（网格）或 list（列表）
-  const viewMode = ref<'grid' | 'list'>('grid')
+  const viewMode = ref<ViewMode>(prefs.viewMode)
   // 网格卡片固定尺寸（像素）
-  const gridItemSize = ref(160)
+  const gridItemSize = ref(prefs.gridItemSize)
   // 浏览范围：folder（文件夹层级浏览）或 all（浏览所有文件）
-  const browseMode = ref<'folder' | 'all'>('all')
-  const sortBy = ref<string>('name')
-  const sortDesc = ref(false)
+  const browseMode = ref<BrowseMode>(prefs.browseMode)
+  const sortBy = ref<string>(prefs.sortBy)
+  const sortDesc = ref(prefs.sortDesc)
+
+  // 任意视图偏好变化时持久化
+  watch(
+    [viewMode, browseMode, gridItemSize, sortBy, sortDesc],
+    ([v, b, g, sb, sd]) => {
+      try {
+        localStorage.setItem(
+          VIEW_PREF_KEY,
+          JSON.stringify({ viewMode: v, browseMode: b, gridItemSize: g, sortBy: sb, sortDesc: sd })
+        )
+      } catch {
+        // localStorage 满 / 隐私模式，忽略
+      }
+    }
+  )
   
   // 文件夹浏览模式状态
   const currentFolderPath = ref<string>('')
@@ -173,7 +228,7 @@ export const useFileStore = defineStore('files', () => {
     viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid'
   }
   
-  function setViewMode(mode: 'grid' | 'list') {
+  function setViewMode(mode: ViewMode) {
     viewMode.value = mode
   }
 
@@ -184,8 +239,8 @@ export const useFileStore = defineStore('files', () => {
   function toggleBrowseMode() {
     browseMode.value = browseMode.value === 'folder' ? 'all' : 'folder'
   }
-  
-  function setBrowseMode(mode: 'folder' | 'all') {
+
+  function setBrowseMode(mode: BrowseMode) {
     browseMode.value = mode
   }
 

@@ -131,6 +131,28 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
+    // 过滤掉磁盘上已不存在的工作区路径，避免后续操作报错
+    if (workspaces.value.length > 0) {
+      const checks = await Promise.all(
+        workspaces.value.map(async (p) => {
+          try {
+            return { path: p, ok: await invoke<boolean>('path_exists', { path: p }) }
+          } catch {
+            // 校验失败时保守保留路径，避免误删
+            return { path: p, ok: true }
+          }
+        })
+      )
+      const valid = checks.filter(c => c.ok).map(c => c.path)
+      const removed = checks.filter(c => !c.ok).map(c => c.path)
+      if (removed.length > 0) {
+        console.warn('[app] Pruned missing workspaces:', removed)
+        workspaces.value = valid
+        // 立即持久化清理后的列表
+        localStorage.setItem('taghive-workspaces', JSON.stringify(workspaces.value))
+      }
+    }
+
     // 加载激活的工作区
     const savedActive = localStorage.getItem('taghive-active-workspace')
     if (savedActive && workspaces.value.includes(savedActive)) {
