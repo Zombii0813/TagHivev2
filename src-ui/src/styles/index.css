@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 框选进行中：禁用全局文本选择，避免拖拽框选时连带选中页面文字 */
+body.taghive-lasso-active,
+body.taghive-lasso-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 /* 全局变量 */
 :root {
   --sidebar-width: 260px;

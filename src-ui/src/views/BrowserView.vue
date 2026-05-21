@@ -1087,6 +1087,9 @@ function handleGridMouseDown(e: MouseEvent) {
   const container = scrollerRef.value
   if (!container) return
 
+  // 阻止浏览器在 mousedown 上开启文本选择，避免框选时连带选中页面文字
+  e.preventDefault()
+
   const rect = container.getBoundingClientRect()
   const x0 = e.clientX - rect.left + container.scrollTop  // 用 scrollTop 对齐虚拟滚动
   const y0 = e.clientY - rect.top
@@ -1098,6 +1101,10 @@ function handleGridMouseDown(e: MouseEvent) {
   }
 
   lasso.value = { active: false, x0, y0, x1: x0, y1: y0 }
+
+  // mousemove 在 window 上监听，仍可能让浏览器尝试选中沿途的文本节点。
+  // 给 body 加禁用 user-select 的类，框选结束再移除
+  document.body.classList.add('taghive-lasso-active')
 
   const onMove = (ev: MouseEvent) => {
     const x1 = ev.clientX - rect.left + container.scrollTop
@@ -1131,6 +1138,7 @@ function handleGridMouseDown(e: MouseEvent) {
       multiSelectMode.value = true
     }
     lasso.value.active = false
+    document.body.classList.remove('taghive-lasso-active')
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onUp)
   }
