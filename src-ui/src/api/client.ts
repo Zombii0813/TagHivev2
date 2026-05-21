@@ -1,23 +1,23 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8721'
+import { getApiBaseUrl } from './baseUrl'
 
 class ApiClient {
   private client: AxiosInstance
 
   constructor() {
     this.client = axios.create({
-      baseURL: API_BASE_URL,
+      baseURL: getApiBaseUrl(),
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
       },
     })
 
-    // 请求拦截器
+    // 请求拦截器：每次请求都从 baseUrl 模块取最新值，
+    // 避免 ApiClient 在 baseURL 解析完成前实例化导致使用空串/旧值
     this.client.interceptors.request.use(
       (config) => {
-        // 可以在这里添加认证令牌等
+        config.baseURL = getApiBaseUrl()
         return config
       },
       (error) => {

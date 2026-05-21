@@ -1,16 +1,15 @@
 import { apiClient } from './client'
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8721'
+import { getApiBaseUrl } from './baseUrl'
 
 export const thumbnailApi = {
   // 获取缩略图 URL
   getThumbnailUrl(fileId: number, size: 'small' | 'medium' | 'large' = 'medium'): string {
-    return `${API_BASE_URL}/api/thumbnails/${fileId}?size=${size}`
+    return `${getApiBaseUrl()}/api/thumbnails/${fileId}?size=${size}`
   },
 
   // 获取原始文件 URL（用于视频播放）
   getFileUrl(fileId: number): string {
-    return `${API_BASE_URL}/api/files/${fileId}/preview`
+    return `${getApiBaseUrl()}/api/files/${fileId}/preview`
   },
 
   // 清理过期缩略图

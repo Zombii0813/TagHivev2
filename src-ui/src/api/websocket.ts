@@ -6,8 +6,7 @@ import type {
   ScanCompletedEvent,
   ThumbnailReadyEvent,
 } from '../types'
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'http://127.0.0.1:8721'
+import { getApiBaseUrl } from './baseUrl'
 
 class WebSocketClient {
   private socket: Socket | null = null
@@ -16,7 +15,10 @@ class WebSocketClient {
   connect(): void {
     if (this.socket?.connected) return
 
-    this.socket = io(WS_URL, {
+    // 每次 connect 时取最新 baseUrl；启动竞速时若仍未解析，
+    // socket.io-client 接受空串（连相对路径，走 vite 代理）。
+    const wsUrl = getApiBaseUrl() || window.location.origin
+    this.socket = io(wsUrl, {
       transports: ['websocket', 'polling'],  // 允许降级到 polling
       reconnection: true,
       reconnectionAttempts: 10,

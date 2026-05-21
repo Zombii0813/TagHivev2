@@ -143,12 +143,20 @@ async fn cmd_start_sidecar(
 #[tauri::command]
 async fn cmd_stop_sidecar(state: State<'_, AppState>) -> Result<(), String> {
     let mut sidecar_guard = state.sidecar.lock().await;
-    
+
     if let Some(sidecar) = sidecar_guard.take() {
         sidecar.stop().map_err(|e| e.to_string())?;
     }
-    
+
     Ok(())
+}
+
+/// 获取已启动的 sidecar 端口；若 sidecar 还未就绪则返回 None。
+/// 前端在启动时调用此命令拿到真实端口（避免硬编码 8721 在多实例并存时连错进程）。
+#[tauri::command]
+async fn cmd_get_sidecar_port(state: State<'_, AppState>) -> Result<Option<u16>, String> {
+    let sidecar_guard = state.sidecar.lock().await;
+    Ok(sidecar_guard.as_ref().map(|s| s.port))
 }
 
 #[tauri::command]
@@ -412,6 +420,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             cmd_start_sidecar,
             cmd_stop_sidecar,
+            cmd_get_sidecar_port,
             select_folder,
             create_folder,
             open_file,
