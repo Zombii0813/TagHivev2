@@ -67,6 +67,7 @@ import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import { useAppStore } from '../stores/app'
 import { fileApi } from '../api/files'
+import { pickDistinctColor, PRESET_COLORS } from '../utils/color'
 
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -81,9 +82,10 @@ async function addNewTag() {
   if (!newTagName.value.trim()) return
 
   try {
+    const used = tagStore.tags.map(t => t.color).filter((c): c is string => !!c)
     const tag = await tagStore.createTag(
       newTagName.value.trim(),
-      '#409eff',
+      pickDistinctColor(used, PRESET_COLORS),
       '',
       appStore.currentWorkspace || undefined,
     )

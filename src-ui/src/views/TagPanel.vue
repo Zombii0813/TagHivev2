@@ -15,7 +15,7 @@
           type="primary"
           size="small"
           :icon="Plus"
-          @click="showCreateDialog = true"
+          @click="openCreateDialog"
         >
           新建
         </el-button>
@@ -315,18 +315,11 @@ import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
 import type { Tag } from '../types'
 import { setTagDragData, clearTagDragState, isTagDragInProgress } from '../utils/drag'
+import { pickDistinctColor, PRESET_COLORS } from '../utils/color'
 
 const tagStore = useTagStore()
 const fileStore = useFileStore()
 const appStore = useAppStore()
-
-// ─── 预设颜色 ──────────────────────────────────────────────────
-const PRESET_COLORS = [
-  '#F44336','#E91E63','#9C27B0','#673AB7','#3F51B5','#2196F3','#03A9F4','#00BCD4',
-  '#009688','#4CAF50','#8BC34A','#CDDC39','#FFEB3B','#FFC107','#FF9800','#FF5722',
-  '#795548','#9E9E9E','#607D8B','#000000','#CA7DF9','#F48FB1','#CE93D8','#90CAF9',
-  '#A5D6A7','#FFF176','#FFCC80','#BCAAA4',
-]
 
 function validateColor(obj: Record<string, any>, key: string) {
   const val: string = (obj[key] || '').trim()
@@ -349,6 +342,19 @@ const newTag = ref({
   description: '',
   parentId: null as number | null,
 })
+
+// 打开新建对话框前，挑一个与现有标签不撞色的默认颜色，提升区分度
+function openCreateDialog() {
+  const used = tagStore.tags.map(t => t.color).filter((c): c is string => !!c)
+  newTag.value = {
+    name: '',
+    color: pickDistinctColor(used, PRESET_COLORS),
+    icon: '',
+    description: '',
+    parentId: null,
+  }
+  showCreateDialog.value = true
+}
 
 const editingTag = ref<Tag & { description?: string }>({
   id: 0,
