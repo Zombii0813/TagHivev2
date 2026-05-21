@@ -468,10 +468,19 @@ function getWorkspaceName(ws: string): string {
 }
 
 async function handleAddWorkspace() {
+  // 记录调用前的工作区列表，用于判断本次是否新增
+  const existingBefore = new Set(appStore.workspaces)
   const selected = await appStore.selectFolder()
   if (selected) {
-    // 切换到新工作区并刷新
+    // 切换到新工作区并刷新视图
     refreshForWorkspace()
+    // 仅对“新添加的工作区”自动扫描；已存在的工作区只切换不重复扫描
+    if (!existingBefore.has(selected)) {
+      wsClient.connect()
+      fileStore.startScanning()
+      wsClient.startScan(selected)
+      ElMessage.success('已添加工作区，开始扫描...')
+    }
   }
 }
 
