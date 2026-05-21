@@ -638,12 +638,21 @@ const gridRows = computed<GridRow[]>(() => {
 })
 
 // Grid 行样式
-const gridRowStyle = computed(() => ({
-  display: 'flex',
-  gap: `${GAP}px`,
-  justifyContent: 'center',
-  height: `${gridItemHeight.value}px`
-}))
+// 每行宽度固定为 columns * itemWidth + (columns-1) * gap，
+// 通过 margin: 0 auto 让整行相对滚动容器水平居中（两边留白对称），
+// 行内使用 flex-start，最后一行未填满时单元格靠左而非居中。
+const gridRowStyle = computed(() => {
+  const columns = gridColumns.value
+  const rowWidth = columns * gridItemWidth.value + (columns - 1) * GAP
+  return {
+    display: 'flex',
+    gap: `${GAP}px`,
+    justifyContent: 'flex-start',
+    width: `${rowWidth}px`,
+    margin: '0 auto',
+    height: `${gridItemHeight.value}px`,
+  }
+})
 
 // Grid 单元格样式
 const gridCellStyle = computed(() => ({
