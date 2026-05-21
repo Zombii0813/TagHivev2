@@ -582,39 +582,26 @@ fn get_sidecar_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(PathBuf, P
         } else {
             None
         };
-        
-        // 然后尝试使用 conda 环境 taghive_env (在用户目录下)
-        let home_dir = dirs::home_dir().ok_or("Cannot find home directory")?;
-        let conda_python = home_dir.join(".conda").join("envs").join("taghive_env").join(if cfg!(windows) {
-            "python.exe"
-        } else {
-            "bin/python"
-        });
-        
-        if conda_python.exists() {
-            println!("Using conda environment: {:?}", conda_python);
-            return Ok((conda_python, src_python_dir, false));
-        }
-        
-        // 然后尝试使用 venv 虚拟环境
+
+        // 然后尝试使用 src-python/.venv 虚拟环境（uv sync 默认创建）
         let venv_python = src_python_dir.join(if cfg!(windows) {
-            "venv\\Scripts\\python.exe"
+            ".venv\\Scripts\\python.exe"
         } else {
-            "venv/bin/python"
+            ".venv/bin/python"
         });
-        
+
         if venv_python.exists() {
-            println!("Using venv: {:?}", venv_python);
+            println!("Using src-python/.venv: {:?}", venv_python);
             return Ok((venv_python, src_python_dir, false));
         }
-        
+
         // 最后使用系统 Python
         println!("Using system Python");
         Ok((PathBuf::from(if cfg!(windows) { "python" } else { "python3" }), src_python_dir, false))
     }
-    
+
     // 在生产模式下，首先尝试使用打包的 Python 可执行文件
-    // 如果不存在，则尝试查找系统 Python 或 conda 环境
+    // 如果不存在，则回退到系统 Python
     #[cfg(not(debug_assertions))]
     {
         let sidecar_name = if cfg!(windows) {
@@ -679,21 +666,7 @@ fn get_sidecar_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(PathBuf, P
                 return Ok((python_path, app_dir, false));
             }
         }
-        
-        // 尝试使用 conda 环境 taghive_env
-        if let Some(home_dir) = dirs::home_dir() {
-            let conda_python = home_dir.join(".conda").join("envs").join("taghive_env").join(if cfg!(windows) {
-                "python.exe"
-            } else {
-                "bin/python"
-            });
-            
-            if conda_python.exists() {
-                println!("Using conda environment: {:?}", conda_python);
-                return Ok((conda_python, app_dir, false));
-            }
-        }
-        
+
         // 尝试使用系统 Python
         let system_python = if cfg!(windows) { "python" } else { "python3" };
         println!("Using system Python: {}", system_python);

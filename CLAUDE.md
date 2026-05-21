@@ -27,7 +27,7 @@ cargo tauri dev
 
 1. **环境变量**（最高）：`TAGHIVE_PYTHON_PATH=/path/to/python`
 2. **配置文件**：`src-tauri/config.json` 中的 `python.path`（默认 `src-python/.venv/Scripts/python.exe`）
-3. **自动检测**：依次检查 `~/.conda/envs/taghive_env` → `src-python/venv` → 系统 `python`
+3. **自动检测**：依次检查 `src-python/.venv` → 系统 `python`
 
 ### 单独启动各层
 

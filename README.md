@@ -39,8 +39,9 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 ### 环境要求
 
 - Node.js 20+
-- Python 3.11+
+- Python 3.12+
 - Rust 1.75+
+- [uv](https://docs.astral.sh/uv/)（Python 包管理器）
 
 ### 安装依赖
 
@@ -49,9 +50,9 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 cd src-ui
 npm install
 
-# 安装 Python 依赖
+# 安装 Python 依赖（使用 uv 管理，自动创建 src-python/.venv）
 cd ../src-python
-pip install -r requirements.txt
+uv sync
 ```
 
 ## 开发模式运行
@@ -66,35 +67,35 @@ cargo tauri dev
 
 ### Python 环境配置
 
-项目支持多种方式配置 Python 环境，按优先级自动选择：
+项目使用 [uv](https://docs.astral.sh/uv/) 管理 Python 依赖；首次 `cd src-python && uv sync` 会自动创建 `src-python/.venv/`。Tauri 启动时按以下优先级选择 Python 解释器：
 
 #### 1. 环境变量（最高优先级，临时覆盖）
 
-适合临时切换 Python 环境：
+适合临时切换 Python 环境（例如调试别处的解释器）：
 
 ```powershell
 # Windows PowerShell
-$env:TAGHIVE_PYTHON_PATH = "C:\Users\YourName\.conda\envs\taghive_env\python.exe"
+$env:TAGHIVE_PYTHON_PATH = "D:\path\to\python.exe"
 cargo tauri dev
 
 # Windows CMD
-set TAGHIVE_PYTHON_PATH=C:\Users\YourName\.conda\envs\taghive_env\python.exe
+set TAGHIVE_PYTHON_PATH=D:\path\to\python.exe
 cargo tauri dev
 
 # Linux/macOS
-export TAGHIVE_PYTHON_PATH="$HOME/.conda/envs/taghive_env/bin/python"
+export TAGHIVE_PYTHON_PATH="/path/to/python"
 cargo tauri dev
 ```
 
 #### 2. 配置文件（持久化配置）
 
-编辑 `src-tauri/config.json`：
+编辑 `src-tauri/config.json`（默认指向 `src-python/.venv`）：
 
 ```json
 {
   "python": {
-    "type": "conda",
-    "path": "~/.conda/envs/taghive_env/python.exe"
+    "type": "uv",
+    "path": "src-python/.venv/Scripts/python.exe"
   },
   "data_dir": ".taghive"
 }
@@ -110,11 +111,10 @@ cargo tauri dev
 
 #### 3. 自动检测（零配置）
 
-如果没有设置环境变量和配置文件，程序会自动检测：
+如果没有设置环境变量和配置文件，开发模式会自动检测：
 
-1. **Conda 环境**: `~/.conda/envs/taghive_env/python.exe`
-2. **venv 虚拟环境**: `src-python/venv/Scripts/python.exe` (Windows) 或 `src-python/venv/bin/python` (Linux/macOS)
-3. **系统 Python**: `python` 或 `python3`
+1. **uv 虚拟环境**: `src-python/.venv/Scripts/python.exe` (Windows) 或 `src-python/.venv/bin/python` (Linux/macOS)
+2. **系统 Python**: `python` 或 `python3`
 
 ### 方式二：手动分别启动
 
@@ -123,14 +123,14 @@ cargo tauri dev
 ```bash
 # 终端 1：启动 Python Sidecar
 cd src-python
-python -m app.main
+uv run python -m app.main
 
 # 终端 2：启动前端开发服务器
 cd src-ui
 npm run dev
 ```
 
-Python Sidecar 默认运行在 `http://127.0.0.1:8000`
+Python Sidecar 默认运行在 `http://127.0.0.1:8721`
 
 ## 构建生产版本
 
@@ -140,10 +140,9 @@ Python Sidecar 默认运行在 `http://127.0.0.1:8000`
 
 ```bash
 # 1. 打包 Python Sidecar
-python scripts/build-sidecar.py
+uv run scripts/build-sidecar.py
 
-# 2. 构建 Tauri 应用
-cd src-tauri
+# 2. 构建 Tauri 应用，根目录下运行即可
 cargo tauri build
 ```
 
@@ -163,7 +162,6 @@ cargo tauri build
 
 ```bash
 # 运行生产版本（开发测试）
-cd src-tauri
 cargo tauri build --debug
 ./target/debug/TagHive.exe  # Windows
 ./target/debug/TagHive      # Linux/macOS
