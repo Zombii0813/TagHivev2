@@ -185,6 +185,10 @@
       @update:visible="onContextMenuVisibleChange"
     >
       <div class="context-menu">
+        <div class="context-menu-item" @click="createChildTag">
+          <el-icon><Plus /></el-icon>
+          <span>创建子标签</span>
+        </div>
         <div class="context-menu-item" @click="editTag">
           <el-icon><Edit /></el-icon>
           <span>编辑标签</span>
@@ -916,6 +920,27 @@ function editTag() {
   editingTag.value = { ...selectedTag.value, icon: selectedTag.value.icon || '' }
   contextMenuVisible.value = false
   showEditDialog.value = true
+}
+
+// 右键"创建子标签"：以当前标签为父，复用新建对话框
+function createChildTag() {
+  if (!selectedTag.value) return
+  const parent = selectedTag.value
+  contextMenuVisible.value = false
+
+  const used = tagStore.tags.map(t => t.color).filter((c): c is string => !!c)
+  newTag.value = {
+    name: '',
+    color: pickDistinctColor(used, PRESET_COLORS),
+    icon: '',
+    description: '',
+    parentId: parent.id,
+  }
+  // 展开父节点，便于创建后立即可见
+  if (!tagStore.expandedTagIds.has(parent.id)) {
+    tagStore.toggleExpand(parent.id)
+  }
+  showCreateDialog.value = true
 }
 
 async function saveTagEdit() {
