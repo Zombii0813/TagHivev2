@@ -970,30 +970,82 @@ async function confirmDeleteTag() {
   const tag = selectedTag.value
   contextMenuVisible.value = false
 
+  // 收集后代信息：子标签存在时，需要询问是同删还是升级保留
+  const directChildren = tagStore.tags.filter(t => t.parent_id === tag.id)
+  const descendantIds = tagStore.getDescendantIds(tag.id)
+  const hasChildren = directChildren.length > 0
+
+  // action 决定删除策略：
+  //   'all'          —— 连同所有后代一起删除
+  //   'children-up'  —— 仅删父标签，直接子标签的 parent_id 改为父标签自身的 parent_id（即整体上升一层）
+  let action: 'all' | 'children-up' | null = null
+
   try {
-    await ElMessageBox.confirm(
-      `确定要删除标签 "${tag.name}" 吗？${tag.file_count > 0 ? `该标签已关联 ${tag.file_count} 个文件。` : ''}`,
-      '删除确认',
-      {
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        type: 'warning',
+    if (hasChildren) {
+      try {
+        await ElMessageBox.confirm(
+          `标签「${tag.name}」下包含 ${descendantIds.length} 个子标签，是否一并删除？\n选择"保留子标签"会将其层级提升一层。`,
+          '删除标签',
+          {
+            confirmButtonText: '全部删除',
+            cancelButtonText: '保留子标签',
+            type: 'warning',
+            distinguishCancelAndClose: true,
+            dangerouslyUseHTMLString: false,
+          }
+        )
+        action = 'all'
+      } catch (rejection) {
+        // 'cancel' = 点击"保留子标签"按钮；'close' = 点 X 或按 Esc 整体取消
+        if (rejection === 'cancel') {
+          action = 'children-up'
+        } else {
+          return
+        }
       }
-    )
+    } else {
+      await ElMessageBox.confirm(
+        `确定要删除标签 "${tag.name}" 吗？${tag.file_count > 0 ? `该标签已关联 ${tag.file_count} 个文件。` : ''}`,
+        '删除确认',
+        {
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      )
+      action = 'all'
+    }
+  } catch {
+    return
+  }
 
-    await tagStore.deleteTag(tag.id)
+  try {
+    if (action === 'children-up') {
+      // 直接子标签的 parent_id 升级为被删标签的 parent_id（顶级则为 null）；
+      // 孙子标签的 parent 仍指向其直接父，无需调整。
+      const newParentId: number | null = tag.parent_id ?? null
+      for (const child of directChildren) {
+        await tagStore.updateTag(child.id, { parent_id: newParentId })
+      }
+      await tagStore.deleteTag(tag.id)
+    } else {
+      // 全部删除：先删后代（任意顺序均可，后代先于祖先即可避免 SET NULL 漂移）
+      for (const id of descendantIds) {
+        await tagStore.deleteTag(id)
+      }
+      await tagStore.deleteTag(tag.id)
+    }
 
-    // 如果该标签正在被过滤，清除过滤
-    if (tagStore.selectedTagIds.has(tag.id)) {
+    // 如果该标签或其后代正在被过滤，清除过滤
+    if (tagStore.selectedTagIds.has(tag.id) || descendantIds.some(id => tagStore.selectedTagIds.has(id))) {
       tagStore.clearSelection()
       restoreCurrentView()
     }
 
     ElMessage.success('标签删除成功')
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error('标签删除失败')
-    }
+  } catch (error) {
+    console.error('Failed to delete tag:', error)
+    ElMessage.error('标签删除失败')
   }
 }
 </script>
