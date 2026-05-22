@@ -1541,74 +1541,105 @@ async function handleExternalDrop(event: DragEvent) {
 }
 
 /* Grid 行容器 */
-.grid-row {
+.browser-view :deep(.grid-row) {
   box-sizing: border-box;
   align-items: flex-start;
 }
 
 /* Grid 单元格 */
-.grid-cell {
+.browser-view :deep(.grid-cell) {
   box-sizing: border-box;
-}
-
-.grid-cell.file-drop-active,
-.list-drop-target.file-drop-active {
-  border-radius: 12px;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent);
-  background: color-mix(in srgb, var(--color-accent-light) 32%, transparent);
-  animation: file-drop-pulse 0.6s ease infinite alternate;
-}
-
-/* 标签拖拽到文件时的徽章预览 */
-.grid-cell,
-.list-drop-target {
   position: relative;
 }
 
-.tag-drop-badge {
+.browser-view :deep(.list-drop-target) {
+  position: relative;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.browser-view :deep(.grid-cell.file-drop-active),
+.browser-view :deep(.list-drop-target.file-drop-active) {
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0 0 2px var(--tag-color, var(--color-accent)),
+    0 0 0 4px color-mix(in srgb, var(--tag-color, var(--color-accent)) 18%, transparent),
+    0 6px 24px color-mix(in srgb, var(--tag-color, var(--color-accent)) 28%, transparent);
+  background: color-mix(in srgb, var(--tag-color, var(--color-accent)) 12%, transparent);
+  animation: file-drop-pulse 0.9s ease-in-out infinite alternate;
+  transition: box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+/* 命中状态下放大文件卡片，配合徽章营造"被吸附"的感觉 */
+.browser-view :deep(.grid-cell.file-drop-active .file-card) {
+  transform: translateY(-4px) scale(1.04);
+  border-color: var(--tag-color, var(--color-accent));
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--tag-color, var(--color-accent)) 28%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--tag-color, var(--color-accent)) 35%, transparent);
+}
+
+.browser-view :deep(.tag-drop-badge) {
   position: absolute;
   bottom: 56px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px 4px 6px;
-  border-radius: 20px;
+  gap: 6px;
+  padding: 5px 12px 5px 8px;
+  border-radius: 999px;
   background: var(--tag-color, #409EFF);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
-  animation: tag-badge-appear 0.18s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  box-shadow:
+    0 4px 14px color-mix(in srgb, var(--tag-color, #409EFF) 45%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.3) inset;
+  border: 1px solid color-mix(in srgb, #ffffff 40%, transparent);
+  animation: tag-badge-appear 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   z-index: 10;
 }
 
-.tag-drop-badge--list {
+.browser-view :deep(.tag-drop-badge--list) {
   bottom: auto;
   top: 50%;
   left: auto;
   right: 16px;
   transform: translateY(-50%);
+  animation-name: tag-badge-appear-list;
 }
 
-.tag-drop-badge-icon {
+.browser-view :deep(.tag-drop-badge-plus) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--tag-color, #409EFF);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.browser-view :deep(.tag-drop-badge-icon) {
   font-size: 14px;
   line-height: 1;
 }
 
-.tag-drop-badge-dot {
+.browser-view :deep(.tag-drop-badge-dot) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.8);
+  background: rgba(255,255,255,0.85);
   flex-shrink: 0;
 }
 
-.tag-drop-badge-name {
-  max-width: 80px;
+.browser-view :deep(.tag-drop-badge-name) {
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1616,21 +1647,38 @@ async function handleExternalDrop(event: DragEvent) {
 @keyframes tag-badge-appear {
   from {
     opacity: 0;
-    transform: translateX(-50%) scale(0.6);
+    transform: translateX(-50%) translateY(6px) scale(0.7);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) scale(1);
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+@keyframes tag-badge-appear-list {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(8px) scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0) scale(1);
   }
 }
 
 @keyframes file-drop-pulse {
-  from { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 50%, transparent); }
-  to   { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 90%, transparent), 0 0 12px color-mix(in srgb, var(--color-accent) 25%, transparent); }
-}
-
-.list-drop-target {
-  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+  from {
+    box-shadow:
+      inset 0 0 0 2px color-mix(in srgb, var(--tag-color, var(--color-accent)) 60%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--tag-color, var(--color-accent)) 14%, transparent),
+      0 4px 18px color-mix(in srgb, var(--tag-color, var(--color-accent)) 22%, transparent);
+  }
+  to {
+    box-shadow:
+      inset 0 0 0 2px var(--tag-color, var(--color-accent)),
+      0 0 0 6px color-mix(in srgb, var(--tag-color, var(--color-accent)) 22%, transparent),
+      0 8px 26px color-mix(in srgb, var(--tag-color, var(--color-accent)) 36%, transparent);
+  }
 }
 
 .list-view {

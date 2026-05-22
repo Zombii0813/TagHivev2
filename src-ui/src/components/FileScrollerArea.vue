@@ -14,7 +14,7 @@
         :key="file.id"
         class="grid-cell"
         :class="{ 'file-drop-active': activeDropFileId === file.id }"
-        :style="gridCellStyle"
+        :style="cellDropStyle(file.id)"
         :data-file-id="file.id"
         @dragover.prevent.stop="$emit('file-drag-over', file.id, $event)"
         @dragleave="$emit('file-drag-leave', file.id)"
@@ -33,8 +33,8 @@
         <div
           v-if="activeDropFileId === file.id && dragTagMeta"
           class="tag-drop-badge"
-          :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
         >
+          <span class="tag-drop-badge-plus">+</span>
           <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
           <span v-else class="tag-drop-badge-dot"></span>
           <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
@@ -55,6 +55,7 @@
     <div
       class="list-drop-target"
       :class="{ 'file-drop-active': activeDropFileId === item.id }"
+      :style="cellDropStyle(item.id)"
       @dragover.prevent.stop="$emit('file-drag-over', item.id, $event)"
       @dragleave="$emit('file-drag-leave', item.id)"
       @drop.prevent.stop="$emit('file-drop', item, $event)"
@@ -69,8 +70,8 @@
       <div
         v-if="activeDropFileId === item.id && dragTagMeta"
         :class="['tag-drop-badge', listBadgeModifier ? 'tag-drop-badge--list' : '']"
-        :style="{ '--tag-color': dragTagMeta.color || '#409EFF' }"
       >
+        <span class="tag-drop-badge-plus">+</span>
         <span v-if="dragTagMeta.icon" class="tag-drop-badge-icon">{{ dragTagMeta.icon }}</span>
         <span v-else class="tag-drop-badge-dot"></span>
         <span class="tag-drop-badge-name">{{ dragTagMeta.name }}</span>
@@ -92,7 +93,7 @@ interface GridRow {
   files: FileSummary[]
 }
 
-defineProps<{
+const props = defineProps<{
   viewMode: 'grid' | 'list'
   files: FileSummary[]
   gridRows: GridRow[]
@@ -117,4 +118,17 @@ defineEmits<{
   (e: 'file-drop', file: FileSummary, evt: DragEvent): void
   (e: 'checkbox-click', fileId: number): void
 }>()
+
+// 把拖拽中的标签颜色作为 CSS 变量注入到当前作为 drop 目标的单元格上，
+// 让 drop 高亮（外发光、轮廓、徽章背景）都用该标签颜色，便于一眼识别正在添加的是哪个标签。
+function cellDropStyle(fileId: number): CSSProperties {
+  const isActive = props.activeDropFileId === fileId
+  const tagColor = props.dragTagMeta?.color || '#409EFF'
+  if (props.viewMode === 'grid') {
+    return isActive
+      ? { ...props.gridCellStyle, '--tag-color': tagColor } as CSSProperties
+      : props.gridCellStyle
+  }
+  return isActive ? ({ '--tag-color': tagColor } as CSSProperties) : {}
+}
 </script>
