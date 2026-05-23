@@ -66,7 +66,7 @@
         >
           <div
             class="collapsed-tag-item"
-            :class="{ selected: tagStore.selectedTagIds.has(tag.id) }"
+            :class="{ selected: tagStore.isTagActive(tag.id) }"
             :style="{ borderColor: tag.color, backgroundColor: tag.color + '25' }"
             @click="handleCollapsedTagClick(tag.id)"
           >
@@ -598,7 +598,7 @@ function handleCollapsedTagClick(tagId: number) {
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
       root,
-      tags: Array.from(tagStore.selectedTagIds),
+      tags: Array.from(tagStore.effectiveTagIds),
       match_all_tags: false,
     })
   }

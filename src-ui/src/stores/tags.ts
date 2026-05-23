@@ -8,6 +8,16 @@ function buildTagOrderKey(root?: string | null) {
   return `taghive:tag-order:${root || '__global__'}`
 }
 
+function buildTagFilterModeKey(root?: string | null) {
+  return `taghive:tag-filter-mode:${root || '__global__'}`
+}
+
+/** 标签过滤模式：
+ * - with-descendants：选中父标签时连同所有后代标签一起作为过滤条件（默认，与历史行为一致）
+ * - self-only：仅以用户实际点选的标签作为过滤条件，不展开后代
+ */
+export type TagFilterMode = 'with-descendants' | 'self-only'
+
 export interface TagTreeNode {
   tag: Tag
   children: TagTreeNode[]
@@ -66,6 +76,7 @@ export const useTagStore = defineStore('tags', () => {
   const orderIds = ref<number[]>([])
   const lastLoadedRoot = ref<string>()
   const expandedTagIds = ref<Set<number>>(new Set())
+  const tagFilterMode = ref<TagFilterMode>('with-descendants')
 
   // Getters
   const tagMap = computed(() => {
@@ -134,6 +145,33 @@ export const useTagStore = defineStore('tags', () => {
     return result
   }
 
+  /** 实际下发给查询的标签 ID 集合。
+   * - with-descendants：用户选中的标签 ∪ 其所有后代
+   * - self-only：仅用户选中的标签本身
+   * 注意：selectedTagIds 始终只保存"用户实际点击的标签"，后代展开放在此处计算，便于模式切换。
+   */
+  const effectiveTagIds = computed<Set<number>>(() => {
+    if (tagFilterMode.value === 'self-only') {
+      return new Set(selectedTagIds.value)
+    }
+    const result = new Set<number>(selectedTagIds.value)
+    for (const id of selectedTagIds.value) {
+      for (const cid of getDescendantIds(id)) {
+        result.add(cid)
+      }
+    }
+    return result
+  })
+
+  /** 标签是否处于"激活"视觉态（用于侧栏高亮）。
+   * 与 effectiveTagIds 对齐：
+   * - self-only：仅用户实际点选的标签高亮
+   * - with-descendants：点选的标签及其所有后代标签都高亮
+   */
+  function isTagActive(tagId: number): boolean {
+    return effectiveTagIds.value.has(tagId)
+  }
+
   function syncTagOrder(root?: string) {
     const storageKey = buildTagOrderKey(root)
     let storedOrder: number[] = []
@@ -175,6 +213,7 @@ export const useTagStore = defineStore('tags', () => {
   async function loadTags(root?: string) {
     isLoading.value = true
     lastLoadedRoot.value = root
+    loadTagFilterMode(root)
     try {
       tags.value = await tagApi.getAll(root)
       syncTagOrder(root)
@@ -241,21 +280,35 @@ export const useTagStore = defineStore('tags', () => {
   }
 
   function selectTag(id: number, multi: boolean = false) {
+    // 仅记录"用户点击的标签"。是否在查询时展开后代，由 tagFilterMode + effectiveTagIds 决定。
     if (multi) {
       if (selectedTagIds.value.has(id)) {
         selectedTagIds.value.delete(id)
-        // 取消父标签时也取消所有子标签
-        getDescendantIds(id).forEach(cid => selectedTagIds.value.delete(cid))
       } else {
         selectedTagIds.value.add(id)
-        // 选中父标签时同时选中所有子标签
-        getDescendantIds(id).forEach(cid => selectedTagIds.value.add(cid))
       }
     } else {
       selectedTagIds.value.clear()
       selectedTagIds.value.add(id)
-      // 选中父标签时同时选中所有子标签
-      getDescendantIds(id).forEach(cid => selectedTagIds.value.add(cid))
+    }
+  }
+
+  function setTagFilterMode(mode: TagFilterMode) {
+    if (tagFilterMode.value === mode) return
+    tagFilterMode.value = mode
+    try {
+      localStorage.setItem(buildTagFilterModeKey(lastLoadedRoot.value), mode)
+    } catch (error) {
+      console.warn('Failed to persist tag filter mode:', error)
+    }
+  }
+
+  function loadTagFilterMode(root?: string | null) {
+    try {
+      const raw = localStorage.getItem(buildTagFilterModeKey(root))
+      tagFilterMode.value = raw === 'self-only' ? 'self-only' : 'with-descendants'
+    } catch {
+      tagFilterMode.value = 'with-descendants'
     }
   }
 
@@ -332,6 +385,10 @@ export const useTagStore = defineStore('tags', () => {
     flatTagList,
     expandedTagIds,
     lastLoadedRoot,
+    tagFilterMode,
+    effectiveTagIds,
+    isTagActive,
+    setTagFilterMode,
     loadTags,
     reloadTags,
     createTag,

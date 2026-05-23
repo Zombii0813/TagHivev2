@@ -22,28 +22,27 @@
       </div>
     </div>
 
-    <!-- 过滤状态提示 -->
-    <div v-if="!isManageMode" class="filter-status" :class="{ active: tagStore.hasSelection }">
-      <el-alert
-        :title="tagStore.hasSelection ? `已选择 ${tagStore.selectedTagIds.size} 个标签过滤` : '点击标签进行过滤'"
-        :type="tagStore.hasSelection ? 'info' : 'info'"
-        :closable="false"
-        show-icon
+    <!-- 标签层级过滤模式切换：含子标签 vs 仅本标签 -->
+    <div v-if="!isManageMode" class="tag-filter-mode">
+      <el-radio-group
+        :model-value="tagStore.tagFilterMode"
+        size="small"
+        @change="handleFilterModeChange"
       >
-        <template #default>
-          <el-button
-            v-if="tagStore.hasSelection"
-            type="primary"
-            link
-            size="small"
-            :icon="Close"
-            @click="clearFilter"
-          >
-            清除过滤
-          </el-button>
-          <span v-else class="filter-hint">支持多选 (Ctrl+点击)</span>
-        </template>
-      </el-alert>
+        <el-radio-button value="with-descendants" title="父标签匹配自身及所有子标签的文件">含子标签</el-radio-button>
+        <el-radio-button value="self-only" title="父标签仅匹配直接打在自身的文件">仅本标签</el-radio-button>
+      </el-radio-group>
+      <el-button
+        v-if="tagStore.hasSelection"
+        type="primary"
+        link
+        size="small"
+        :icon="Close"
+        class="filter-clear-btn"
+        @click="clearFilter"
+      >
+        清除过滤
+      </el-button>
     </div>
 
     <!-- 管理模式提示 -->
@@ -61,7 +60,8 @@
         <div
           class="tag-item"
           :class="{
-            selected: !isManageMode && tagStore.selectedTagIds.has(node.tag.id),
+            selected: !isManageMode && tagStore.isTagActive(node.tag.id),
+            'selected-direct': !isManageMode && tagStore.selectedTagIds.has(node.tag.id),
             'manage-dragging': isManageMode && manageDragState.sourceId === node.tag.id,
             'manage-item': isManageMode,
           }"
@@ -600,6 +600,8 @@ function getTagItemStyle(tag: Tag, index: number): Record<string, string> {
   const base: Record<string, string> = {
     backgroundColor: color + '20',
     borderColor: color,
+    // 用 CSS 变量把标签色透传给 .selected 状态使用（inset box-shadow 模拟加粗边框）
+    '--tag-color': color,
   }
   if (!isManageMode.value) return base
 
@@ -832,15 +834,28 @@ function handleTagClick(tagId: number, event: MouseEvent) {
 
   tagStore.selectTag(tagId, multi)
 
-  // 更新文件搜索
+  // 更新文件搜索（实际下发后代展开后的标签集合，由 store 根据当前模式计算）
   if (tagStore.selectedTagIds.size > 0) {
     fileStore.search({
       root: getSearchRoot(),
-      tags: Array.from(tagStore.selectedTagIds),
+      tags: Array.from(tagStore.effectiveTagIds),
       match_all_tags: false,
     })
   } else {
     restoreCurrentView()
+  }
+}
+
+function handleFilterModeChange(value: string | number | boolean | undefined) {
+  if (value !== 'with-descendants' && value !== 'self-only') return
+  tagStore.setTagFilterMode(value)
+  // 已有选中标签时，按新模式重新触发查询
+  if (tagStore.selectedTagIds.size > 0) {
+    fileStore.search({
+      root: getSearchRoot(),
+      tags: Array.from(tagStore.effectiveTagIds),
+      match_all_tags: false,
+    })
   }
 }
 
@@ -1089,18 +1104,26 @@ async function confirmDeleteTag() {
 }
 
 .filter-status {
-  padding: 8px 16px;
+  display: none;
+}
+
+.tag-filter-mode {
+  padding: 6px 16px 8px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
-.filter-status :deep(.el-alert) {
-  padding: 8px 12px;
-}
-
-.filter-status .filter-hint {
+.tag-filter-mode :deep(.el-radio-button__inner) {
+  padding: 4px 12px;
   font-size: 12px;
-  color: var(--color-text-tertiary);
+}
+
+.filter-clear-btn {
+  margin-left: auto;
 }
 
 .tag-list {
@@ -1137,7 +1160,10 @@ async function confirmDeleteTag() {
 }
 
 .tag-item.selected {
-  border-width: 2px;
+  /* 用 inset box-shadow 在已有 1px 边框内侧再叠 1px，等效"边框加粗到 2px"，
+     但不改变盒模型尺寸，避免触发选中态的位置偏移。
+     --tag-color 由内联样式 getTagItemStyle 注入，与 border-color 同色。 */
+  box-shadow: inset 0 0 0 1px var(--tag-color, currentColor);
 }
 
 .manage-drag-handle {
