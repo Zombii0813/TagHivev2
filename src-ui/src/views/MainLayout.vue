@@ -1047,35 +1047,49 @@ function handleCollapsedTagClick(tagId: number) {
 
 /* ===== 底部状态栏 ===== */
 .status-bar {
-  min-height: 28px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
   padding: 0 16px;
+  gap: 12px;
   border-top: 1px solid var(--color-border);
   background: var(--color-bg-secondary);
   flex-shrink: 0;
   font-size: 12px;
   color: var(--color-text-secondary);
+  overflow: hidden;
 }
 
-.status-bar-left,
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .status-bar-right {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .status-bar-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .status-text {
   display: flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
 }
 
 .loading-icon {
@@ -1091,14 +1105,16 @@ function handleCollapsedTagClick(tagId: number) {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .scan-text {
   white-space: nowrap;
   color: var(--color-accent);
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .scan-progress-bar {
@@ -1110,13 +1126,16 @@ function handleCollapsedTagClick(tagId: number) {
   white-space: nowrap;
   font-size: 11px;
   color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 
 .scan-file {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  /* 占据剩余空间并允许压缩到 0；右侧按钮组宽度变化时不会再撑高状态栏 */
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 11px;
   color: var(--color-text-secondary);
   opacity: 0.8;
@@ -1130,10 +1149,6 @@ function handleCollapsedTagClick(tagId: number) {
 
   .scan-progress-bar {
     width: 60px;
-  }
-
-  .scan-file {
-    max-width: 100px;
   }
 }
 
