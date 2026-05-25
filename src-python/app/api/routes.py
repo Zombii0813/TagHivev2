@@ -487,10 +487,16 @@ async def move_files(
     payload: FileMoveRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
-    """将文件移动到指定目录（工作区内移动）"""
+    """将文件移动到指定目录（支持跨工作区）
+
+    跨工作区移动时，源文件原本携带的、属于其它工作区的标签关联会被解除；
+    目标工作区下不存在的标签则会被剥离，避免出现"文件出现在新工作区却被旧工作区标签反向匹配"的语义混乱。
+    """
     target_dir = Path(payload.target_dir)
     if not target_dir.exists() or not target_dir.is_dir():
         raise HTTPException(status_code=400, detail="Target directory not found")
+
+    target_workspace = (payload.target_workspace or "").strip() or None
 
     moved_files: list[FileSummaryDTO] = []
 
@@ -516,6 +522,16 @@ async def move_files(
 
         meta = build_file_meta(dest_path)
         file_row = repo.upsert_file(meta, existing_id=file.id)
+
+        # 跨工作区移动时清理不属于目标工作区的标签关联
+        if target_workspace:
+            kept_tags = [
+                t for t in file_row.tags
+                if t.workspace is None or t.workspace == target_workspace
+            ]
+            if len(kept_tags) != len(file_row.tags):
+                file_row.tags = kept_tags
+
         moved_files.append(FileSummaryDTO(
             id=file_row.id,
             name=file_row.name,

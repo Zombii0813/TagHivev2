@@ -148,15 +148,31 @@ class FileRenameRequestDTO(BaseModel):
 
 
 class FileMoveRequestDTO(BaseModel):
-    """移动文件请求 DTO"""
+    """移动文件请求 DTO
+
+    Attributes:
+        file_ids: 待移动文件 ID 列表
+        target_dir: 目标目录绝对路径（可跨工作区）
+        target_workspace: 目标目录所在的工作区根路径；当跨工作区移动时用于清理不再适用的标签关联，
+            为空表示不做工作区清理（仅做物理移动）
+    """
     file_ids: List[int]
     target_dir: str
+    target_workspace: Optional[str] = None
 
 
 class FileCopyRequestDTO(BaseModel):
-    """复制文件请求 DTO"""
+    """复制文件请求 DTO
+
+    Attributes:
+        file_ids: 待复制文件 ID 列表
+        target_dir: 目标目录绝对路径（可跨工作区）
+        target_workspace: 目标目录所在的工作区根路径；当前实现下副本默认不携带原标签，
+            该字段保留用于将来按工作区匹配复制标签
+    """
     file_ids: List[int]
     target_dir: str
+    target_workspace: Optional[str] = None
 
 
 class FileBatchResultDTO(BaseModel):

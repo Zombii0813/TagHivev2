@@ -227,17 +227,32 @@
               请选择工作区中的目标目录，确认后会将文件{{ fileOpMode === 'move' ? '移动' : '复制' }}到该位置。
             </p>
           </div>
-          <div class="import-dialog-workspace">
-            <span class="workspace-label">工作区</span>
-            <strong>{{ getFolderDisplayName(appStore.currentWorkspace || '') }}</strong>
+          <div class="import-dialog-workspace import-dialog-workspace-select">
+            <span class="workspace-label">目标工作区</span>
+            <el-select
+              v-model="fileOpTargetWorkspace"
+              size="small"
+              :disabled="fileOpTreeLoading || fileOpSubmitting"
+              @change="handleFileOpWorkspaceChange"
+            >
+              <el-option
+                v-for="ws in appStore.workspaces"
+                :key="ws"
+                :label="getFolderDisplayName(ws)"
+                :value="ws"
+              >
+                <span class="workspace-option-name">{{ getFolderDisplayName(ws) }}</span>
+                <span class="workspace-option-path">{{ ws }}</span>
+              </el-option>
+            </el-select>
           </div>
         </div>
 
         <div class="import-target-summary-card">
           <div class="summary-main">
             <span class="summary-label">当前目标</span>
-            <strong>{{ getFolderDisplayName(fileOpTargetDir || appStore.currentWorkspace || '') || '未选择' }}</strong>
-            <span class="summary-path">{{ getRelativeImportPath(fileOpTargetDir || appStore.currentWorkspace || '') }}</span>
+            <strong>{{ getFolderDisplayName(fileOpTargetDir || fileOpTargetWorkspace || '') || '未选择' }}</strong>
+            <span class="summary-path">{{ getRelativeImportPath(fileOpTargetDir || fileOpTargetWorkspace || '', fileOpTargetWorkspace) }}</span>
           </div>
           <div class="summary-actions">
             <el-button text @click="toggleFileOpCreateFolder">
@@ -249,7 +264,7 @@
         <div v-if="showFileOpCreateFolder" class="create-folder-panel">
           <div class="create-folder-info">
             <span>在</span>
-            <strong>{{ fileOpTargetDir || appStore.currentWorkspace }}</strong>
+            <strong>{{ fileOpTargetDir || fileOpTargetWorkspace }}</strong>
             <span>下创建目录</span>
           </div>
           <div class="create-folder-form">
@@ -302,7 +317,7 @@
               </div>
             </template>
           </el-tree>
-          <el-empty v-else description="当前工作区暂无可选目录" :image-size="80" />
+          <el-empty v-else description="该工作区暂无可选目录" :image-size="80" />
         </div>
       </div>
 
@@ -504,6 +519,7 @@ const renameSubmitting = ref(false)
 const showFileOpDialog = ref(false)
 const fileOpMode = ref<'move' | 'copy'>('move')
 const fileOpTargetDir = ref('')
+const fileOpTargetWorkspace = ref('')
 const fileOpTreeLoading = ref(false)
 const fileOpSubmitting = ref(false)
 const fileOpFolderTree = ref<FolderNode[]>([])
@@ -565,10 +581,11 @@ const canCreateFolder = computed(() => {
 
 // 移动/复制对话框的目录树数据
 const fileOpTreeData = computed<FolderNode[]>(() => {
-  if (!appStore.currentWorkspace) return []
+  const ws = fileOpTargetWorkspace.value
+  if (!ws) return []
   return [{
-    name: getFolderDisplayName(appStore.currentWorkspace),
-    path: appStore.currentWorkspace,
+    name: getFolderDisplayName(ws),
+    path: ws,
     file_count: 0,
     children: fileOpFolderTree.value,
     is_expanded: true,
@@ -576,9 +593,9 @@ const fileOpTreeData = computed<FolderNode[]>(() => {
 })
 
 const fileOpDefaultExpandedKeys = computed(() => {
-  const targetPath = fileOpTargetDir.value || appStore.currentWorkspace
-  if (!targetPath || !appStore.currentWorkspace) return []
-  const rootPath = appStore.currentWorkspace
+  const rootPath = fileOpTargetWorkspace.value
+  const targetPath = fileOpTargetDir.value || rootPath
+  if (!targetPath || !rootPath) return []
   const normalizedRoot = rootPath.replace(/\\/g, '/')
   const normalizedTarget = targetPath.replace(/\\/g, '/')
   if (!normalizedTarget.startsWith(normalizedRoot)) return [rootPath]
@@ -690,12 +707,13 @@ function getFolderDisplayName(path: string): string {
   return parts[parts.length - 1] || path
 }
 
-function getRelativeImportPath(path: string): string {
-  if (!path || !appStore.currentWorkspace) {
+function getRelativeImportPath(path: string, rootOverride?: string): string {
+  const root = rootOverride || appStore.currentWorkspace
+  if (!path || !root) {
     return '未选择目录'
   }
 
-  const normalizedRoot = appStore.currentWorkspace.replace(/\\/g, '/')
+  const normalizedRoot = root.replace(/\\/g, '/')
   const normalizedPath = path.replace(/\\/g, '/')
 
   if (normalizedPath === normalizedRoot) {
@@ -1235,7 +1253,8 @@ async function confirmRename() {
 async function openMoveDialog() {
   fileContextMenuVisible.value = false
   fileOpMode.value = 'move'
-  fileOpTargetDir.value = currentImportDirectory.value || appStore.currentWorkspace || ''
+  fileOpTargetWorkspace.value = appStore.currentWorkspace || appStore.workspaces[0] || ''
+  fileOpTargetDir.value = currentImportDirectory.value || fileOpTargetWorkspace.value
   showFileOpCreateFolder.value = false
   fileOpNewFolderName.value = ''
   showFileOpDialog.value = true
@@ -1245,7 +1264,8 @@ async function openMoveDialog() {
 async function openCopyDialog() {
   fileContextMenuVisible.value = false
   fileOpMode.value = 'copy'
-  fileOpTargetDir.value = currentImportDirectory.value || appStore.currentWorkspace || ''
+  fileOpTargetWorkspace.value = appStore.currentWorkspace || appStore.workspaces[0] || ''
+  fileOpTargetDir.value = currentImportDirectory.value || fileOpTargetWorkspace.value
   showFileOpCreateFolder.value = false
   fileOpNewFolderName.value = ''
   showFileOpDialog.value = true
@@ -1253,10 +1273,11 @@ async function openCopyDialog() {
 }
 
 async function loadFileOpFolderTree() {
-  if (!appStore.currentWorkspace) return
+  const ws = fileOpTargetWorkspace.value
+  if (!ws) return
   fileOpTreeLoading.value = true
   try {
-    const result = await folderApi.getTree(appStore.currentWorkspace)
+    const result = await folderApi.getTree(ws)
     fileOpFolderTree.value = result.folders
   } catch {
     ElMessage.error('加载目录失败')
@@ -1270,6 +1291,15 @@ async function loadFileOpFolderTree() {
   }
 }
 
+async function handleFileOpWorkspaceChange(workspace: string) {
+  fileOpTargetWorkspace.value = workspace
+  // 切换工作区后，目标目录回退到该工作区根
+  fileOpTargetDir.value = workspace
+  showFileOpCreateFolder.value = false
+  fileOpNewFolderName.value = ''
+  await loadFileOpFolderTree()
+}
+
 function handleFileOpTargetSelect(node: FolderNode) {
   fileOpTargetDir.value = node.path
 }
@@ -1280,14 +1310,15 @@ function toggleFileOpCreateFolder() {
 }
 
 async function createFolderInFileOpDialog() {
-  const parentPath = fileOpTargetDir.value || appStore.currentWorkspace
+  const ws = fileOpTargetWorkspace.value
+  const parentPath = fileOpTargetDir.value || ws
   const folderName = fileOpNewFolderName.value.trim()
-  if (!appStore.currentWorkspace || !parentPath || !folderName) return
+  if (!ws || !parentPath || !folderName) return
   fileOpCreatingFolder.value = true
   try {
     let createdPath = ''
     try {
-      const result = await folderApi.createFolder(appStore.currentWorkspace, parentPath, folderName)
+      const result = await folderApi.createFolder(ws, parentPath, folderName)
       createdPath = result.path
     } catch (error: any) {
       if (error?.response?.status !== 404) throw error
@@ -1310,13 +1341,14 @@ async function createFolderInFileOpDialog() {
 
 async function confirmFileOp() {
   if (!fileOpTargetDir.value || !contextMenuTargetIds.value.length) return
+  const targetWs = fileOpTargetWorkspace.value || undefined
   fileOpSubmitting.value = true
   try {
     if (fileOpMode.value === 'move') {
-      const result = await fileApi.move(contextMenuTargetIds.value, fileOpTargetDir.value)
+      const result = await fileApi.move(contextMenuTargetIds.value, fileOpTargetDir.value, targetWs)
       ElMessage.success(`已移动 ${result.files.length} 个文件`)
     } else {
-      const result = await fileApi.copy(contextMenuTargetIds.value, fileOpTargetDir.value)
+      const result = await fileApi.copy(contextMenuTargetIds.value, fileOpTargetDir.value, targetWs)
       ElMessage.success(`已复制 ${result.files.length} 个文件`)
     }
     showFileOpDialog.value = false
@@ -1824,6 +1856,24 @@ async function handleExternalDrop(event: DragEvent) {
   justify-content: center;
   gap: 4px;
   word-break: break-all;
+}
+
+.import-dialog-workspace-select {
+  min-width: 220px;
+}
+
+.import-dialog-workspace-select :deep(.el-select) {
+  width: 100%;
+}
+
+.workspace-option-name {
+  font-weight: 500;
+  margin-right: 8px;
+}
+
+.workspace-option-path {
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 .workspace-label,

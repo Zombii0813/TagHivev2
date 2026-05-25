@@ -40,19 +40,21 @@ export const fileApi = {
     return apiClient.put<FileSummary>(`/api/files/${id}/rename`, { new_name: newName })
   },
 
-  // 移动文件（工作区内移动）
-  async move(fileIds: number[], targetDir: string): Promise<FileBatchResult> {
+  // 移动文件（支持跨工作区）
+  async move(fileIds: number[], targetDir: string, targetWorkspace?: string): Promise<FileBatchResult> {
     return apiClient.post<FileBatchResult>('/api/files/move', {
       file_ids: fileIds,
       target_dir: targetDir,
+      target_workspace: targetWorkspace,
     })
   },
 
-  // 复制文件
-  async copy(fileIds: number[], targetDir: string): Promise<FileBatchResult> {
+  // 复制文件（支持跨工作区）
+  async copy(fileIds: number[], targetDir: string, targetWorkspace?: string): Promise<FileBatchResult> {
     return apiClient.post<FileBatchResult>('/api/files/copy', {
       file_ids: fileIds,
       target_dir: targetDir,
+      target_workspace: targetWorkspace,
     })
   },
 }
