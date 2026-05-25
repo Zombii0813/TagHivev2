@@ -22,6 +22,17 @@
       </div>
     </div>
 
+    <!-- 标签检索 -->
+    <div v-if="!isManageMode" class="tag-search">
+      <el-input
+        v-model="searchQuery"
+        placeholder="搜索标签..."
+        size="small"
+        clearable
+        :prefix-icon="Search"
+      />
+    </div>
+
     <!-- 标签层级过滤模式切换：含子标签 vs 仅本标签 -->
     <div v-if="!isManageMode" class="tag-filter-mode">
       <el-radio-group
@@ -56,7 +67,7 @@
       :class="{ 'manage-mode': isManageMode }"
       v-loading="tagStore.isLoading"
     >
-      <template v-for="(node, index) in tagStore.flatTagList" :key="node.tag.id">
+      <template v-for="(node, index) in displayTagList" :key="node.tag.id">
         <div
           class="tag-item"
           :class="{
@@ -312,7 +323,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
+import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
@@ -563,6 +574,60 @@ const tagListRef = ref<HTMLElement | null>(null)
 // 管理模式
 const isManageMode = ref(false)
 
+// 标签检索
+const searchQuery = ref('')
+
+/** 检索时的展示列表：
+ * - 无关键字：直接走 store 的 flatTagList（受用户折叠状态影响）
+ * - 有关键字：保留命中节点 + 其祖先链 + 其整棵后代子树，强制展开（不修改 store 折叠状态），
+ *   命中后用户能看到层级位置，并继续向下查看子分类。
+ */
+const displayTagList = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase()
+  if (!keyword || isManageMode.value) {
+    return tagStore.flatTagList
+  }
+
+  const tree = tagStore.tagTree
+  const matchedSelfIds = new Set<number>()
+  const visibleIds = new Set<number>()
+
+  // 一次 DFS：标记直接命中的节点，并把其整棵子树加入可见集
+  const collectSubtree = (node: import('../stores/tags').TagTreeNode) => {
+    visibleIds.add(node.tag.id)
+    for (const child of node.children) collectSubtree(child)
+  }
+
+  const walk = (
+    nodes: import('../stores/tags').TagTreeNode[],
+    ancestors: number[],
+  ) => {
+    for (const node of nodes) {
+      const hit = node.tag.name.toLowerCase().includes(keyword)
+      if (hit) {
+        matchedSelfIds.add(node.tag.id)
+        ancestors.forEach(id => visibleIds.add(id))
+        collectSubtree(node)
+      }
+      walk(node.children, [...ancestors, node.tag.id])
+    }
+  }
+  walk(tree, [])
+
+  // 第二次按 tagTree 顺序产出扁平列表，仅保留 visibleIds 中的节点
+  const result: import('../stores/tags').TagTreeNode[] = []
+  const flatten = (nodes: import('../stores/tags').TagTreeNode[]) => {
+    for (const node of nodes) {
+      if (visibleIds.has(node.tag.id)) {
+        result.push(node)
+        flatten(node.children)
+      }
+    }
+  }
+  flatten(tree)
+  return result
+})
+
 // 管理模式下的拖拽状态（pointer events 驱动）
 interface ManageDragState {
   sourceId: number | null
@@ -590,6 +655,7 @@ function toggleManageMode() {
   } else {
     // 退出过滤状态再进入管理模式
     tagStore.clearSelection()
+    searchQuery.value = ''
     isManageMode.value = true
   }
 }
@@ -1105,6 +1171,12 @@ async function confirmDeleteTag() {
 
 .filter-status {
   display: none;
+}
+
+.tag-search {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
 }
 
 .tag-filter-mode {
