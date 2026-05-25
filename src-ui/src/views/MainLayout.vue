@@ -294,6 +294,9 @@
 
     <!-- 日志查看器（菜单栏 工具 → 查看日志 调起） -->
     <LogViewer ref="logViewerRef" />
+
+    <!-- 设置弹窗（菜单栏 工具 → 设置 调起） -->
+    <SettingsDialog ref="settingsDialogRef" />
     </div>
   </div>
 </template>
@@ -333,8 +336,8 @@ import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
 import AppMenuBar from '../components/AppMenuBar.vue'
 import LogViewer from '../components/LogViewer.vue'
+import SettingsDialog from '../components/SettingsDialog.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
@@ -343,7 +346,7 @@ import { isTagDragInProgress } from '../utils/drag'
 
 const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
 const logViewerRef = ref<InstanceType<typeof LogViewer> | null>(null)
-const router = useRouter()
+const settingsDialogRef = ref<InstanceType<typeof SettingsDialog> | null>(null)
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -512,7 +515,7 @@ function handleMenuCommand(command: string) {
       logViewerRef.value?.open()
       break
     case 'tools:settings':
-      router.push('/settings')
+      settingsDialogRef.value?.open()
       break
     case 'help:about':
       ElMessage.info('TagHive · 基于标签的文件管理工具')
