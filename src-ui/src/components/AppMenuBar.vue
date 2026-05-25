@@ -5,13 +5,19 @@
       :key="menu.label"
       trigger="click"
       placement="bottom-start"
+      popper-class="app-menu-bar-popper"
       @command="handleCommand"
     >
       <span class="menu-trigger">{{ menu.label }}</span>
       <template #dropdown>
         <el-dropdown-menu>
           <template v-for="item in menu.items" :key="item.command || item.divided">
-            <el-dropdown-item v-if="item.divided" divided disabled>
+            <el-dropdown-item
+              v-if="item.divided"
+              divided
+              disabled
+              class="menu-section-divider"
+            >
               <span class="menu-section-label">{{ item.label }}</span>
             </el-dropdown-item>
             <el-dropdown-item
@@ -167,5 +173,38 @@ function handleCommand(command: string) {
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+</style>
+
+<style>
+/* 限定在 AppMenuBar 弹层（popper-class="app-menu-bar-popper"）内 */
+
+/* 可用项 + 分组分隔标题：默认箭头光标 */
+.app-menu-bar-popper .el-dropdown-menu__item:not(.is-disabled),
+.app-menu-bar-popper .el-dropdown-menu__item.menu-section-divider {
+  cursor: default !important;
+}
+
+/* 真正禁用的菜单项保留禁止图标；分组标题虽然带 is-disabled 但通过自定义类排除 */
+.app-menu-bar-popper .el-dropdown-menu__item.is-disabled:not(.menu-section-divider) {
+  cursor: not-allowed !important;
+}
+
+/* 取消鼠标移出后焦点态仍然高亮：只在"未 hover"时清零 focus 背景，避免覆盖 :hover 的高亮 */
+.app-menu-bar-popper .el-dropdown-menu__item:focus:not(:hover),
+.app-menu-bar-popper .el-dropdown-menu__item:focus-visible:not(:hover) {
+  background-color: transparent !important;
+  color: inherit !important;
+  outline: none !important;
+}
+
+.app-menu-bar-popper .el-dropdown-menu__item:not(.is-disabled):hover {
+  background-color: var(--el-color-primary, #409eff) !important;
+  color: #ffffff !important;
+}
+
+.app-menu-bar-popper .el-dropdown-menu__item:not(.is-disabled):hover .menu-item-shortcut,
+.app-menu-bar-popper .el-dropdown-menu__item:not(.is-disabled):hover .menu-item-icon {
+  color: rgba(255, 255, 255, 0.88) !important;
 }
 </style>
