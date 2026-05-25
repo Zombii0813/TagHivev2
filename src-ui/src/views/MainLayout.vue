@@ -58,20 +58,24 @@
       <!-- 折叠状态下的标签图标列表 -->
       <div class="sidebar-collapsed-tags">
         <el-tooltip
-          v-for="tag in tagStore.orderedTags"
-          :key="tag.id"
-          :content="tag.name"
+          v-for="node in collapsedTagFlatList"
+          :key="node.tag.id"
+          :content="node.tag.name"
           placement="right"
           :show-after="200"
         >
           <div
             class="collapsed-tag-item"
-            :class="{ selected: tagStore.isTagActive(tag.id) }"
-            :style="{ borderColor: tag.color, backgroundColor: tag.color + '25' }"
-            @click="handleCollapsedTagClick(tag.id)"
+            :class="{ selected: tagStore.isTagActive(node.tag.id), 'is-child': node.depth > 0 }"
+            :style="{
+              borderColor: node.tag.color,
+              backgroundColor: node.tag.color + '25',
+              '--tag-color': node.tag.color,
+            }"
+            @click="handleCollapsedTagClick(node.tag.id)"
           >
-            <span v-if="tag.icon" class="collapsed-tag-emoji">{{ tag.icon }}</span>
-            <span v-else class="collapsed-tag-dot" :style="{ backgroundColor: tag.color }"></span>
+            <span v-if="node.tag.icon" class="collapsed-tag-emoji">{{ node.tag.icon }}</span>
+            <span v-else class="collapsed-tag-dot" :style="{ backgroundColor: node.tag.color }"></span>
           </div>
         </el-tooltip>
       </div>
@@ -331,12 +335,26 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
+import type { TagTreeNode } from '../stores/tags'
 import { isTagDragInProgress } from '../utils/drag'
 
 const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
+
+// 折叠态标签图标按层级 DFS 平铺：父→子→孙，忽略 expandedTagIds（折叠态需要始终展示全部）
+const collapsedTagFlatList = computed<TagTreeNode[]>(() => {
+  const result: TagTreeNode[] = []
+  const walk = (nodes: TagTreeNode[]) => {
+    for (const node of nodes) {
+      result.push(node)
+      if (node.children.length > 0) walk(node.children)
+    }
+  }
+  walk(tagStore.tagTree)
+  return result
+})
 
 // 全局 dragover 处理：标签拖拽经过中间层时防止显示禁止图标
 function handleLayoutDragOver(event: DragEvent) {
@@ -818,23 +836,36 @@ function handleCollapsedTagClick(tagId: number) {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  border: 1.5px solid transparent;
+  /* 预占 2px 边框，避免选中态切换时尺寸变化导致竖向位移 */
+  border: 2px solid transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.15s ease;
+  box-sizing: border-box;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 .collapsed-tag-item:hover {
-  opacity: 0.8;
-  transform: scale(1.08);
+  opacity: 0.85;
 }
 
 .collapsed-tag-item.selected {
-  border-width: 2.5px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent);
+  /* 在已有 2px 边框内侧叠 1px，等效"加粗"，但不改变盒模型 */
+  box-shadow:
+    inset 0 0 0 1px var(--tag-color, currentColor),
+    0 0 0 2px color-mix(in srgb, var(--tag-color, currentColor) 20%, transparent);
+}
+
+/* 子标签视觉降级：透明度略低，仍与父标签同尺寸、同基线 */
+.collapsed-tag-item.is-child {
+  opacity: 0.78;
+}
+
+.collapsed-tag-item.is-child:hover,
+.collapsed-tag-item.is-child.selected {
+  opacity: 1;
 }
 
 .collapsed-tag-emoji {
