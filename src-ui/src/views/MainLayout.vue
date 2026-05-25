@@ -1,5 +1,7 @@
 <template>
-  <div class="main-layout" @dragover="handleLayoutDragOver">
+  <div class="app-shell">
+    <AppMenuBar @command="handleMenuCommand" />
+    <div class="main-layout" @dragover="handleLayoutDragOver">
     <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ collapsed: appStore.sidebarCollapsed }">
       <div class="sidebar-header" :class="{ collapsed: appStore.sidebarCollapsed }">
@@ -213,7 +215,6 @@
               @click="appStore.toggleTheme()"
               :title="appStore.isDark ? '切换到浅色模式' : '切换到深色模式'"
             />
-            <el-button :icon="Setting" circle @click="$router.push('/settings')" :title="'设置'" />
           </template>
           <template v-else>
             <el-dropdown trigger="click" placement="bottom-end">
@@ -227,10 +228,6 @@
                   <el-dropdown-item @click="appStore.toggleTheme()">
                     <el-icon><component :is="appStore.isDark ? Sunny : Moon" /></el-icon>
                     {{ appStore.isDark ? '浅色模式' : '深色模式' }}
-                  </el-dropdown-item>
-                  <el-dropdown-item @click="$router.push('/settings')">
-                    <el-icon><Setting /></el-icon>
-                    设置
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -294,6 +291,10 @@
 
     <!-- 批量操作对话框 -->
     <BatchOperations ref="batchOpsRef" />
+
+    <!-- 日志查看器（菜单栏 工具 → 查看日志 调起） -->
+    <LogViewer ref="logViewerRef" />
+    </div>
   </div>
 </template>
 
@@ -308,7 +309,6 @@ import {
   ArrowRight,
   ArrowLeft,
   ArrowDown,
-  Setting,
   Sunny,
   Moon,
   Sort,
@@ -331,7 +331,10 @@ import SearchBar from '../components/SearchBar.vue'
 import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
+import AppMenuBar from '../components/AppMenuBar.vue'
+import LogViewer from '../components/LogViewer.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
@@ -339,6 +342,8 @@ import type { TagTreeNode } from '../stores/tags'
 import { isTagDragInProgress } from '../utils/drag'
 
 const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
+const logViewerRef = ref<InstanceType<typeof LogViewer> | null>(null)
+const router = useRouter()
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -476,6 +481,44 @@ const handleRescan = () => {
     fileStore.startScanning()
     wsClient.startScan(appStore.activeWorkspace)
     ElMessage.success('开始扫描工作区...')
+  }
+}
+
+// 顶部菜单栏命令分发
+function handleMenuCommand(command: string) {
+  switch (command) {
+    case 'file:add-workspace':
+      handleAddWorkspace()
+      break
+    case 'file:rescan':
+      handleRescan()
+      break
+    case 'file:exit':
+      window.close()
+      break
+    case 'edit:focus-search': {
+      const el = document.querySelector<HTMLInputElement>('.search-bar input')
+      el?.focus()
+      el?.select()
+      break
+    }
+    case 'edit:manage-tags': {
+      if (appStore.sidebarCollapsed) appStore.toggleSidebar()
+      const btn = document.querySelector<HTMLElement>('.tag-panel .panel-header .header-actions .el-button')
+      btn?.click()
+      break
+    }
+    case 'tools:view-logs':
+      logViewerRef.value?.open()
+      break
+    case 'tools:settings':
+      router.push('/settings')
+      break
+    case 'help:about':
+      ElMessage.info('TagHive · 基于标签的文件管理工具')
+      break
+    default:
+      ElMessage.info('该功能尚未实现')
   }
 }
 
@@ -624,11 +667,19 @@ function handleCollapsedTagClick(tagId: number) {
 </script>
 
 <style scoped>
-.main-layout {
+.app-shell {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 50%, var(--color-bg-tertiary) 100%);
+}
+
+.main-layout {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ===== 工作区管理面板 ===== */
