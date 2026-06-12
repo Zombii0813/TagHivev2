@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+from datetime import datetime
 from typing import List
 from mimetypes import guess_type
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -43,6 +44,13 @@ from .models import (
     FileMoveRequestDTO,
     FileCopyRequestDTO,
     FileBatchResultDTO,
+    TagExportRequestDTO,
+    ExportedTagDTO,
+    FileMatchEntryDTO,
+    ImportPreviewDTO,
+    ImportRelocateRequestDTO,
+    ImportCommitRequestDTO,
+    ImportSummaryDTO,
 )
 
 router = APIRouter(prefix="/api")
@@ -1024,3 +1032,208 @@ async def delete_folder(
 async def health_check():
     """健康检查"""
     return {"status": "ok", "version": "0.0.1"}
+
+
+# ========== 标签导入导出 ==========
+
+from fastapi.responses import Response
+
+from ..services.tag_transfer import (
+    ExportPayload,
+    ImportPlan,
+    ThpackFormatError,
+    commit_import,
+    export_workspace,
+    match_files,
+    parse_thpack,
+    relocate_by_relative_path,
+    TAG_CONFLICT_SKIP,
+)
+from ..services.import_session import get_import_store
+
+
+def _entry_to_dto(entry) -> FileMatchEntryDTO:
+    """将 FileMatchEntry 序列化为 DTO"""
+    ef = entry.exported
+    return FileMatchEntryDTO(
+        rel_path=ef.rel_path,
+        name=ef.name,
+        size=ef.size,
+        mtime=ef.mtime,
+        tag_export_ids=list(ef.tag_export_ids),
+        candidate_file_ids=list(entry.candidates),
+    )
+
+
+def _build_preview_dto(token: str, payload: ExportPayload, target_workspace: str, repo: Repo, match_result) -> ImportPreviewDTO:
+    """构建预览 DTO（同时标注当前 workspace 下标签的同名冲突）"""
+    workspace_posix = Path(target_workspace).as_posix()
+    tag_dtos: list[ExportedTagDTO] = []
+    for et in payload.tags:
+        existing = repo.get_tag_by_name_and_workspace(et.name, workspace_posix)
+        tag_dtos.append(
+            ExportedTagDTO(
+                export_id=et.export_id,
+                name=et.name,
+                color=et.color,
+                icon=et.icon,
+                description=et.description,
+                parent_export_id=et.parent_export_id,
+                conflict=existing is not None,
+                existing_tag_id=int(existing.id) if existing is not None else None,
+            )
+        )
+
+    return ImportPreviewDTO(
+        token=token,
+        schema_version=payload.schema_version,
+        exported_at=payload.exported_at,
+        source_workspace=payload.source_workspace,
+        target_workspace=workspace_posix,
+        tags=tag_dtos,
+        unique=[_entry_to_dto(e) for e in match_result.unique],
+        multiple=[_entry_to_dto(e) for e in match_result.multiple],
+        unmatched=[_entry_to_dto(e) for e in match_result.unmatched],
+    )
+
+
+@router.post("/tags/export")
+async def export_tags(
+    payload: TagExportRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """导出指定 workspace 的标签树与文件标记关联（.thpack 二进制流）"""
+    if not payload.workspace:
+        raise HTTPException(status_code=400, detail="workspace 不能为空")
+
+    data = export_workspace(repo, payload.workspace, payload.tag_ids)
+
+    workspace_name = Path(payload.workspace).name or "workspace"
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    filename = f"taghive-export-{workspace_name}-{timestamp}.thpack"
+
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/tags/import/preview", response_model=ImportPreviewDTO)
+async def import_preview(
+    request: Request,
+    workspace: str,
+    repo: Repo = Depends(get_repo),
+):
+    """上传 .thpack 并返回预览（标签冲突 + 文件匹配三类清单）
+
+    上传形式: 请求体为 .thpack 原始字节（application/octet-stream），
+    workspace 通过查询参数传入。避免引入 python-multipart 依赖。
+    """
+    if not workspace:
+        raise HTTPException(status_code=400, detail="workspace 不能为空")
+
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(status_code=400, detail="请求体为空")
+
+    try:
+        payload = parse_thpack(raw)
+    except ThpackFormatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    match_result = match_files(repo, payload, workspace)
+    token = get_import_store().create(payload, match_result, workspace)
+    return _build_preview_dto(token, payload, workspace, repo, match_result)
+
+
+@router.post("/tags/import/relocate", response_model=ImportPreviewDTO)
+async def import_relocate(
+    request: ImportRelocateRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """对未匹配项进行重定位
+
+    - mode='auto_rel_path': 整体按相对路径重新尝试
+    - mode='manual': 将 rel_path 锁定到指定的本地 file_id
+    - mode='skip_all': 清空未匹配列表（视为全部跳过）
+    """
+    store = get_import_store()
+    entry = store.get(request.token)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="导入会话已失效，请重新上传")
+
+    match = entry.match
+
+    if request.mode == "auto_rel_path":
+        relocated, still = relocate_by_relative_path(
+            repo, match.unmatched, entry.target_workspace
+        )
+        # 已重定位的视为唯一命中（rel path 命中通常是唯一的）
+        match.unique.extend(relocated)
+        match.unmatched = still
+    elif request.mode == "manual":
+        if not request.rel_path or request.file_id is None:
+            raise HTTPException(status_code=400, detail="manual 模式需要 rel_path 与 file_id")
+        target = next(
+            (e for e in match.unmatched if e.exported.rel_path == request.rel_path),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail="该未匹配条目不存在")
+        target.candidates = [int(request.file_id)]
+        match.unmatched.remove(target)
+        match.unique.append(target)
+    elif request.mode == "skip_all":
+        match.unmatched = []
+    else:
+        raise HTTPException(status_code=400, detail=f"未知的 mode: {request.mode}")
+
+    store.update_match(request.token, match)
+    return _build_preview_dto(
+        request.token, entry.payload, entry.target_workspace, repo, match
+    )
+
+
+@router.post("/tags/import/commit", response_model=ImportSummaryDTO)
+async def import_commit(
+    request: ImportCommitRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """按用户裁决执行导入：单事务写入标签 + 文件标签关联"""
+    store = get_import_store()
+    entry = store.get(request.token)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="导入会话已失效，请重新上传")
+
+    plan = ImportPlan(workspace=entry.target_workspace)
+    for td in request.tag_decisions:
+        plan.tag_strategy[td.export_id] = td.strategy
+        if td.strategy == "rename" and td.new_name:
+            plan.rename_map[td.export_id] = td.new_name
+    for fd in request.file_decisions:
+        plan.file_decisions[fd.rel_path] = list(fd.file_ids)
+
+    # 对预览中已自动归类为「唯一命中」但用户未在 file_decisions 显式裁决的，
+    # 默认视为关联（用户在 UI 中通常不会逐条点 unique 项）。
+    user_decided = set(plan.file_decisions.keys())
+    for e in entry.match.unique:
+        if e.exported.rel_path not in user_decided:
+            plan.file_decisions[e.exported.rel_path] = list(e.candidates)
+
+    try:
+        summary = commit_import(repo, entry.payload, plan)
+        repo.session.commit()
+    except Exception:
+        repo.session.rollback()
+        raise
+
+    store.discard(request.token)
+    repo.invalidate_tags_cache()
+
+    return ImportSummaryDTO(
+        tags_created=summary.tags_created,
+        tags_reused=summary.tags_reused,
+        files_linked=summary.files_linked,
+        files_skipped=summary.files_skipped,
+    )

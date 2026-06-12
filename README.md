@@ -10,6 +10,7 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 - **实时监控**: 自动检测文件变更并更新索引
 - **虚拟滚动**: 流畅浏览大量文件（10万+）
 - **缩略图缓存**: 智能缩略图生成和缓存
+- **标签包导入导出**: 将工作区的标签树与文件标记关联导出为 `.thpack`，跨机器或跨工作区时按 (文件名 + 大小 + mtime ±2s) 自动匹配，未命中可按相对路径重定位或手动选择本地文件
 
 ## 技术架构
 
@@ -211,6 +212,10 @@ TagHive/
 - `GET /api/tags` - 获取所有标签
 - `POST /api/tags` - 创建标签
 - `POST /api/workspace/scan` - 扫描工作区
+- `POST /api/tags/export` - 导出当前工作区的标签树与文件标记关联（返回 `.thpack` 二进制流）
+- `POST /api/tags/import/preview` - 上传 `.thpack`（请求体为 octet-stream，`workspace` 走 query 参数），返回标签冲突 + 文件匹配预览，并签发 token
+- `POST /api/tags/import/relocate` - 对未匹配项执行重定位（按相对路径自动尝试 / 手动指定 file_id / 全部跳过）
+- `POST /api/tags/import/commit` - 按用户裁决执行导入；单事务写入标签与文件标签关联
 
 ### WebSocket 事件
 

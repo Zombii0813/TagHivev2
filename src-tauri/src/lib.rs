@@ -182,6 +182,60 @@ fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+/// 弹出系统保存对话框，返回用户选择的目标路径
+#[tauri::command]
+async fn save_file_dialog(
+    app: tauri::AppHandle,
+    default_name: Option<String>,
+    extension: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut builder = app.dialog().file();
+    if let Some(name) = default_name.as_ref() {
+        builder = builder.set_file_name(name);
+    }
+    if let Some(ext) = extension.as_ref() {
+        builder = builder.add_filter("TagHive Pack", &[ext.as_str()]);
+    }
+
+    let path = builder.blocking_save_file();
+    Ok(path
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+/// 弹出系统打开对话框，返回用户选择的文件路径
+#[tauri::command]
+async fn open_file_dialog(
+    app: tauri::AppHandle,
+    extension: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut builder = app.dialog().file();
+    if let Some(ext) = extension.as_ref() {
+        builder = builder.add_filter("TagHive Pack", &[ext.as_str()]);
+    }
+
+    let path = builder.blocking_pick_file();
+    Ok(path
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+/// 写入二进制内容（前端 Uint8Array → number[] 传入）
+#[tauri::command]
+async fn write_binary_file(path: String, content: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+/// 读取二进制文件，返回字节数组
+#[tauri::command]
+async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
 #[tauri::command]
 async fn open_file(path: String) -> Result<(), String> {
     use std::process::Command;
@@ -428,6 +482,10 @@ pub fn run() {
             get_sidecar_logs,
             open_logs_folder,
             path_exists,
+            save_file_dialog,
+            open_file_dialog,
+            write_binary_file,
+            read_binary_file,
         ])
         .setup(|app| {
             // 获取应用数据目录

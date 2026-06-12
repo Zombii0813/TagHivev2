@@ -233,3 +233,87 @@ class ScanProgressDTO(BaseModel):
 
 # 解决前向引用
 FolderNodeDTO.model_rebuild()
+
+
+# ========== 标签导入导出相关 DTO ==========
+
+
+class TagExportRequestDTO(BaseModel):
+    """标签导出请求 DTO"""
+    workspace: str
+    tag_ids: Optional[List[int]] = None  # 为空表示导出 workspace 下所有标签
+
+
+class ExportedTagDTO(BaseModel):
+    """导入预览中的标签条目 DTO"""
+    export_id: str
+    name: str
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+    parent_export_id: Optional[str] = None
+    conflict: bool = False               # 当前 workspace 下是否同名冲突
+    existing_tag_id: Optional[int] = None
+
+
+class FileMatchEntryDTO(BaseModel):
+    """文件匹配预览条目 DTO"""
+    rel_path: str
+    name: str
+    size: int
+    mtime: Optional[float] = None
+    tag_export_ids: List[str] = Field(default_factory=list)
+    candidate_file_ids: List[int] = Field(default_factory=list)
+
+
+class ImportPreviewDTO(BaseModel):
+    """导入预览结果 DTO"""
+    token: str
+    schema_version: int
+    exported_at: str
+    source_workspace: str
+    target_workspace: str
+    tags: List[ExportedTagDTO]
+    unique: List[FileMatchEntryDTO]
+    multiple: List[FileMatchEntryDTO]
+    unmatched: List[FileMatchEntryDTO]
+
+
+class ImportRelocateRequestDTO(BaseModel):
+    """重定位请求 DTO
+
+    mode='auto_rel_path' 时按相对路径整体尝试一次。
+    mode='manual' 时 rel_path 与 file_id 必填，将该未匹配条目锁定到指定本地文件。
+    """
+    token: str
+    mode: str  # 'auto_rel_path' | 'manual' | 'skip_all'
+    rel_path: Optional[str] = None
+    file_id: Optional[int] = None
+
+
+class ImportTagDecisionDTO(BaseModel):
+    """单个标签的最终冲突裁决"""
+    export_id: str
+    strategy: str        # 'skip' | 'merge' | 'rename'
+    new_name: Optional[str] = None  # strategy='rename' 时使用
+
+
+class ImportFileDecisionDTO(BaseModel):
+    """单个文件条目的最终裁决：勾选要关联的本地 file_id 列表（空 = 跳过）"""
+    rel_path: str
+    file_ids: List[int] = Field(default_factory=list)
+
+
+class ImportCommitRequestDTO(BaseModel):
+    """导入提交请求 DTO"""
+    token: str
+    tag_decisions: List[ImportTagDecisionDTO] = Field(default_factory=list)
+    file_decisions: List[ImportFileDecisionDTO] = Field(default_factory=list)
+
+
+class ImportSummaryDTO(BaseModel):
+    """导入提交结果 DTO"""
+    tags_created: int
+    tags_reused: int
+    files_linked: int
+    files_skipped: int
