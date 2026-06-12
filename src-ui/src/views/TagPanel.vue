@@ -4,15 +4,6 @@
       <h3>标签</h3>
       <div class="header-actions">
         <el-button
-          v-if="!isManageMode"
-          size="small"
-          :icon="Files"
-          @click="showTransferDialog = true"
-          title="导入/导出标签包"
-        >
-          标签包
-        </el-button>
-        <el-button
           :type="isManageMode ? 'warning' : 'default'"
           size="small"
           @click="toggleManageMode"
@@ -327,24 +318,16 @@
           </div>
       </div>
     </teleport>
-
-    <!-- 标签包导入/导出向导 -->
-    <TagTransferDialog
-      v-model="showTransferDialog"
-      :workspace="appStore.activeWorkspace || ''"
-      @imported="onTagsImported"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown, Search, Files } from '@element-plus/icons-vue'
+import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
-import TagTransferDialog from './TagTransferDialog.vue'
 import type { Tag } from '../types'
 import { setTagDragData, clearTagDragState, isTagDragInProgress } from '../utils/drag'
 import { pickDistinctColor, PRESET_COLORS } from '../utils/color'
@@ -367,12 +350,6 @@ function validateColor(obj: Record<string, any>, key: string) {
 
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
-const showTransferDialog = ref(false)
-
-function onTagsImported() {
-  // 导入完成后刷新当前工作区的标签列表（文件标签关系会随下次查询重读）
-  loadTagsForWorkspace()
-}
 const newTag = ref({
   name: '',
   color: '#409EFF',
@@ -868,10 +845,12 @@ function loadTagsForWorkspace() {
 onMounted(() => {
   loadTagsForWorkspace()
   window.addEventListener('close-context-menus', closeContextMenu)
+  window.addEventListener('taghive:tags-imported', loadTagsForWorkspace)
 })
 
 onUnmounted(() => {
   window.removeEventListener('close-context-menus', closeContextMenu)
+  window.removeEventListener('taghive:tags-imported', loadTagsForWorkspace)
   removeEmojiPickerCloseHandler()
   endManageDrag(false)
 })

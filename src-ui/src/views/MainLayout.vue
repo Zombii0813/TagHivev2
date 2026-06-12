@@ -297,6 +297,14 @@
 
     <!-- 设置弹窗（菜单栏 工具 → 设置 调起） -->
     <SettingsDialog ref="settingsDialogRef" />
+
+    <!-- 标签包导入/导出向导（菜单栏 文件 → 导入/导出 调起） -->
+    <TagTransferDialog
+      v-model="showTagTransfer"
+      :workspace="appStore.activeWorkspace || ''"
+      :initial-action="tagTransferAction"
+      @imported="onTagsImported"
+    />
     </div>
   </div>
 </template>
@@ -337,6 +345,7 @@ import BatchOperations from '../components/BatchOperations.vue'
 import AppMenuBar from '../components/AppMenuBar.vue'
 import LogViewer from '../components/LogViewer.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
+import TagTransferDialog from './TagTransferDialog.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
@@ -347,6 +356,22 @@ import { isTagDragInProgress } from '../utils/drag'
 const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
 const logViewerRef = ref<InstanceType<typeof LogViewer> | null>(null)
 const settingsDialogRef = ref<InstanceType<typeof SettingsDialog> | null>(null)
+const showTagTransfer = ref(false)
+const tagTransferAction = ref<'export' | 'import' | null>(null)
+
+function openTagTransfer(action: 'export' | 'import') {
+  if (!appStore.activeWorkspace) {
+    ElMessage.warning('请先选择工作区')
+    return
+  }
+  tagTransferAction.value = action
+  showTagTransfer.value = true
+}
+
+function onTagsImported() {
+  // 导入完成后，主动让 TagPanel 重新拉取当前工作区的标签
+  window.dispatchEvent(new CustomEvent('taghive:tags-imported'))
+}
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -516,6 +541,12 @@ function handleMenuCommand(command: string) {
       break
     case 'tools:settings':
       settingsDialogRef.value?.open()
+      break
+    case 'file:export-tags':
+      openTagTransfer('export')
+      break
+    case 'file:import-tags':
+      openTagTransfer('import')
       break
     case 'help:about':
       ElMessage.info('TagHive · 基于标签的文件管理工具')

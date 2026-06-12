@@ -1,29 +1,15 @@
 <template>
   <el-dialog
-    v-model="visible"
+    v-if="dialogShown"
+    v-model="dialogShown"
     :title="dialogTitle"
-    :width="step === 'idle' ? '460px' : '900px'"
+    width="900px"
     :close-on-click-modal="false"
     append-to-body
     @closed="handleClosed"
   >
-    <!-- Step: idle 选择导出或导入 -->
-    <div v-if="step === 'idle'" class="transfer-idle">
-      <p class="transfer-intro">
-        将当前工作区的标签树与文件标记一并导出为 .thpack 包，或从已有 .thpack 包导入到当前工作区。
-      </p>
-      <div class="transfer-actions">
-        <el-button type="primary" :icon="Download" @click="doExport" :loading="exporting">
-          导出 .thpack
-        </el-button>
-        <el-button type="success" :icon="Upload" @click="doPickImport" :loading="importing">
-          导入 .thpack
-        </el-button>
-      </div>
-    </div>
-
     <!-- Step: preview 预览 + 三 Tab + 提交 -->
-    <div v-else-if="step === 'preview' && preview" class="transfer-preview">
+    <div v-if="step === 'preview' && preview" class="transfer-preview">
       <div class="preview-meta">
         <span>来源工作区: {{ preview.source_workspace || '(未知)' }}</span>
         <span>导出时间: {{ preview.exported_at || '—' }}</span>
@@ -70,7 +56,7 @@
     </div>
 
     <template #footer>
-      <el-button v-if="step === 'preview'" @click="cancelImport">取消</el-button>
+      <el-button v-if="step === 'preview'" @click="closeDialog">取消</el-button>
       <el-button
         v-if="step === 'preview'"
         type="primary"
@@ -79,9 +65,7 @@
       >
         确认导入
       </el-button>
-      <el-button v-if="step === 'idle' || step === 'done'" @click="visible = false">
-        关闭
-      </el-button>
+      <el-button v-if="step === 'done'" @click="closeDialog">关闭</el-button>
     </template>
   </el-dialog>
 </template>
@@ -89,7 +73,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, Upload } from '@element-plus/icons-vue'
 import { invoke } from '@tauri-apps/api/core'
 import {
   tagApi,
@@ -105,34 +88,27 @@ import UnmatchedTab from './tagTransfer/UnmatchedTab.vue'
 const props = defineProps<{
   modelValue: boolean
   workspace: string
+  initialAction?: 'export' | 'import' | null
 }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'imported'): void
 }>()
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit('update:modelValue', v),
-})
-
-type Step = 'idle' | 'preview' | 'done'
-const step = ref<Step>('idle')
-const exporting = ref(false)
-const importing = ref(false)
+type Step = 'preview' | 'done'
+const step = ref<Step>('preview')
 const committing = ref(false)
 const preview = ref<ImportPreview | null>(null)
 const summary = ref<ImportSummary | null>(null)
 const activeTab = ref<'tags' | 'multi' | 'unmatched'>('tags')
+const dialogShown = ref(false)  // 真正控制 el-dialog 是否渲染
 
 const tagDecisions = ref<Record<string, ImportTagDecision>>({})
 const fileDecisions = ref<Record<string, number[]>>({})
 
-const dialogTitle = computed(() => {
-  if (step.value === 'preview') return '导入预览'
-  if (step.value === 'done') return '导入结果'
-  return '标签导入 / 导出'
-})
+const dialogTitle = computed(() =>
+  step.value === 'done' ? '导入结果' : '导入预览',
+)
 
 const conflictCount = computed(() =>
   preview.value ? preview.value.tags.filter(t => t.conflict).length : 0,
@@ -152,7 +128,6 @@ const summaryHint = computed(() => {
   }
   let filesLink = 0
   let filesSkip = 0
-  // unique 默认全部关联（除非用户主动设为空）
   for (const e of preview.value.unique) {
     const decided = fileDecisions.value[e.rel_path]
     const ids = decided !== undefined ? decided : e.candidate_file_ids
@@ -164,29 +139,45 @@ const summaryHint = computed(() => {
     if (ids.length === 0) filesSkip++
     else filesLink += ids.length
   }
-  // 未匹配视为跳过
   filesSkip += preview.value.unmatched.length
   return { tagsCreate, tagsReuse, filesLink, filesSkip }
 })
 
-watch(visible, (v) => {
-  if (v) {
-    step.value = 'idle'
-    preview.value = null
-    summary.value = null
-    tagDecisions.value = {}
-    fileDecisions.value = {}
-  }
-})
+// 监听父组件触发的 initialAction，按动作分流；中间步骤不再有 idle 弹窗
+watch(
+  () => props.modelValue,
+  (v) => {
+    if (!v) {
+      dialogShown.value = false
+      return
+    }
+    resetState()
+    if (props.initialAction === 'export') {
+      runExport()
+    } else if (props.initialAction === 'import') {
+      runImport()
+    } else {
+      // 没有 initialAction 时不做任何事，立即收回 modelValue
+      emit('update:modelValue', false)
+    }
+  },
+)
 
-async function doExport() {
+function resetState() {
+  preview.value = null
+  summary.value = null
+  tagDecisions.value = {}
+  fileDecisions.value = {}
+  step.value = 'preview'
+}
+
+async function runExport() {
   if (!props.workspace) {
     ElMessage.warning('请先选择工作区')
+    emit('update:modelValue', false)
     return
   }
-  exporting.value = true
   try {
-    const data = await tagApi.exportPack(props.workspace)
     const wsName = props.workspace.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'workspace'
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     const defaultName = `taghive-export-${wsName}-${ts}.thpack`
@@ -194,35 +185,42 @@ async function doExport() {
       defaultName,
       extension: 'thpack',
     })
-    if (!target) return
+    if (!target) {
+      emit('update:modelValue', false)
+      return
+    }
+    const data = await tagApi.exportPack(props.workspace)
     await invoke('write_binary_file', { path: target, content: Array.from(data) })
     ElMessage.success(`已导出到 ${target}`)
   } catch (err: any) {
     ElMessage.error(`导出失败: ${err?.message ?? err}`)
   } finally {
-    exporting.value = false
+    emit('update:modelValue', false)
   }
 }
 
-async function doPickImport() {
+async function runImport() {
   if (!props.workspace) {
     ElMessage.warning('请先选择工作区')
+    emit('update:modelValue', false)
     return
   }
-  importing.value = true
   try {
     const path = await invoke<string | null>('open_file_dialog', { extension: 'thpack' })
-    if (!path) return
+    if (!path) {
+      emit('update:modelValue', false)
+      return
+    }
     const bytes = await invoke<number[]>('read_binary_file', { path })
     const u8 = new Uint8Array(bytes)
     const result = await tagApi.importPreview(props.workspace, u8)
     preview.value = result
     step.value = 'preview'
     activeTab.value = 'tags'
+    dialogShown.value = true  // 仅当成功拿到预览后才打开弹窗
   } catch (err: any) {
     ElMessage.error(`导入预览失败: ${err?.message ?? err}`)
-  } finally {
-    importing.value = false
+    emit('update:modelValue', false)
   }
 }
 
@@ -238,9 +236,9 @@ function onRelocate(updated: ImportPreview) {
   preview.value = updated
 }
 
-function cancelImport() {
-  step.value = 'idle'
-  preview.value = null
+function closeDialog() {
+  dialogShown.value = false
+  emit('update:modelValue', false)
 }
 
 async function commitImport() {
@@ -270,26 +268,14 @@ async function commitImport() {
 }
 
 function handleClosed() {
-  step.value = 'idle'
-  preview.value = null
-  summary.value = null
+  // dialog 关闭后清理状态，但不重置 modelValue（已由 closeDialog 处理）
+  if (!dialogShown.value && props.modelValue) {
+    emit('update:modelValue', false)
+  }
 }
 </script>
 
 <style scoped>
-.transfer-idle {
-  text-align: center;
-  padding: 24px 8px;
-}
-.transfer-intro {
-  color: var(--el-text-color-regular);
-  margin-bottom: 24px;
-}
-.transfer-actions {
-  display: flex;
-  gap: 16px;
-  justify-content: center;
-}
 .preview-meta {
   display: flex;
   gap: 24px;
