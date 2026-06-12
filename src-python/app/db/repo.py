@@ -61,7 +61,8 @@ class Repo:
                 select(File).where(File.id == existing_id)
             ).scalar_one_or_none()
             if existing is not None:
-                # 更新现有记录
+                # 更新现有记录（包括 path 自身：rename 等场景下文件路径会变化）
+                existing.path = path_str  # type: ignore[assignment]
                 existing.parent_dir = parent_dir  # type: ignore[assignment]
                 existing.name = meta.name  # type: ignore[assignment]
                 existing.ext = meta.ext  # type: ignore[assignment]
