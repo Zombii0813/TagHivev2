@@ -116,7 +116,7 @@ export interface ImportPreview {
 
 export interface ImportRelocateRequest {
   token: string
-  mode: 'auto_rel_path' | 'manual' | 'skip_all'
+  mode: 'manual' | 'skip_all'
   rel_path?: string | null
   file_id?: number | null
 }

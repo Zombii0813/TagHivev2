@@ -1046,7 +1046,6 @@ from ..services.tag_transfer import (
     export_workspace,
     match_files,
     parse_thpack,
-    relocate_by_relative_path,
     TAG_CONFLICT_SKIP,
 )
 from ..services.import_session import get_import_store
@@ -1154,7 +1153,6 @@ async def import_relocate(
 ):
     """对未匹配项进行重定位
 
-    - mode='auto_rel_path': 整体按相对路径重新尝试
     - mode='manual': 将 rel_path 锁定到指定的本地 file_id
     - mode='skip_all': 清空未匹配列表（视为全部跳过）
     """
@@ -1165,14 +1163,7 @@ async def import_relocate(
 
     match = entry.match
 
-    if request.mode == "auto_rel_path":
-        relocated, still = relocate_by_relative_path(
-            repo, match.unmatched, entry.target_workspace
-        )
-        # 已重定位的视为唯一命中（rel path 命中通常是唯一的）
-        match.unique.extend(relocated)
-        match.unmatched = still
-    elif request.mode == "manual":
+    if request.mode == "manual":
         if not request.rel_path or request.file_id is None:
             raise HTTPException(status_code=400, detail="manual 模式需要 rel_path 与 file_id")
         target = next(

@@ -17,7 +17,6 @@ from app.services.tag_transfer import (
     export_workspace,
     match_files,
     parse_thpack,
-    relocate_by_relative_path,
 )
 
 
@@ -196,31 +195,6 @@ def test_match_files_mtime_out_of_tolerance(repo: Repo):
     result = match_files(repo, payload, WORKSPACE)
     assert len(result.unmatched) == 1
     assert not result.unique
-
-
-# ---------- 相对路径重定位 ----------
-
-
-def test_relocate_by_relative_path(repo: Repo):
-    tag = _add_tag(repo, "T")
-    f = _add_file(repo, f"{WORKSPACE}/docs/readme.md", size=10, mtime=1000.0)
-    _link(repo, f, tag)
-    raw = export_workspace(repo, WORKSPACE)
-
-    # 目标库里同样路径的文件存在但 mtime 完全不同 → 初次匹配为未匹配，
-    # 但相对路径仍可命中
-    repo.session.query(FileTag).delete()
-    repo.session.query(FileModel).delete()
-    repo.session.flush()
-    _add_file(repo, f"{WORKSPACE}/docs/readme.md", size=999, mtime=9999999.0)
-
-    payload = parse_thpack(raw)
-    result = match_files(repo, payload, WORKSPACE)
-    assert len(result.unmatched) == 1
-
-    relocated, still = relocate_by_relative_path(repo, result.unmatched, WORKSPACE)
-    assert len(relocated) == 1
-    assert not still
 
 
 # ---------- commit_import ----------

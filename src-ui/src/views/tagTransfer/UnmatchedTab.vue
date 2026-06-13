@@ -1,9 +1,6 @@
 <template>
   <div class="unmatched-tab">
     <div class="toolbar">
-      <el-button size="small" :icon="Refresh" @click="autoRelocate">
-        按相对路径重新尝试
-      </el-button>
       <el-button size="small" type="danger" plain @click="skipAll">
         全部跳过
       </el-button>
@@ -16,18 +13,27 @@
 
     <div v-else class="split">
       <div class="left">
-        <div class="left-title">未匹配文件</div>
-        <div class="entry-list">
+        <div class="left-title">未匹配文件（点击后在右侧选择目标）</div>
+        <div class="entry-grid">
           <div
             v-for="entry in preview.unmatched"
             :key="entry.rel_path"
-            class="entry-row"
+            class="entry-cell"
             :class="{ active: activeRelPath === entry.rel_path }"
+            :title="entry.rel_path"
             @click="setActive(entry.rel_path)"
           >
+            <div class="entry-thumb">
+              <el-icon :size="40">
+                <Document v-if="iconKind(entry.name) === 'doc'" />
+                <VideoCamera v-else-if="iconKind(entry.name) === 'video'" />
+                <Headset v-else-if="iconKind(entry.name) === 'audio'" />
+                <Picture v-else-if="iconKind(entry.name) === 'image'" />
+                <Document v-else />
+              </el-icon>
+            </div>
             <div class="entry-name">{{ entry.name }}</div>
-            <div class="entry-rel">{{ entry.rel_path }}</div>
-            <div class="entry-tags">关联标签: {{ entry.tag_export_ids.length }}</div>
+            <div class="entry-tags">{{ entry.tag_export_ids.length }} 标签</div>
           </div>
         </div>
       </div>
@@ -50,7 +56,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import {
+  Document,
+  Headset,
+  Picture,
+  VideoCamera,
+} from '@element-plus/icons-vue'
 import { tagApi, type ImportPreview } from '../../api/tags'
 import type { FileSummary } from '../../types'
 import WorkspaceFilePicker from '../../components/WorkspaceFilePicker.vue'
@@ -83,18 +94,15 @@ function setActive(rel_path: string) {
   activeRelPath.value = rel_path
 }
 
-async function autoRelocate() {
-  try {
-    const updated = await tagApi.importRelocate({
-      token: props.preview.token,
-      mode: 'auto_rel_path',
-    })
-    emit('relocate', updated)
-    const recovered = props.preview.unmatched.length - updated.unmatched.length
-    ElMessage.success(`按相对路径命中 ${recovered} 项`)
-  } catch (err: any) {
-    ElMessage.error(`重定位失败: ${err?.message ?? err}`)
-  }
+function iconKind(name: string): 'doc' | 'image' | 'video' | 'audio' | 'other' {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return 'other'
+  const ext = name.slice(dot + 1).toLowerCase()
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'tif', 'tiff', 'avif', 'heic'].includes(ext)) return 'image'
+  if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'flv', 'wmv', 'm4v'].includes(ext)) return 'video'
+  if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].includes(ext)) return 'audio'
+  if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'rtf'].includes(ext)) return 'doc'
+  return 'other'
 }
 
 async function skipAll() {
@@ -151,8 +159,8 @@ async function onPickFile(file: FileSummary) {
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 12px;
-  min-height: 360px;
-  max-height: 420px;
+  min-height: 400px;
+  max-height: 480px;
 }
 .left,
 .right {
@@ -161,6 +169,7 @@ async function onPickFile(file: FileSummary) {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
   overflow: hidden;
+  min-height: 0;
 }
 .left-title,
 .right-title {
@@ -168,35 +177,60 @@ async function onPickFile(file: FileSummary) {
   background: var(--el-fill-color-light);
   font-size: 12px;
   font-weight: 500;
+  flex-shrink: 0;
 }
-.entry-list {
-  flex: 1;
+.entry-grid {
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 4px;
+  padding: 6px;
+  align-content: start;
 }
-.entry-row {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+.entry-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  border-radius: 4px;
   cursor: pointer;
+  user-select: none;
 }
-.entry-row:hover {
+.entry-cell:hover {
   background: var(--el-fill-color-light);
 }
-.entry-row.active {
+.entry-cell.active {
   background: var(--el-color-primary-light-9);
-  border-left: 3px solid var(--el-color-primary);
+  outline: 1px solid var(--el-color-primary);
+}
+.entry-thumb {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-fill-color);
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 .entry-name {
-  font-size: 13px;
-  font-weight: 500;
-}
-.entry-rel {
+  margin-top: 4px;
   font-size: 11px;
-  color: var(--el-text-color-secondary);
-  margin-top: 2px;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   word-break: break-all;
+  line-height: 1.2;
 }
 .entry-tags {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--el-text-color-placeholder);
   margin-top: 2px;
 }

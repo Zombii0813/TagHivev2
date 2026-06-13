@@ -354,53 +354,6 @@ def match_files(
     return result
 
 
-def relocate_by_relative_path(
-    repo: Repo,
-    entries: Iterable[FileMatchEntry],
-    workspace: str,
-) -> tuple[list[FileMatchEntry], list[FileMatchEntry]]:
-    """对未匹配项按「相对路径」二次尝试
-
-    将每条 ExportedFile 的 ``rel_path`` 拼到目标 workspace 根上，
-    若该路径对应的本地文件已被索引，则视为重定位成功。
-
-    Args:
-        repo: 数据访问层
-        entries: 待重定位的未匹配条目
-        workspace: 目标 workspace
-
-    Returns:
-        (relocated, still_unmatched)
-        - relocated: 重定位成功的条目（candidates 已更新为单元素列表）
-        - still_unmatched: 仍未匹配的条目
-    """
-    workspace_posix = Path(workspace).as_posix().rstrip("/")
-    relocated: list[FileMatchEntry] = []
-    still_unmatched: list[FileMatchEntry] = []
-
-    target_paths: list[str] = []
-    entry_by_path: dict[str, FileMatchEntry] = {}
-    for entry in entries:
-        target = f"{workspace_posix}/{entry.exported.rel_path}"
-        target_paths.append(target)
-        entry_by_path[target] = entry
-
-    if not target_paths:
-        return relocated, still_unmatched
-
-    found = repo.get_files_by_paths(target_paths)
-    found_map = {str(f.path): int(f.id) for f in found}
-
-    for path, entry in entry_by_path.items():
-        if path in found_map:
-            entry.candidates = [found_map[path]]
-            relocated.append(entry)
-        else:
-            still_unmatched.append(entry)
-
-    return relocated, still_unmatched
-
-
 # ====================================================================
 # 导入提交（写库）
 # ====================================================================

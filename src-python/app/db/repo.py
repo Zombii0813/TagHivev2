@@ -605,19 +605,26 @@ class Repo:
         return " " in text or "*" in text or len(text) > 3
 
     def _fts_search(self, query: str, limit: int | None = None) -> list[int]:
-        """使用 FTS5 全文搜索"""
+        """使用 FTS5 全文搜索
+
+        FTS5 对包含 . - _ 等字符或不平衡引号的查询会抛 SQL 语法异常，
+        这里捕获后返回空列表，由调用方降级为 LIKE 查询，避免整个搜索接口 500。
+        """
         # 转换用户输入为 FTS5 查询语法
         # 支持: prefix*, "phrase", AND, OR, NOT
         query_text = query.replace("*", "*")  # 保留通配符
-        
+
         stmt = select(FileSearch.rowid).where(
             text("files_fts MATCH :query")
         ).params(query=query_text)
-        
+
         if limit is not None:
             stmt = stmt.limit(limit)
-        
-        results = self.session.execute(stmt).scalars().all()
+
+        try:
+            results = self.session.execute(stmt).scalars().all()
+        except Exception:
+            return []
         return [int(r) for r in results if r is not None]
 
     def get_tags_for_file(self, file_id: int) -> list[Tag]:

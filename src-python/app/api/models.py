@@ -282,11 +282,11 @@ class ImportPreviewDTO(BaseModel):
 class ImportRelocateRequestDTO(BaseModel):
     """重定位请求 DTO
 
-    mode='auto_rel_path' 时按相对路径整体尝试一次。
     mode='manual' 时 rel_path 与 file_id 必填，将该未匹配条目锁定到指定本地文件。
+    mode='skip_all' 时清空未匹配列表。
     """
     token: str
-    mode: str  # 'auto_rel_path' | 'manual' | 'skip_all'
+    mode: str  # 'manual' | 'skip_all'
     rel_path: Optional[str] = None
     file_id: Optional[int] = None
 
