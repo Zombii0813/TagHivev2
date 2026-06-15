@@ -1808,6 +1808,9 @@ async function handleExternalDrop(event: DragEvent) {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .import-dialog-hero {
@@ -1939,6 +1942,12 @@ async function handleExternalDrop(event: DragEvent) {
   border-radius: 16px;
   overflow: hidden;
   background: var(--color-bg-primary);
+  /* flex-basis 表示首选高度（弹窗够大时占 500px），同时允许在空间不足时收缩；
+     min-height 必须显式归零以覆盖 flex 默认的「不小于内容」下限。 */
+  flex: 1 1 500px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .import-tree-panel-header {
@@ -1949,6 +1958,7 @@ async function handleExternalDrop(event: DragEvent) {
   padding: 12px 16px;
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-bg-secondary) 90%, transparent);
+  flex-shrink: 0;
 }
 
 .import-dialog-loading {
@@ -2003,6 +2013,16 @@ async function handleExternalDrop(event: DragEvent) {
 
 .import-tree-panel :deep(.el-tree) {
   padding: 8px 10px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.import-tree-panel > .import-dialog-loading,
+.import-tree-panel > .el-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .import-tree-panel :deep(.el-tree-node__content) {
@@ -2085,5 +2105,32 @@ async function handleExternalDrop(event: DragEvent) {
   height: 1px;
   background-color: var(--color-border);
   margin: 4px 0;
+}
+</style>
+
+<!-- 非 scoped 块：el-dialog 通过 teleport 渲染到组件根之外，scoped attr 无法透传，
+     需要全局选择器才能限制其整体高度并让仅目录树内部滚动。 -->
+<style>
+.import-target-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 80px);
+  margin-top: 40px !important;
+  margin-bottom: 40px !important;
+}
+
+.import-target-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.import-target-dialog .el-dialog__header,
+.import-target-dialog .el-dialog__footer {
+  flex-shrink: 0;
 }
 </style>
