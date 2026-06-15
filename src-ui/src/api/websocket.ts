@@ -72,6 +72,11 @@ class WebSocketClient {
     this.socket.on('thumbnail_ready', (data: ThumbnailReadyEvent) => {
       this.emit('thumbnail_ready', data)
     })
+
+    // 文件夹结构变化（创建/删除目录、移动/复制/导入文件等）
+    this.socket.on('folder_tree_changed', (data: { workspace: string }) => {
+      this.emit('folder_tree_changed', data)
+    })
   }
 
   disconnect(): void {

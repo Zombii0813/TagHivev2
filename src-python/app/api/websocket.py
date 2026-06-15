@@ -49,6 +49,34 @@ async def broadcast_thumbnail_ready(file_path: str, size: str, success: bool) ->
     await sio.emit("thumbnail_ready", payload)
 
 
+async def broadcast_folder_tree_changed(workspace: str | None = None) -> None:
+    """广播文件夹结构变更事件，触发前端目录树重载。
+
+    Args:
+        workspace: 受影响的工作区根路径（POSIX）；为空表示所有工作区
+    """
+    if not connected_clients:
+        return
+    await sio.emit("folder_tree_changed", {"workspace": workspace or ""})
+
+
+def schedule_folder_tree_changed(workspace: str | None = None) -> None:
+    """从同步路由处理函数调度目录树变更广播到主事件循环。
+
+    路由是 async 协程，可直接 await broadcast；该 helper 用于
+    无法 await 的场景（线程回调等），保持调用方一致。
+    """
+    loop = get_main_loop()
+    if loop is None or not connected_clients:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            broadcast_folder_tree_changed(workspace), loop
+        )
+    except Exception as e:
+        logger.error(f"schedule_folder_tree_changed failed: {e}")
+
+
 def schedule_thumbnail_broadcast(result, task) -> None:
     """异步生成器工作线程的回调：把广播协程调度到主事件循环。
 
@@ -155,6 +183,7 @@ async def _handle_file_change(sid: str, file_path: Path, event_type: str):
                     # 文件被删，失效 folder_tree 缓存（文件计数变化）
                     from ..core.query_cache import get_query_cache
                     get_query_cache().invalidate_pattern("folder:tree:")
+                    await broadcast_folder_tree_changed()
                     await sio.emit("file_deleted", {
                         "path": str(file_path),
                         "file_id": file_row.id,
@@ -171,6 +200,7 @@ async def _handle_file_change(sid: str, file_path: Path, event_type: str):
                     if existing is None:
                         from ..core.query_cache import get_query_cache
                         get_query_cache().invalidate_pattern("folder:tree:")
+                        await broadcast_folder_tree_changed()
 
                     # 获取标签信息
                     tags = [{"id": t.id, "name": t.name} for t in file_row.tags]

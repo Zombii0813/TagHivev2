@@ -182,6 +182,7 @@ import { Loading, FolderAdd, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
+import { wsClient } from '../api/websocket'
 import { useAppStore } from '../stores/app'
 import type { FolderNode } from '../types'
 
@@ -246,6 +247,7 @@ const PAGE_SIZE   = 12       // 每页最多12个子节点（ring-1 有6个槽 +
 // 展开/收起：用 document mousemove 检测鼠标是否在浮层任意子元素范围内
 const isExpanded = ref(false)
 let leaveTimer: ReturnType<typeof setTimeout>|null = null
+let unsubFolderChanged: (() => void) | null = null
 
 // ─── 拖拽（限制在 boundary 内） ───────────────────────────────
 const floatRef   = ref<HTMLElement>()
@@ -888,11 +890,28 @@ onMounted(async ()=>{
   // 等待下一帧再读取 boundary 的位置，确保 DOM 已渲染
   await nextTick()
   initPosition()
+  // 订阅后端目录树变更事件，文件移动/复制/创建目录等操作后实时刷新
+  unsubFolderChanged = wsClient.on<{ workspace: string }>('folder_tree_changed', async (data) => {
+    const target = data?.workspace || ''
+    const known = Array.from(wsTreeMap.value.keys())
+    const targets = target ? known.filter(ws => ws === target) : known
+    if (!targets.length) return
+    await Promise.all(targets.map(ws => loadWs(ws)))
+    // 修正 navStack：被刷新后的工作区树替换栈中节点引用，避免选中状态丢失
+    if (navStack.value.length) {
+      const cur = navStack.value[navStack.value.length - 1]
+      if (targets.includes(cur.wsPath)) {
+        const rf = findNode(cur.node.path, cur.wsPath)
+        if (rf) navStack.value = [...navStack.value.slice(0, -1), { node: rf, wsPath: cur.wsPath }]
+      }
+    }
+  })
 })
 onUnmounted(()=>{
   window.removeEventListener('close-context-menus',closeCtx)
   ctxEl.remove()
   if (leaveTimer) clearTimeout(leaveTimer)
+  if (unsubFolderChanged) { unsubFolderChanged(); unsubFolderChanged = null }
 })
 
 watch(()=>[props.rootPath,...(props.workspaces??[])], ()=>loadAll(), { immediate:true })

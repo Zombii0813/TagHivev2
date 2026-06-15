@@ -19,6 +19,7 @@ from ..db.models import File, Tag
 from ..core.search import SearchQuery
 from ..core.indexer import build_file_meta
 from ..services.scan_service import ScanService
+from .websocket import broadcast_folder_tree_changed
 from .models import (
     FileDTO,
     FileImportRequestDTO,
@@ -272,6 +273,7 @@ async def import_files_to_directory(
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
     return FileImportResultDTO(files=imported_files, target_dir=target_dir.as_posix())
 
 
@@ -441,6 +443,7 @@ async def delete_file(
     # 文件数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
     return {"success": True}
 
 
@@ -555,6 +558,7 @@ async def move_files(
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
     return FileBatchResultDTO(files=moved_files, target_dir=target_dir.as_posix())
 
 
@@ -604,6 +608,7 @@ async def copy_files(
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
     return FileBatchResultDTO(files=copied_files, target_dir=target_dir.as_posix())
 
 
@@ -982,6 +987,7 @@ async def create_folder(
     # 文件夹结构变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed(root_path.as_posix())
 
     return FolderCreateResultDTO(name=target_path.name, path=target_path.as_posix())
 
@@ -1022,6 +1028,7 @@ async def delete_folder(
     # 文件夹结构变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed(root_path.as_posix())
 
     return {"deleted": folder_path.as_posix(), "files_removed": len(file_ids)}
 
