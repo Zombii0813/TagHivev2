@@ -757,11 +757,7 @@ async function importExternalFiles(paths: string[], targetDir: string) {
   try {
     const result = await fileApi.importToDirectory(normalizedPaths, targetDir)
 
-    if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
-      await fileStore.loadFolderContents(fileStore.currentFolderPath)
-    } else {
-      await fileStore.search({ root: appStore.currentWorkspace || undefined })
-    }
+    await refreshFileList()
 
     ElMessage.success(`已移动 ${result.files.length} 个文件到 ${result.target_dir}`)
   } catch (error) {
@@ -1398,6 +1394,16 @@ async function deleteContextMenuFiles() {
 }
 
 async function refreshFileList() {
+  // 处于标签过滤态时：保留过滤条件，按当前 searchQuery 重跑搜索；
+  // 不能走 loadFolderContents（按目录直查、不带 tag 过滤）也不能传 { root } 重置 query。
+  if (tagStore.hasSelection) {
+    await fileStore.search({
+      ...fileStore.searchQuery,
+      tags: Array.from(tagStore.effectiveTagIds),
+      match_all_tags: false,
+    })
+    return
+  }
   if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
     await fileStore.loadFolderContents(fileStore.currentFolderPath)
   } else {
