@@ -617,20 +617,25 @@ let lastHandledExternalDropResetTimer: ReturnType<typeof setTimeout> | null = nu
 // Grid 布局配置
 const GAP = 16 // 间距
 const INFO_HEIGHT = 80 // 文件名等信息区域高度（包含标签区域）
+const GRID_PADDING_X = 10 // grid-view 左右内边距（与 .grid-view CSS 保持一致），列数计算需扣除
+// 行内垂直 padding：给 hover 时 translateY(-4px) scale(1.04) 留呼吸空间，
+// 避免溢出 row 高度后被 vue-virtual-scroller 内置的 overflow:hidden 裁掉。
+const ROW_PADDING_Y = 12
 
 // 计算每行显示的列数（根据固定卡片尺寸和容器宽度自动决定列数）
 const gridColumns = computed(() => {
   if (containerWidth.value === 0) return 4
-  const columns = Math.floor((containerWidth.value + GAP) / (fileStore.gridItemSize + GAP))
+  const usable = Math.max(containerWidth.value - GRID_PADDING_X * 2, fileStore.gridItemSize)
+  const columns = Math.floor((usable + GAP) / (fileStore.gridItemSize + GAP))
   return Math.max(columns, 1) // 最少显示 1 列
 })
 
 // 卡片宽度固定为 gridItemSize
 const gridItemWidth = computed(() => fileStore.gridItemSize)
 
-// 计算每个 grid item 的高度
+// 计算每个 grid item 的高度（含 row 上下 padding，给 hover 上浮预留缓冲）
 const gridItemHeight = computed(() => {
-  return fileStore.gridItemSize + INFO_HEIGHT
+  return fileStore.gridItemSize + INFO_HEIGHT + ROW_PADDING_Y * 2
 })
 
 // 将文件列表按行分组
@@ -658,6 +663,7 @@ const gridRows = computed<GridRow[]>(() => {
 // 每行宽度固定为 columns * itemWidth + (columns-1) * gap，
 // 通过 margin: 0 auto 让整行相对滚动容器水平居中（两边留白对称），
 // 行内使用 flex-start，最后一行未填满时单元格靠左而非居中。
+// 上下 padding 给 hover 上浮 + 阴影留呼吸空间（高度已在 gridItemHeight 中预留）。
 const gridRowStyle = computed(() => {
   const columns = gridColumns.value
   const rowWidth = columns * gridItemWidth.value + (columns - 1) * GAP
@@ -668,6 +674,8 @@ const gridRowStyle = computed(() => {
     width: `${rowWidth}px`,
     margin: '0 auto',
     height: `${gridItemHeight.value}px`,
+    paddingTop: `${ROW_PADDING_Y}px`,
+    paddingBottom: `${ROW_PADDING_Y}px`,
   }
 })
 
@@ -1557,9 +1565,10 @@ async function handleExternalDrop(event: DragEvent) {
   height: 100%;
 }
 
-.grid-view {
-  padding: 16px 0;
-}
+/* vue-virtual-scroller 的 __item-wrapper 默认 overflow: hidden（库内置硬编码），
+   item-view 又是 absolute 定位，无法靠 wrapper padding 让上浮的 hover 效果露出。
+   实际生效方案是在 grid-row 内部留出垂直 padding，
+   让卡片 hover 时 translateY(-4px) scale(1.04) 仍在 row 高度内。 */
 
 /* 确保 RecycleScroller 的 item view 占满宽度 */
 .grid-view :deep(.vue-recycle-scroller__item-view) {
