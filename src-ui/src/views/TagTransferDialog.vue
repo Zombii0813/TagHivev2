@@ -72,7 +72,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import {
   tagApi,
@@ -177,6 +177,26 @@ async function runExport() {
     emit('update:modelValue', false)
     return
   }
+  let includeThumbnails = false
+  try {
+    await ElMessageBox.confirm(
+      '是否在标签包内携带文件缩略图？携带后未匹配文件可显示原图预览，但包体会变大（仅图片/视频且本地已生成缩略图的文件生效）。',
+      '导出选项',
+      {
+        confirmButtonText: '携带缩略图',
+        cancelButtonText: '不携带',
+        distinguishCancelAndClose: true,
+        type: 'info',
+      },
+    )
+    includeThumbnails = true
+  } catch (action) {
+    if (action === 'close') {
+      emit('update:modelValue', false)
+      return
+    }
+    includeThumbnails = false
+  }
   try {
     const wsName = props.workspace.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'workspace'
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -189,7 +209,7 @@ async function runExport() {
       emit('update:modelValue', false)
       return
     }
-    const data = await tagApi.exportPack(props.workspace)
+    const data = await tagApi.exportPack(props.workspace, undefined, includeThumbnails)
     await invoke('write_binary_file', { path: target, content: Array.from(data) })
     ElMessage.success(`已导出到 ${target}`)
   } catch (err: any) {

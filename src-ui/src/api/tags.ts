@@ -39,11 +39,15 @@ export const tagApi = {
   },
 
   // 导出指定 workspace 的标签树与文件标记关联（返回 .thpack 二进制）
-  async exportPack(workspace: string, tagIds?: number[]): Promise<Uint8Array> {
+  async exportPack(workspace: string, tagIds?: number[], includeThumbnails: boolean = false): Promise<Uint8Array> {
     const resp = await fetch(`${getApiBaseUrl()}/api/tags/export`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace, tag_ids: tagIds ?? null }),
+      body: JSON.stringify({
+        workspace,
+        tag_ids: tagIds ?? null,
+        include_thumbnails: includeThumbnails,
+      }),
     })
     if (!resp.ok) {
       const text = await resp.text()
@@ -100,6 +104,7 @@ export interface FileMatchEntryPreview {
   mtime?: number | null
   tag_export_ids: string[]
   candidate_file_ids: number[]
+  thumbnail?: string | null  // base64(small 缩略图)，导出包未携带时为 null
 }
 
 export interface ImportPreview {

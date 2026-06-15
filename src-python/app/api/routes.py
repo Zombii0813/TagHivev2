@@ -1061,6 +1061,7 @@ def _entry_to_dto(entry) -> FileMatchEntryDTO:
         mtime=ef.mtime,
         tag_export_ids=list(ef.tag_export_ids),
         candidate_file_ids=list(entry.candidates),
+        thumbnail=ef.thumbnail,
     )
 
 
@@ -1105,7 +1106,12 @@ async def export_tags(
     if not payload.workspace:
         raise HTTPException(status_code=400, detail="workspace 不能为空")
 
-    data = export_workspace(repo, payload.workspace, payload.tag_ids)
+    data = export_workspace(
+        repo,
+        payload.workspace,
+        payload.tag_ids,
+        include_thumbnails=payload.include_thumbnails,
+    )
 
     workspace_name = Path(payload.workspace).name or "workspace"
     timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")

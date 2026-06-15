@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,10 +26,14 @@ from sqlalchemy import select
 from ..db.models import File, FileTag, Tag
 from ..db.repo import Repo
 
+logger = logging.getLogger(__name__)
+
 # .thpack 文件格式相关常量
 MAGIC_HEADER = b"THPK"
-EXPORT_SCHEMA_VERSION = 1
+EXPORT_SCHEMA_VERSION = 2  # v2 新增 ExportedFile.thumbnail（可选 base64 字符串）
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 MTIME_TOLERANCE_SECONDS = 2.0  # mtime 比对容差（秒），适配 FAT/exFAT 等低精度文件系统
+THUMBNAIL_EXPORT_TYPES = {"image", "video"}  # 仅这两类文件携带缩略图
 
 
 class ThpackFormatError(ValueError):
@@ -61,6 +66,7 @@ class ExportedFile:
     size: int
     mtime: float | None
     tag_export_ids: tuple[str, ...]
+    thumbnail: str | None = None  # base64(small 缩略图字节)；None 表示未携带
 
 
 @dataclass(frozen=True)
@@ -100,6 +106,7 @@ def export_workspace(
     repo: Repo,
     workspace: str,
     tag_ids: Iterable[int] | None = None,
+    include_thumbnails: bool = False,
 ) -> bytes:
     """导出指定 workspace 的标签树与文件标记关联
 
@@ -107,6 +114,8 @@ def export_workspace(
         repo: 数据访问层实例
         workspace: 工作目录路径，限定导出范围
         tag_ids: 可选，仅导出这些标签 ID（默认导出该 workspace 下所有标签）
+        include_thumbnails: 是否将本地已生成的 small 缩略图（仅图片/视频）以
+            base64 内联到导出包中。原始缩略图缺失时静默跳过该条。
 
     Returns:
         .thpack 二进制内容（含 magic + 版本号 + gzip JSON）
@@ -163,6 +172,12 @@ def export_workspace(
         if file_to_tags:
             files = repo.get_files_by_ids(file_to_tags.keys())
             workspace_root = Path(workspace_posix)
+            thumb_service = None
+            if include_thumbnails:
+                from .thumbnail_service import get_thumbnail_service
+                thumb_service = get_thumbnail_service()
+            thumb_attempt = 0
+            thumb_embedded = 0
             for f in files:
                 file_path = Path(str(f.path))
                 try:
@@ -176,6 +191,25 @@ def export_workspace(
                     for tid in file_to_tags[int(f.id)]
                     if tid in tag_id_to_export_id
                 ]
+
+                thumbnail_b64: str | None = None
+                if thumb_service is not None and str(f.type) in THUMBNAIL_EXPORT_TYPES:
+                    thumb_attempt += 1
+                    # small 尺寸日常浏览不会触发生成，导出时按需生成；
+                    # 失败（解码异常 / ffmpeg 缺失等）静默跳过该条
+                    try:
+                        thumb_service.generate_thumbnail(str(f.path), "small")
+                    except Exception:
+                        pass
+                    thumb_path = thumb_service.get_thumbnail_path(str(f.path), "small")
+                    if thumb_path.exists():
+                        try:
+                            import base64
+                            thumbnail_b64 = base64.b64encode(thumb_path.read_bytes()).decode("ascii")
+                            thumb_embedded += 1
+                        except OSError:
+                            thumbnail_b64 = None
+
                 exported_files.append(
                     {
                         "rel_path": rel_path,
@@ -183,7 +217,14 @@ def export_workspace(
                         "size": int(f.size or 0),
                         "mtime": float(f.modified_at) if f.modified_at is not None else None,
                         "tag_export_ids": tag_export_ids,
+                        "thumbnail": thumbnail_b64,
                     }
+                )
+
+            if include_thumbnails:
+                logger.info(
+                    "[tag_transfer] export workspace=%s thumb_attempt=%d thumb_embedded=%d",
+                    workspace_posix, thumb_attempt, thumb_embedded,
                 )
 
     body = {
@@ -222,7 +263,7 @@ def parse_thpack(data: bytes) -> ExportPayload:
         raise ThpackFormatError("非法的 .thpack 文件（magic header 校验失败）")
 
     version = data[4]
-    if version != EXPORT_SCHEMA_VERSION:
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ThpackFormatError(f"不支持的 schema 版本: {version}")
 
     try:
@@ -262,6 +303,7 @@ def parse_thpack(data: bytes) -> ExportPayload:
             size=int(item.get("size") or 0),
             mtime=(float(item["mtime"]) if item.get("mtime") is not None else None),
             tag_export_ids=tuple(str(tid) for tid in item.get("tag_export_ids", [])),
+            thumbnail=(str(item["thumbnail"]) if item.get("thumbnail") else None),
         )
         for item in files_raw
     )

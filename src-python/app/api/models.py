@@ -242,6 +242,7 @@ class TagExportRequestDTO(BaseModel):
     """标签导出请求 DTO"""
     workspace: str
     tag_ids: Optional[List[int]] = None  # 为空表示导出 workspace 下所有标签
+    include_thumbnails: bool = False     # 是否将本地 small 缩略图（仅图片/视频）以 base64 内联
 
 
 class ExportedTagDTO(BaseModel):
@@ -264,6 +265,7 @@ class FileMatchEntryDTO(BaseModel):
     mtime: Optional[float] = None
     tag_export_ids: List[str] = Field(default_factory=list)
     candidate_file_ids: List[int] = Field(default_factory=list)
+    thumbnail: Optional[str] = None  # base64 编码的 small 缩略图，导出包未携带时为 None
 
 
 class ImportPreviewDTO(BaseModel):

@@ -96,6 +96,45 @@ def test_export_only_selected_tags(repo: Repo):
     assert {t.name for t in payload.tags} == {"A"}
 
 
+# ---------- 缩略图序列化 ----------
+
+
+def test_export_default_no_thumbnail(repo: Repo):
+    tag = _add_tag(repo, "T")
+    f = _add_file(repo, f"{WORKSPACE}/a.jpg", size=10, mtime=1000.0)
+    f.type = "image"
+    repo.session.flush()
+    _link(repo, f, tag)
+
+    raw = export_workspace(repo, WORKSPACE)
+    payload = parse_thpack(raw)
+    assert payload.files[0].thumbnail is None
+
+
+def test_export_include_thumbnail(repo: Repo, tmp_path, monkeypatch):
+    import base64
+    from app.services import thumbnail_service as ts_mod
+
+    tag = _add_tag(repo, "T")
+    f = _add_file(repo, f"{WORKSPACE}/a.jpg", size=10, mtime=1000.0)
+    f.type = "image"
+    repo.session.flush()
+    _link(repo, f, tag)
+
+    fake_thumb = tmp_path / "fake.webp"
+    fake_thumb.write_bytes(b"FAKE-THUMB-BYTES")
+
+    class _StubService:
+        def get_thumbnail_path(self, file_path: str, size: str):
+            return fake_thumb
+
+    monkeypatch.setattr(ts_mod, "get_thumbnail_service", lambda: _StubService())
+
+    raw = export_workspace(repo, WORKSPACE, include_thumbnails=True)
+    payload = parse_thpack(raw)
+    assert payload.files[0].thumbnail == base64.b64encode(b"FAKE-THUMB-BYTES").decode("ascii")
+
+
 # ---------- magic / version 校验 ----------
 
 

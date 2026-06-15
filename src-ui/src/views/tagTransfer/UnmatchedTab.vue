@@ -24,7 +24,13 @@
             @click="setActive(entry.rel_path)"
           >
             <div class="entry-thumb">
-              <el-icon :size="40">
+              <img
+                v-if="entry.thumbnail"
+                :src="thumbDataUrl(entry.thumbnail)"
+                :alt="entry.name"
+                loading="lazy"
+              />
+              <el-icon v-else :size="40">
                 <Document v-if="iconKind(entry.name) === 'doc'" />
                 <VideoCamera v-else-if="iconKind(entry.name) === 'video'" />
                 <Headset v-else-if="iconKind(entry.name) === 'audio'" />
@@ -103,6 +109,11 @@ function iconKind(name: string): 'doc' | 'image' | 'video' | 'audio' | 'other' {
   if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].includes(ext)) return 'audio'
   if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'rtf'].includes(ext)) return 'doc'
   return 'other'
+}
+
+function thumbDataUrl(b64: string): string {
+  // 后端缩略图为 webp 优先，jpg 兜底；浏览器对两种 mime 都能识别，统一用 webp
+  return `data:image/webp;base64,${b64}`
 }
 
 async function skipAll() {
@@ -215,6 +226,12 @@ async function onPickFile(file: FileSummary) {
   background: var(--el-fill-color);
   border-radius: 4px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.entry-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .entry-name {
   margin-top: 4px;
