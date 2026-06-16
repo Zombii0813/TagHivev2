@@ -58,7 +58,32 @@
 
     <!-- 管理模式提示 -->
     <div v-if="isManageMode" class="manage-hint">
-      <span>拖动标签可调整顺序</span>
+      <div class="manage-hint-row">
+        <span class="manage-hint-text">
+          {{ manageSelectedIds.size > 0
+            ? `已选 ${manageSelectedIds.size} 项`
+            : '请选择标签' }}
+        </span>
+        <div class="manage-hint-actions">
+          <el-button
+            size="small"
+            link
+            type="primary"
+            @click="toggleManageSelectAll"
+          >
+            {{ allManageSelected ? '取消全选' : '全选' }}
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            :icon="Delete"
+            :disabled="manageSelectedIds.size === 0"
+            @click="confirmBatchDeleteTags"
+          >
+            批量删除
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <div
@@ -75,17 +100,29 @@
             'selected-direct': !isManageMode && tagStore.selectedTagIds.has(node.tag.id),
             'manage-dragging': isManageMode && manageDragState.sourceId === node.tag.id,
             'manage-item': isManageMode,
+            'manage-checked': isManageMode && manageSelectedIds.has(node.tag.id),
           }"
           :style="{ ...getTagItemStyle(node.tag, index), paddingLeft: `${10 + node.depth * 16}px` }"
           :data-tag-id="node.tag.id"
           :draggable="!isManageMode"
-          @click="!isManageMode && handleTagClick(node.tag.id, $event)"
+          @click="handleTagItemClick(node.tag.id, $event)"
           @contextmenu.prevent="!isManageMode && handleContextMenu(node.tag, $event)"
           @dragstart="!isManageMode && handleTagDragStart(node.tag.id, $event)"
           @dragend="!isManageMode && clearTagDragState()"
-          @pointerdown="isManageMode && handleManagePointerDown(node.tag.id, $event)"
         >
-          <span v-if="isManageMode" class="manage-drag-handle">⠿</span>
+          <span
+            v-if="isManageMode"
+            class="manage-drag-handle"
+            @pointerdown.stop="handleManagePointerDown(node.tag.id, $event)"
+            @click.stop
+          >⠿</span>
+          <el-checkbox
+            v-if="isManageMode"
+            :model-value="manageSelectedIds.has(node.tag.id)"
+            class="manage-checkbox"
+            @change="toggleManageSelected(node.tag.id, $event)"
+            @click.stop
+          />
           <!-- 展开/折叠按钮（有子标签时显示） -->
           <span
             v-if="node.children.length > 0 && !isManageMode"
@@ -573,6 +610,132 @@ const tagListRef = ref<HTMLElement | null>(null)
 
 // 管理模式
 const isManageMode = ref(false)
+// 管理模式下批量选中的标签 id（与过滤态 selectedTagIds 完全独立，避免互相污染）
+const manageSelectedIds = ref<Set<number>>(new Set())
+
+const allManageSelected = computed(() => {
+  const total = tagStore.tags.length
+  return total > 0 && manageSelectedIds.value.size === total
+})
+
+function toggleManageSelected(tagId: number, val: boolean | string | number) {
+  const next = new Set(manageSelectedIds.value)
+  if (val) next.add(tagId)
+  else next.delete(tagId)
+  manageSelectedIds.value = next
+}
+
+function toggleManageSelectAll() {
+  if (allManageSelected.value) {
+    manageSelectedIds.value = new Set()
+  } else {
+    manageSelectedIds.value = new Set(tagStore.tags.map(t => t.id))
+  }
+}
+
+// 管理模式下点击行（除拖拽柄）切换勾选；非管理模式走原有过滤逻辑
+function handleTagItemClick(tagId: number, event: MouseEvent) {
+  if (isManageMode.value) {
+    // 拖拽柄自身上的 click 已 stop，但拖拽抬手时浏览器派发的 click 仍会命中行——
+    // 通过 didDragInManage 标志屏蔽，避免拖拽完成后误切勾选。
+    if (didDragInManage) {
+      didDragInManage = false
+      return
+    }
+    const target = event.target as HTMLElement | null
+    if (target?.closest('.manage-drag-handle')) return
+    toggleManageSelected(tagId, !manageSelectedIds.value.has(tagId))
+    return
+  }
+  handleTagClick(tagId, event)
+}
+
+async function confirmBatchDeleteTags() {
+  const ids = Array.from(manageSelectedIds.value)
+  if (!ids.length) return
+
+  // 仅删除勾选项；未勾选的子标签 parent_id 升级到"最近的未被勾选祖先"，
+  // 没有则升为顶级（null）。这样未勾选的标签不会被牵连删除。
+  const toDelete = new Set<number>(ids)
+
+  // 找最近的未被删除祖先：沿 parent 链向上，跳过所有在 toDelete 中的节点
+  const findNearestSurvivingAncestor = (tagId: number): number | null => {
+    let cur = tagStore.tags.find(t => t.id === tagId)
+    while (cur?.parent_id) {
+      if (!toDelete.has(cur.parent_id)) return cur.parent_id
+      cur = tagStore.tags.find(t => t.id === cur!.parent_id)
+    }
+    return null
+  }
+
+  // 收集所有"父节点被删除但自身未被勾选"的标签 → 需升级 parent_id
+  const reparentMap = new Map<number, number | null>()
+  for (const tag of tagStore.tags) {
+    if (toDelete.has(tag.id)) continue
+    if (tag.parent_id != null && toDelete.has(tag.parent_id)) {
+      reparentMap.set(tag.id, findNearestSurvivingAncestor(tag.id))
+    }
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      reparentMap.size > 0
+        ? `将删除选中的 ${ids.length} 个标签。其下未勾选的 ${reparentMap.size} 个子标签将层级提升一层（不被删除）。`
+        : `将删除选中的 ${ids.length} 个标签。`,
+      '批量删除标签',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+
+  // 第一步：先把未勾选的子标签 parent_id 升级，避免被外键 SET NULL 时漂移到错误位置
+  for (const [childId, newParentId] of reparentMap) {
+    try {
+      await tagStore.updateTag(childId, { parent_id: newParentId })
+    } catch (e) {
+      console.error('升级 parent_id 失败：', childId, e)
+    }
+  }
+
+  // 第二步：删除勾选项；按拓扑深度倒序（深的先删），避免被删项之间的 SET NULL 漂移
+  const depthOf = (tagId: number): number => {
+    let d = 0
+    let cur = tagStore.tags.find(t => t.id === tagId)
+    while (cur?.parent_id) {
+      d++
+      cur = tagStore.tags.find(t => t.id === cur!.parent_id)
+    }
+    return d
+  }
+  const ordered = ids.slice().sort((a, b) => depthOf(b) - depthOf(a))
+
+  let failed = 0
+  for (const id of ordered) {
+    try {
+      await tagStore.deleteTag(id)
+    } catch (e) {
+      failed++
+      console.error('批量删除失败：', id, e)
+    }
+  }
+
+  // 清理过滤态中残留的引用
+  for (const id of ids) {
+    if (tagStore.selectedTagIds.has(id)) tagStore.clearSelection()
+  }
+  manageSelectedIds.value = new Set()
+
+  if (failed > 0) {
+    ElMessage.warning(`已删除 ${ordered.length - failed} 个，${failed} 个失败`)
+  } else {
+    ElMessage.success(`已删除 ${ordered.length} 个标签`)
+  }
+}
 
 // 标签检索
 const searchQuery = ref('')
@@ -638,6 +801,9 @@ interface ManageDragState {
   startY: number                    // 指针起始 Y
   sourceIndex: number               // 被拖项的原始索引
 }
+// 拖拽实际发生时（pointermove 触发过且越过阈值）置为 true，
+// pointerup 后浏览器派发的 click 命中行时，handleTagItemClick 检查该标志屏蔽切换。
+let didDragInManage = false
 const manageDragState = ref<ManageDragState>({
   sourceId: null,
   insertIndex: null,
@@ -652,10 +818,12 @@ function toggleManageMode() {
   if (isManageMode.value) {
     isManageMode.value = false
     endManageDrag(false)
+    manageSelectedIds.value = new Set()
   } else {
     // 退出过滤状态再进入管理模式
     tagStore.clearSelection()
     searchQuery.value = ''
+    manageSelectedIds.value = new Set()
     isManageMode.value = true
   }
 }
@@ -759,6 +927,10 @@ function handleManagePointerMove(event: PointerEvent) {
   event.preventDefault()
 
   const deltaY = event.clientY - ds.startY
+  // 越过 4px 阈值视为真实拖拽（避免轻微抖动也屏蔽 click）
+  if (!didDragInManage && Math.abs(deltaY) > 4) {
+    didDragInManage = true
+  }
 
   // 移动 ghost：以初始 item 顶部位置 + 偏移
   const origTop = ds.itemMidYs[ds.sourceIndex] - ds.itemHeight / 2
@@ -1168,7 +1340,38 @@ async function confirmDeleteTag() {
   border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #e6a23c) 30%, transparent);
   font-size: 12px;
   color: var(--color-warning, #e6a23c);
-  text-align: center;
+}
+
+.manage-hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.manage-hint-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manage-hint-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.manage-checkbox {
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.tag-item.manage-checked {
+  outline: 2px solid var(--tag-color, var(--color-accent));
+  outline-offset: -2px;
 }
 
 .filter-status {
@@ -1247,6 +1450,21 @@ async function confirmDeleteTag() {
   flex-shrink: 0;
   line-height: 1;
   letter-spacing: -1px;
+  /* 加大点击/拖拽热区，避免误触整行的勾选切换 */
+  padding: 4px 6px;
+  margin-right: 2px;
+  border-radius: 4px;
+  user-select: none;
+  touch-action: none;
+}
+
+.manage-drag-handle:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-bg-secondary) 80%, transparent);
+}
+
+.manage-drag-handle:active {
+  cursor: grabbing;
 }
 
 .tag-dot {
