@@ -18,7 +18,7 @@ interface ViewPrefs {
 const VIEW_PREF_DEFAULTS: ViewPrefs = {
   viewMode: 'grid',
   browseMode: 'all',
-  gridItemSize: 160,
+  gridItemSize: 184,
   sortBy: 'name',
   sortDesc: false,
 }

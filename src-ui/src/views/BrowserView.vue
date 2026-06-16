@@ -616,6 +616,7 @@ let lastHandledExternalDropResetTimer: ReturnType<typeof setTimeout> | null = nu
 
 // Grid 布局配置
 const GAP = 16 // 间距
+const GAP_Y = 16 // 行间距（仅 grid-view 有效，list-view 行内无垂直间距）
 const INFO_HEIGHT = 80 // 文件名等信息区域高度（包含标签区域）
 const GRID_PADDING_X = 10 // grid-view 左右内边距（与 .grid-view CSS 保持一致），列数计算需扣除
 // 行内垂直 padding：给 hover 时 translateY(-4px) scale(1.04) 留呼吸空间，
@@ -635,7 +636,7 @@ const gridItemWidth = computed(() => fileStore.gridItemSize)
 
 // 计算每个 grid item 的高度（含 row 上下 padding，给 hover 上浮预留缓冲）
 const gridItemHeight = computed(() => {
-  return fileStore.gridItemSize + INFO_HEIGHT + ROW_PADDING_Y * 2
+  return fileStore.gridItemSize + INFO_HEIGHT + ROW_PADDING_Y * 2 - GAP_Y
 })
 
 // 将文件列表按行分组
