@@ -629,9 +629,15 @@ onMounted(() => {
 
       fileStore.completeScanning()
       ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-      // 刷新文件列表
+      // 刷新文件列表：保持当前浏览模式
       const root = appStore.currentWorkspace || undefined
-      fileStore.search({ root })
+      if (fileStore.browseMode === 'folder' && root) {
+        // 文件夹浏览模式：重新加载当前所在目录（若无则回到工作区根目录）
+        const targetPath = fileStore.currentFolderPath || root
+        fileStore.loadFolderContents(targetPath)
+      } else {
+        fileStore.search({ root })
+      }
 
       // 重置标志，允许下次扫描显示提示
       setTimeout(() => {

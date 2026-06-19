@@ -1023,8 +1023,13 @@ async function selectWorkspace() {
       // 订阅扫描完成事件
       const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
         ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-        // 扫描完成后刷新文件列表
-        fileStore.search({ root: path })
+        // 扫描完成后刷新文件列表：保持当前浏览模式
+        if (fileStore.browseMode === 'folder') {
+          const targetPath = fileStore.currentFolderPath || path
+          fileStore.loadFolderContents(targetPath)
+        } else {
+          fileStore.search({ root: path })
+        }
         unsubscribeCompleted()
       })
       
