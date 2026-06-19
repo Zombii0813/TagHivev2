@@ -373,6 +373,25 @@ export const useTagStore = defineStore('tags', () => {
     }
   }
 
+  async function removeTagFromFiles(fileIds: number[], tagId: number) {
+    const uniqueFileIds = Array.from(new Set(fileIds))
+
+    if (!uniqueFileIds.length) {
+      return { files: 0, affected: 0 }
+    }
+
+    try {
+      const result = await tagApi.batchUnassign(uniqueFileIds, tagId)
+      const fileStore = useFileStore()
+      fileStore.removeTagFromFiles(uniqueFileIds, tagId)
+      await reloadTags()
+      return result
+    } catch (error) {
+      console.error('Failed to unassign tag from files:', error)
+      throw error
+    }
+  }
+
   return {
     tags,
     selectedTagIds,
@@ -403,5 +422,6 @@ export const useTagStore = defineStore('tags', () => {
     toggleExpand,
     reorderTags,
     assignTagsToFiles,
+    removeTagFromFiles,
   }
 })

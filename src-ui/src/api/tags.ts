@@ -38,6 +38,14 @@ export const tagApi = {
     })
   },
 
+  // 批量移除单个标签
+  async batchUnassign(fileIds: number[], tagId: number): Promise<{ success: boolean; files: number; affected: number }> {
+    return apiClient.post<{ success: boolean; files: number; affected: number }>('/api/tags/batch-unassign', {
+      file_ids: fileIds,
+      tag_id: tagId,
+    })
+  },
+
   // 导出指定 workspace 的标签树与文件标记关联（返回 .thpack 二进制）
   async exportPack(workspace: string, tagIds?: number[], includeThumbnails: boolean = false): Promise<Uint8Array> {
     const resp = await fetch(`${getApiBaseUrl()}/api/tags/export`, {

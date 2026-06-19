@@ -269,7 +269,7 @@
             <div class="status-bar-actions">
               <el-button size="small" @click="batchOpsRef?.openAddTags()">
                 <el-icon><CollectionTag /></el-icon>
-                批量添加标签
+                批量管理标签
               </el-button>
               <el-button size="small" type="danger" @click="batchOpsRef?.confirmDelete()">
                 <el-icon><Delete /></el-icon>

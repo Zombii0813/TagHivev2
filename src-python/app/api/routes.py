@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List
 from mimetypes import guess_type
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -760,6 +760,22 @@ async def batch_assign_tags(
     repo.attach_tags_to_files(file_ids, tag_ids)
     repo.session.commit()
     return {"success": True, "files": len(file_ids), "tags": len(tag_ids)}
+
+
+@router.post("/tags/batch-unassign")
+async def batch_unassign_tag(
+    file_ids: List[int] = Body(...),
+    tag_id: int = Body(...),
+    repo: Repo = Depends(get_repo),
+):
+    """批量从文件移除单个标签
+
+    用于「批量管理标签」对话框：用户在已有标签上点 × 时调用。
+    一次只移除一个标签；如需移除多个调用方多次发起请求。
+    """
+    affected = repo.detach_tag_from_files(file_ids, tag_id)
+    repo.session.commit()
+    return {"success": True, "files": len(file_ids), "affected": affected}
 
 
 # ========== 工作区扫描 API ==========

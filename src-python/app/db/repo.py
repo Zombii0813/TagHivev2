@@ -515,6 +515,34 @@ class Repo:
             # 清除缓存
             self.clear_search_cache()
 
+    def detach_tag_from_files(
+        self, file_ids: Iterable[int], tag_id: int
+    ) -> int:
+        """批量从多个文件移除指定标签
+
+        Args:
+            file_ids: 文件 ID 列表
+            tag_id: 要移除的标签 ID
+
+        Returns:
+            实际删除的关联数量
+        """
+        file_ids = list(file_ids)
+        if not file_ids:
+            return 0
+
+        result = self.session.execute(
+            delete(FileTag).where(
+                FileTag.file_id.in_(file_ids),
+                FileTag.tag_id == tag_id,
+            )
+        )
+        affected = result.rowcount or 0
+        if affected > 0:
+            # 清除缓存
+            self.clear_search_cache()
+        return affected
+
     # ========== 搜索功能 ==========
 
     def search(self, query: SearchQuery, limit: int | None = None) -> list[SearchResult]:
