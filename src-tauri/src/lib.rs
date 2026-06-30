@@ -514,7 +514,7 @@ pub fn run() {
             // disable_drag_drop_handler(): 禁用 Tauri 原生拖放处理器，以允许 HTML5 drag-and-drop 在 Windows WebView2 上正常工作
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("TagHive")
-                .inner_size(1650.0, 900.0)
+                .inner_size(1680.0, 900.0)
                 .min_inner_size(1000.0, 700.0)
                 .center()
                 .resizable(true)
