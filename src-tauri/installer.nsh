@@ -19,21 +19,37 @@
 ; ============================================
 ; 卸载前钩子 - 在卸载开始之前执行
 ; 这是删除 .taghive 文件夹的主要位置
+;
+; 重要：仅当用户在卸载确认页勾选了「删除应用数据」时才清除便携数据。
+; $DeleteAppDataCheckboxState 由 Tauri NSIS 模板维护（确认页离开时写入），
+; 1 表示已勾选；$UpdateMode 为 1 表示升级安装，升级时绝不删数据。
+; 与模板对 $LOCALAPPDATA\${BUNDLEID} 的处理保持一致。
 ; ============================================
 !macro NSIS_HOOK_PREUNINSTALL
   DetailPrint "=== NSIS_HOOK_PREUNINSTALL ==="
   DetailPrint "Install directory: $INSTDIR"
-  
+  DetailPrint "DeleteAppDataCheckboxState: $DeleteAppDataCheckboxState, UpdateMode: $UpdateMode"
+
+  ; 未勾选「删除应用数据」或处于升级模式时，保留 .taghive 目录
+  ${If} $DeleteAppDataCheckboxState <> 1
+    DetailPrint "User chose to keep app data, skip removing .taghive"
+    Goto done
+  ${EndIf}
+  ${If} $UpdateMode = 1
+    DetailPrint "Update mode, skip removing .taghive"
+    Goto done
+  ${EndIf}
+
   ; 检查 .taghive 目录是否存在
   IfFileExists "$INSTDIR\.taghive\*.*" 0 check_empty_dir
     DetailPrint ".taghive directory exists with content"
     Goto do_remove
-  
+
   check_empty_dir:
   IfFileExists "$INSTDIR\.taghive" 0 no_taghive
     DetailPrint ".taghive directory exists (may be empty)"
     Goto do_remove
-  
+
   do_remove:
     DetailPrint "Removing .taghive directory..."
     ; 递归删除整个目录（包括所有子目录和文件）
