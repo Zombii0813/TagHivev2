@@ -108,6 +108,82 @@
       </div>
     </template>
 
+    <!-- 文件夹树窗模式 - 全局视图（多工作区） -->
+    <template v-else-if="fileStore.browseMode === 'tree' && appStore.isGlobalView">
+      <div class="tree-view-container">
+        <FolderTreePanel
+          :workspaces="appStore.workspaces"
+          :boundary="scrollerRef"
+          @select="handleFolderSelect"
+        />
+        <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
+          <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
+          <FileScrollerArea
+            :view-mode="fileStore.viewMode"
+            :files="fileStore.files"
+            :grid-rows="gridRows"
+            :grid-item-height="gridItemHeight"
+            :grid-item-width="gridItemWidth"
+            :grid-row-style="gridRowStyle"
+            :grid-cell-style="gridCellStyle"
+            :selected-ids="fileStore.selectedIds"
+            :multi-select-mode="multiSelectMode"
+            :active-drop-file-id="activeDropFileId"
+            :drag-tag-meta="dragTagMeta"
+            @file-click="handleFileClick"
+            @file-dblclick="handleFileDblClick"
+            @file-contextmenu="handleFileContextMenu"
+            @file-drag-over="handleFileDragOver"
+            @file-drag-leave="handleFileDragLeave"
+            @file-drop="handleFileDrop"
+            @checkbox-click="handleCheckboxClick"
+          />
+          <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 文件夹树窗模式（仅单工作区时有效） -->
+    <template v-else-if="fileStore.browseMode === 'tree' && appStore.currentWorkspace">
+      <div class="tree-view-container">
+        <FolderTreePanel
+          :root-path="appStore.currentWorkspace"
+          :boundary="scrollerRef"
+          @select="handleFolderSelect"
+        />
+        <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
+          <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
+          <FileScrollerArea
+            :view-mode="fileStore.viewMode"
+            :files="fileStore.files"
+            :grid-rows="gridRows"
+            :grid-item-height="gridItemHeight"
+            :grid-item-width="gridItemWidth"
+            :grid-row-style="gridRowStyle"
+            :grid-cell-style="gridCellStyle"
+            :selected-ids="fileStore.selectedIds"
+            :multi-select-mode="multiSelectMode"
+            :active-drop-file-id="activeDropFileId"
+            :drag-tag-meta="dragTagMeta"
+            @file-click="handleFileClick"
+            @file-dblclick="handleFileDblClick"
+            @file-contextmenu="handleFileContextMenu"
+            @file-drag-over="handleFileDragOver"
+            @file-drag-leave="handleFileDragLeave"
+            @file-drop="handleFileDrop"
+            @checkbox-click="handleCheckboxClick"
+          />
+          <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- 文件列表（all 模式） -->
     <template v-else>
       <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
@@ -459,6 +535,7 @@ import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import FileScrollerArea from '../components/FileScrollerArea.vue'
 import HoneycombTree from '../components/HoneycombTree.vue'
+import FolderTreePanel from '../components/FolderTreePanel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import type { FileSummary, FolderNode } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
@@ -529,7 +606,7 @@ const fileOpCreatingFolder = ref(false)
 const fileOpTreeRef = ref<InstanceType<typeof ElTree> | null>(null)
 
 const currentImportDirectory = computed(() => {
-  if (fileStore.browseMode === 'folder') {
+  if (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') {
     return fileStore.currentFolderPath || appStore.currentWorkspace
   }
   return appStore.currentWorkspace
@@ -920,7 +997,15 @@ onMounted(() => {
   }
   
   if (appStore.currentWorkspace) {
-    fileStore.search({ root: appStore.currentWorkspace })
+    if (fileStore.browseMode === 'tree') {
+      // 树窗模式：FolderTreePanel 不自动 emit，初始挂载时按记忆层级加载文件列表
+      const ws = appStore.currentWorkspace
+      const remembered = fileStore.getRememberedFolder(ws)
+      const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
+      fileStore.loadFolderContents(target)
+    } else {
+      fileStore.search({ root: appStore.currentWorkspace })
+    }
     // 当前工作区不可达（如外部移动硬盘未连接）时提示用户，
     // 仍展示数据库中的缓存数据，避免误以为数据丢失。
     if (appStore.unavailableWorkspaces.has(appStore.currentWorkspace)) {
@@ -967,6 +1052,11 @@ watch(() => appStore.currentWorkspace, (newPath) => {
     if (fileStore.browseMode === 'folder') {
       // 文件夹浏览模式：由 HoneycombTree 加载完目录树后 emit 记忆层级，
       // 经 handleFolderSelect 恢复文件列表，这里不重复加载，避免闪烁与竞争。
+    } else if (fileStore.browseMode === 'tree') {
+      // 树窗模式：FolderTreePanel 不自动 emit，这里恢复该工作区上次浏览的层级
+      const remembered = fileStore.getRememberedFolder(newPath)
+      const target = remembered && findOwnerWorkspace(remembered) === newPath ? remembered : newPath
+      fileStore.loadFolderContents(target)
     } else {
       // 全部文件模式：搜索所有文件
       fileStore.search({ root: newPath })
@@ -978,8 +1068,8 @@ watch(() => appStore.currentWorkspace, (newPath) => {
 watch(() => fileStore.browseMode, async (newMode) => {
   if (!appStore.currentWorkspace) return
   
-  if (newMode === 'folder') {
-    // 切换到文件夹浏览模式：恢复该工作区上次浏览的层级
+  if (newMode === 'folder' || newMode === 'tree') {
+    // 切换到文件夹浏览/树窗模式：恢复该工作区上次浏览的层级
     const ws = appStore.currentWorkspace
     const remembered = fileStore.getRememberedFolder(ws)
     const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
@@ -1032,7 +1122,7 @@ async function selectWorkspace() {
       const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
         ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
         // 扫描完成后刷新文件列表：保持当前浏览模式
-        if (fileStore.browseMode === 'folder') {
+        if (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') {
           const targetPath = fileStore.currentFolderPath || path
           fileStore.loadFolderContents(targetPath)
         } else {
@@ -1443,7 +1533,7 @@ async function refreshFileList() {
     })
     return
   }
-  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
+  if ((fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') && fileStore.currentFolderPath) {
     await fileStore.loadFolderContents(fileStore.currentFolderPath)
   } else {
     await fileStore.search({ root: appStore.currentWorkspace || undefined })

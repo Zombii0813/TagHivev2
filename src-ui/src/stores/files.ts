@@ -7,7 +7,7 @@ import { folderApi } from '../api/folders'
 // 视图偏好持久化（全局，不按工作区隔离）
 const VIEW_PREF_KEY = 'taghive:view-prefs'
 type ViewMode = 'grid' | 'list'
-type BrowseMode = 'folder' | 'all'
+type BrowseMode = 'folder' | 'all' | 'tree'
 interface ViewPrefs {
   viewMode: ViewMode
   browseMode: BrowseMode
@@ -29,7 +29,9 @@ function loadViewPrefs(): ViewPrefs {
     const parsed = JSON.parse(raw) as Partial<ViewPrefs>
     return {
       viewMode: parsed.viewMode === 'list' ? 'list' : 'grid',
-      browseMode: parsed.browseMode === 'folder' ? 'folder' : 'all',
+      browseMode: parsed.browseMode === 'folder' || parsed.browseMode === 'tree'
+        ? parsed.browseMode
+        : 'all',
       gridItemSize: typeof parsed.gridItemSize === 'number'
         ? Math.max(80, Math.min(320, parsed.gridItemSize))
         : VIEW_PREF_DEFAULTS.gridItemSize,
@@ -278,7 +280,10 @@ export const useFileStore = defineStore('files', () => {
   }
 
   function toggleBrowseMode() {
-    browseMode.value = browseMode.value === 'folder' ? 'all' : 'folder'
+    // 三态循环：全部文件 → 蜂巢导航 → 文件夹树窗 → 全部文件
+    const order: BrowseMode[] = ['all', 'folder', 'tree']
+    const i = order.indexOf(browseMode.value)
+    browseMode.value = order[(i + 1) % order.length]
   }
 
   function setBrowseMode(mode: BrowseMode) {

@@ -147,13 +147,13 @@
             </template>
           </el-dropdown>
 
-          <!-- 文件夹浏览模式切换 -->
+          <!-- 浏览模式切换：全部 → 蜂巢 → 树窗 循环 -->
           <el-button
-            :class="['browse-mode-btn', { active: fileStore.browseMode === 'folder' }]"
-            :icon="Folder"
+            :class="['browse-mode-btn', { active: fileStore.browseMode !== 'all' }]"
+            :icon="browseModeIcon"
             circle
             @click="toggleBrowseMode"
-            :title="fileStore.browseMode === 'folder' ? '切换到全部文件模式' : '切换到文件夹浏览模式'"
+            :title="browseModeTitle"
           />
 
           <!-- 视图模式切换 -->
@@ -328,6 +328,7 @@ import {
   Loading,
   Refresh,
   Folder,
+  Files,
   ScaleToOriginal,
   MoreFilled,
   Plus,
@@ -599,12 +600,12 @@ function refreshForWorkspace() {
   const root = appStore.currentWorkspace || undefined
   tagStore.loadTags(root)
   tagStore.clearSelection()
-  if (fileStore.browseMode === 'folder' && !root && !appStore.isGlobalView) {
+  if (fileStore.browseMode !== 'all' && !root && !appStore.isGlobalView) {
     fileStore.setBrowseMode('all')
   }
-  // 文件夹浏览模式下，文件列表由 HoneycombTree 加载目录树后按记忆层级恢复，
+  // 文件夹浏览/树窗模式下，文件列表由导航组件或工作区监听按记忆层级恢复，
   // 此处不再 search 覆盖，避免回到根目录或与目录加载竞争。
-  if (fileStore.browseMode === 'folder' && root) return
+  if (fileStore.browseMode !== 'all' && root) return
   fileStore.search({ root })
 }
 
@@ -635,8 +636,8 @@ onMounted(() => {
       ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
       // 刷新文件列表：保持当前浏览模式
       const root = appStore.currentWorkspace || undefined
-      if (fileStore.browseMode === 'folder' && root) {
-        // 文件夹浏览模式：重新加载当前所在目录（若无则回到工作区根目录）
+      if (fileStore.browseMode !== 'all' && root) {
+        // 文件夹浏览/树窗模式：重新加载当前所在目录（若无则回到工作区根目录）
         const targetPath = fileStore.currentFolderPath || root
         fileStore.loadFolderContents(targetPath)
       } else {
@@ -681,14 +682,24 @@ const truncateFileName = (path: string, maxLength: number = 30): string => {
   return fileName.substring(0, maxLength - 3) + '...'
 }
 
-// 切换浏览模式
+// 切换浏览模式：全部 → 蜂巢 → 树窗 循环（循环逻辑在 store）
 const toggleBrowseMode = () => {
-  if (fileStore.browseMode === 'folder') {
-    fileStore.setBrowseMode('all')
-  } else {
-    fileStore.setBrowseMode('folder')
-  }
+  fileStore.toggleBrowseMode()
 }
+
+// 浏览模式按钮图标：蜂巢/树窗用文件夹相关图标，区分两种导航形态
+const browseModeIcon = computed(() => {
+  return fileStore.browseMode === 'tree' ? Files : Folder
+})
+
+// 浏览模式按钮提示：指向「下一个」将要切换到的模式
+const browseModeTitle = computed(() => {
+  switch (fileStore.browseMode) {
+    case 'all': return '切换到蜂巢导航'
+    case 'folder': return '切换到文件夹树窗'
+    default: return '切换到全部文件'
+  }
+})
 
 // 折叠状态下点击标签图标：切换选中并触发搜索
 function handleCollapsedTagClick(tagId: number) {
