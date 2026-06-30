@@ -102,7 +102,11 @@ socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
 def main():
     """主入口函数"""
     import uvicorn
-    
+
+    # 启动父进程监控：宿主（Tauri 主进程）异常退出时自我终止，避免孤儿残留
+    from app.utils.parent_watch import start_parent_watchdog
+    start_parent_watchdog()
+
     port = int(os.environ.get("TAGHIVE_PORT", 8721))
     host = os.environ.get("TAGHIVE_HOST", "127.0.0.1")
     

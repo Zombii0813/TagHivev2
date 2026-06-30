@@ -124,6 +124,9 @@ impl PythonSidecar {
         std_cmd.current_dir(&working_dir)
             .env("TAGHIVE_PORT", port.to_string())
             .env("TAGHIVE_HOST", "127.0.0.1")
+            // 传入主进程 PID，供 sidecar 监控父进程存活；父进程异常退出时
+            // sidecar 自我终止，避免孤儿进程锁定安装目录文件
+            .env("TAGHIVE_PARENT_PID", std::process::id().to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         
