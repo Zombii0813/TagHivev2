@@ -60,7 +60,16 @@ class ScanService:
         logger.info(f"[Scan][DEBUG] Root is_dir: {root_path.is_dir()}")
         
         logger.info(f"[Scan] Starting ultra-fast scan of: {root_path}")
-        
+
+        # 守卫：根目录不可达（如外部移动硬盘已拔出、网络盘断连）时立即中止。
+        # 此时绝不能继续往下执行清理逻辑，否则会把该工作区在数据库中的
+        # 全部文件记录误判为「已删除」而清空，造成数据丢失。
+        if not root_path.exists() or not root_path.is_dir():
+            logger.warning(
+                f"[Scan] Root path unavailable, abort scan to protect data: {root_path}"
+            )
+            return 0
+
         # 阶段 1: 快速预扫描获取总数
         scanner = UltraFastFileScanner(max_workers=min(16, os.cpu_count() or 4))
         estimated_total = scanner.quick_count(root_path)
@@ -134,16 +143,27 @@ class ScanService:
         return path_to_id
 
     def _cleanup_stale_files(self, repo: Repo, root_path: Path, paths_seen: Set[str]) -> None:
-        """清理数据库中已不存在的文件记录"""
+        """清理数据库中已不存在的文件记录
+
+        双保险：仅当根目录确实可访问时才执行清理。若根目录不可达
+        （移动硬盘拔出等），paths_seen 必然为空，此时清理会误删整个
+        工作区的数据，因此直接跳过。
+        """
+        if not root_path.exists() or not root_path.is_dir():
+            logger.warning(
+                f"[Scan] Skip cleanup: root path unavailable: {root_path}"
+            )
+            return
+
         stale_ids = []
-        
+
         for file_id, path in repo.list_file_paths():
             posix_path = Path(path).as_posix()
             if not self._is_under_root(posix_path, root_path):
                 continue
             if posix_path not in paths_seen:
                 stale_ids.append(int(file_id))
-        
+
         if stale_ids:
             logger.info(f"[Scan] Deleting {len(stale_ids)} stale files")
             repo.delete_files(stale_ids)
@@ -303,7 +323,14 @@ class OptimizedScanService:
         repo = Repo(self.session)
         root_path = root.resolve()
         logger.info(f"[OptimizedScan] Starting optimized scan of: {root_path}")
-        
+
+        # 守卫：根目录不可达时立即中止，避免后续增量/全量逻辑误删数据
+        if not root_path.exists() or not root_path.is_dir():
+            logger.warning(
+                f"[OptimizedScan] Root path unavailable, abort scan to protect data: {root_path}"
+            )
+            return 0
+
         # 阶段 1: 智能扫描检测变更
         if self.use_incremental and not force_full:
             changes, is_full = self.smart_scanner.scan(

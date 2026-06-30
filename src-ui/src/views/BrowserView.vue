@@ -921,6 +921,11 @@ onMounted(() => {
   
   if (appStore.currentWorkspace) {
     fileStore.search({ root: appStore.currentWorkspace })
+    // 当前工作区不可达（如外部移动硬盘未连接）时提示用户，
+    // 仍展示数据库中的缓存数据，避免误以为数据丢失。
+    if (appStore.unavailableWorkspaces.has(appStore.currentWorkspace)) {
+      ElMessage.warning('当前工作区暂时不可访问（如移动硬盘未连接），显示的是已缓存数据，重新连接后扫描即可同步')
+    }
   }
 })
 
@@ -960,8 +965,8 @@ onUnmounted(() => {
 watch(() => appStore.currentWorkspace, (newPath) => {
   if (newPath) {
     if (fileStore.browseMode === 'folder') {
-      // 文件夹浏览模式：加载根目录内容
-      fileStore.loadFolderContents(newPath)
+      // 文件夹浏览模式：由 HoneycombTree 加载完目录树后 emit 记忆层级，
+      // 经 handleFolderSelect 恢复文件列表，这里不重复加载，避免闪烁与竞争。
     } else {
       // 全部文件模式：搜索所有文件
       fileStore.search({ root: newPath })
@@ -974,8 +979,11 @@ watch(() => fileStore.browseMode, async (newMode) => {
   if (!appStore.currentWorkspace) return
   
   if (newMode === 'folder') {
-    // 切换到文件夹浏览模式：加载根目录内容
-    await fileStore.loadFolderContents(appStore.currentWorkspace)
+    // 切换到文件夹浏览模式：恢复该工作区上次浏览的层级
+    const ws = appStore.currentWorkspace
+    const remembered = fileStore.getRememberedFolder(ws)
+    const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
+    await fileStore.loadFolderContents(target)
   } else {
     // 切换到全部文件模式：搜索所有文件
     await fileStore.search({ root: appStore.currentWorkspace })
@@ -1197,9 +1205,26 @@ async function handleFolderSelect(folderPath: string, _wsPath?: string) {
       break
     }
   }
+  // 记住该工作区当前浏览到的层级，供切换工作区后恢复
+  const ownerWs = _wsPath || findOwnerWorkspace(folderPath)
+  if (ownerWs) fileStore.rememberFolder(ownerWs, folderPath)
   // 切换目录时清除标签过滤，避免状态不一致
   tagStore.clearSelection()
   await fileStore.loadFolderContents(folderPath)
+}
+
+// 根据文件夹路径反查所属工作区根
+function findOwnerWorkspace(folderPath: string): string | undefined {
+  const target = folderPath.replace(/\\/g, '/')
+  // 取最长匹配前缀，避免嵌套工作区误判
+  let best: string | undefined
+  for (const ws of appStore.workspaces) {
+    const normalized = ws.replace(/\\/g, '/')
+    if (target === normalized || target.startsWith(normalized + '/')) {
+      if (!best || normalized.length > best.replace(/\\/g, '/').length) best = ws
+    }
+  }
+  return best
 }
 
 function handleSwitchWorkspaceFromTree(wsPath: string) {

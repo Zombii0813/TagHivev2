@@ -591,6 +591,7 @@ function handleSetGlobalView() {
 
 async function handleRemoveWorkspace(ws: string) {
   appStore.removeWorkspace(ws)
+  fileStore.forgetWorkspaceFolder(ws)
   refreshForWorkspace()
 }
 
@@ -601,6 +602,9 @@ function refreshForWorkspace() {
   if (fileStore.browseMode === 'folder' && !root && !appStore.isGlobalView) {
     fileStore.setBrowseMode('all')
   }
+  // 文件夹浏览模式下，文件列表由 HoneycombTree 加载目录树后按记忆层级恢复，
+  // 此处不再 search 覆盖，避免回到根目录或与目录加载竞争。
+  if (fileStore.browseMode === 'folder' && root) return
   fileStore.search({ root })
 }
 

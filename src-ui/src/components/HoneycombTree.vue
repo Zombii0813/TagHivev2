@@ -184,6 +184,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
 import { useAppStore } from '../stores/app'
+import { useFileStore } from '../stores/files'
 import type { FolderNode } from '../types'
 
 // ─── Props & Emits ────────────────────────────────────────────
@@ -200,6 +201,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const fileStore = useFileStore()
 
 // ─── 几何 ─────────────────────────────────────────────────────
 const R    = 45          // 六边形外接圆半径（+25%，原36）
@@ -716,6 +718,26 @@ function searchKids(nodes:FolderNode[]|undefined, path:string): FolderNode|null 
   return null
 }
 
+// 构建从工作区根到目标路径的节点链（含根与目标），用于恢复 navStack。
+// 找不到完整链时返回 null。
+function buildPathChain(root: FolderNode, targetPath: string): FolderNode[] | null {
+  const norm = (p: string) => p.replace(/\\/g, '/')
+  const target = norm(targetPath)
+  if (norm(root.path) === target) return [root]
+
+  const chain: FolderNode[] = []
+  function dfs(node: FolderNode): boolean {
+    chain.push(node)
+    if (norm(node.path) === target) return true
+    for (const child of node.children ?? []) {
+      if (dfs(child)) return true
+    }
+    chain.pop()
+    return false
+  }
+  return dfs(root) ? chain : null
+}
+
 // ─── 数据 ─────────────────────────────────────────────────────
 async function loadWs(ws:string) {
   try {
@@ -740,9 +762,19 @@ async function loadAll() {
     const ws = list[0]
     const root = wsTreeMap.value.get(ws)
     if (root) {
-      navStack.value = [{ node:root, wsPath:ws }]
-      selectedPath.value = root.path
-      emit('select', root.path, ws)
+      // 优先恢复该工作区上次浏览到的层级；没有记忆或路径已失效则停在根目录
+      const remembered = fileStore.getRememberedFolder(ws)
+      const chain = remembered ? buildPathChain(root, remembered) : null
+      if (chain && chain.length > 0) {
+        navStack.value = chain.map(node => ({ node, wsPath: ws }))
+        const leaf = chain[chain.length - 1]
+        selectedPath.value = leaf.path
+        emit('select', leaf.path, ws)
+      } else {
+        navStack.value = [{ node:root, wsPath:ws }]
+        selectedPath.value = root.path
+        emit('select', root.path, ws)
+      }
     }
   }
   loading.value = false
@@ -826,6 +858,7 @@ async function confirmDelete() {
     if (isRoot) {
       // 删除工作区：从 store 移除，重置本地状态
       appStore.removeWorkspace(ws)
+      fileStore.forgetWorkspaceFolder(ws)
       wsTreeMap.value = new Map([...wsTreeMap.value].filter(([k]) => k !== ws))
       navStack.value = navStack.value.filter(e => e.wsPath !== ws)
       emit('workspace-removed', ws)

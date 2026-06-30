@@ -23,6 +23,9 @@ export const useAppStore = defineStore('app', () => {
   const workspaces = ref<string[]>([])
   const activeWorkspace = ref<string | null>(null)
   const isGlobalView = ref(false)
+  // 当前不可达的工作区路径（如外部移动硬盘已拔出）。
+  // 仅用于 UI 提示，绝不据此删除工作区或其数据。
+  const unavailableWorkspaces = ref<Set<string>>(new Set())
 
   // Getters
   const isDark = computed(() => theme.value === 'dark')
@@ -131,25 +134,24 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
-    // 过滤掉磁盘上已不存在的工作区路径，避免后续操作报错
+    // 检测各工作区当前是否可访问。
+    // 注意：不可达（如移动硬盘拔出）时只做标记，绝不从列表删除，
+    // 否则重启后工作区连同其标签/文件数据会一并丢失。
     if (workspaces.value.length > 0) {
       const checks = await Promise.all(
         workspaces.value.map(async (p) => {
           try {
             return { path: p, ok: await invoke<boolean>('path_exists', { path: p }) }
           } catch {
-            // 校验失败时保守保留路径，避免误删
+            // 校验失败时保守视为可用，避免误标记
             return { path: p, ok: true }
           }
         })
       )
-      const valid = checks.filter(c => c.ok).map(c => c.path)
-      const removed = checks.filter(c => !c.ok).map(c => c.path)
-      if (removed.length > 0) {
-        console.warn('[app] Pruned missing workspaces:', removed)
-        workspaces.value = valid
-        // 立即持久化清理后的列表
-        localStorage.setItem('taghive-workspaces', JSON.stringify(workspaces.value))
+      const offline = checks.filter(c => !c.ok).map(c => c.path)
+      unavailableWorkspaces.value = new Set(offline)
+      if (offline.length > 0) {
+        console.warn('[app] Workspaces currently unavailable (kept):', offline)
       }
     }
 
@@ -213,6 +215,7 @@ export const useAppStore = defineStore('app', () => {
     workspaces,
     activeWorkspace,
     isGlobalView,
+    unavailableWorkspaces,
     currentWorkspace,
     isDark,
     setTheme,

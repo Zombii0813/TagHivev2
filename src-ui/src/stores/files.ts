@@ -81,6 +81,27 @@ export const useFileStore = defineStore('files', () => {
   // 文件夹浏览模式状态
   const currentFolderPath = ref<string>('')
   const folderContentsOffset = ref(0)
+
+  // 每个工作区最后浏览到的文件夹路径（会话内记忆）。
+  // 用于切换工作区时恢复到上次浏览的层级，而非每次都回到根目录。
+  const folderMemory = ref<Map<string, string>>(new Map())
+
+  // 记住某工作区当前浏览的文件夹路径
+  function rememberFolder(workspace: string, folderPath: string) {
+    if (workspace && folderPath) {
+      folderMemory.value.set(workspace, folderPath)
+    }
+  }
+
+  // 读取某工作区记忆的浏览路径
+  function getRememberedFolder(workspace: string): string | undefined {
+    return folderMemory.value.get(workspace)
+  }
+
+  // 清除某工作区的浏览记忆（工作区被移除时调用）
+  function forgetWorkspaceFolder(workspace: string) {
+    folderMemory.value.delete(workspace)
+  }
   
   // 加载文件夹内容
   async function loadFolderContents(folderPath: string, append: boolean = false) {
@@ -398,6 +419,9 @@ export const useFileStore = defineStore('files', () => {
     loadMore,
     loadFolderContents,
     loadMoreFolderContents,
+    rememberFolder,
+    getRememberedFolder,
+    forgetWorkspaceFolder,
     selectFile,
     selectRange,
     selectAll,
