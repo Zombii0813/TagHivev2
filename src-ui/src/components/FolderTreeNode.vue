@@ -8,6 +8,7 @@
         'drop-active': isDropActive
       }"
       :style="{ paddingLeft: `${level * 16 + 8}px` }"
+      :data-folder-path="folder.path"
       draggable="true"
       @click="handleClick"
       @contextmenu.prevent="handleContextMenu($event)"
@@ -85,9 +86,24 @@ const isExpanded = ref(false)
 // 拖拽悬停高亮
 const isDropActive = ref(false)
 
+// 判断 selectedPath 是否位于本节点之下（用于自动展开父链）
+function isAncestorOfSelected(sel: string): boolean {
+  if (!sel) return false
+  const self = props.folder.path.replace(/\\/g, '/')
+  const target = sel.replace(/\\/g, '/')
+  return target !== self && target.startsWith(self + '/')
+}
+
 // 监听 folder.is_expanded 初始值
 watch(() => props.folder.is_expanded, (val) => {
   isExpanded.value = val
+}, { immediate: true })
+
+// 当选中路径落在本节点子孙中时，自动展开以暴露当前层级
+watch(() => props.selectedPath, (sel) => {
+  if (isAncestorOfSelected(sel)) {
+    isExpanded.value = true
+  }
 }, { immediate: true })
 
 function toggleExpand() {

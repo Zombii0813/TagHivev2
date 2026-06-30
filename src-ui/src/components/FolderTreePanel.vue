@@ -34,7 +34,7 @@
         </div>
 
         <!-- 树滚动区 -->
-        <div class="ft-body">
+        <div ref="bodyRef" class="ft-body">
           <div v-if="loading" class="ft-state">
             <el-icon class="ft-loading"><Loading /></el-icon>
             <span>加载中...</span>
@@ -138,9 +138,12 @@ import { ElMessage } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
+import { useFileStore } from '../stores/files'
 import type { FolderNode } from '../types'
 import FolderTreeNode from './FolderTreeNode.vue'
 import { hasItemDrag, getItemDrag } from '../utils/dragItems'
+
+const fileStore = useFileStore()
 
 // ─── Props & Emits ────────────────────────────────────────────
 const props = defineProps<{
@@ -161,6 +164,7 @@ const PANEL_H = 360   // 展开面板高度，用于边界夹紧
 const ICON_SZ = 44    // 折叠图标尺寸
 
 const floatRef = ref<HTMLElement>()
+const bodyRef = ref<HTMLElement>()
 const isExpanded = ref(false)
 const isDragging = ref(false)
 const posX = ref(-9999)
@@ -230,6 +234,36 @@ function onSelect(path: string, wsPath: string) {
   emit('select', path, wsPath)
 }
 
+// 高亮并将当前浏览目录滚动到树窗可视区中心
+async function highlightCurrentFolder() {
+  const cur = fileStore.currentFolderPath
+  if (!cur) return
+  selectedPath.value = cur
+  // 等待父链自动展开（FolderTreeNode 监听 selectedPath）后再滚动定位
+  await nextTick()
+  await nextTick()
+  const body = bodyRef.value
+  if (!body) return
+  const norm = cur.replace(/\\/g, '/')
+  // 根节点没有 data-folder-path，单独处理：滚到顶部
+  const target = body.querySelector<HTMLElement>(`[data-folder-path="${cssEscape(norm)}"]`)
+    || body.querySelector<HTMLElement>(`[data-folder-path="${cssEscape(cur)}"]`)
+  if (target) {
+    // 以条目为中心滚动
+    const offset = target.offsetTop - body.clientHeight / 2 + target.clientHeight / 2
+    body.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' })
+  } else {
+    // 命中工作区根或未找到：回到顶部
+    body.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+}
+
+// 转义属性选择器中的特殊字符（路径含空格、括号等）
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(value)
+  return value.replace(/["\\]/g, '\\$&')
+}
+
 // ─── 拖拽 ─────────────────────────────────────────────────────
 function clampToBoundary(x: number, y: number) {
   const el = props.boundary
@@ -281,6 +315,8 @@ function onIconClick() {
     posX.value = x
     posY.value = y
   })
+  // 展开后把当前层级滚动到中心
+  highlightCurrentFolder()
 }
 
 function onHeaderClick() {
@@ -409,9 +445,11 @@ onMounted(async () => {
   await nextTick()
   initPosition()
   await loadAll()
+  await highlightCurrentFolder()
   // 目录树变更（移动/复制/新建目录等）后实时刷新
   unsubFolderChanged = wsClient.on<{ workspace: string }>('folder_tree_changed', async () => {
     await loadAll()
+    await highlightCurrentFolder()
   })
 })
 
@@ -421,9 +459,17 @@ onUnmounted(() => {
 })
 
 // 工作区/根路径变化时重载，并在边界就绪后初始化位置
-watch(() => [props.rootPath, ...(props.workspaces ?? [])], () => loadAll())
+watch(() => [props.rootPath, ...(props.workspaces ?? [])], async () => {
+  await loadAll()
+  await highlightCurrentFolder()
+})
 watch(() => props.boundary, async (el) => {
   if (el && !posInitialized.value) { await nextTick(); initPosition() }
+})
+
+// 当前浏览目录变化时（含切换工作区后恢复层级）同步高亮并居中
+watch(() => fileStore.currentFolderPath, () => {
+  highlightCurrentFolder()
 })
 </script>
 
