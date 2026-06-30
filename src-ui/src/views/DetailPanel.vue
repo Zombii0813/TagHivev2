@@ -162,7 +162,7 @@ function onVideoLoaded(event: Event) {
 }
 
 const selectedFile = computed(() => {
-  return fileStore.selectedFiles[0]
+  return fileStore.activeFile
 })
 
 const previewUrl = computed(() => {

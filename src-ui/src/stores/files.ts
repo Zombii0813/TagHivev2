@@ -48,6 +48,8 @@ export const useFileStore = defineStore('files', () => {
   // State
   const files = ref<FileSummary[]>([])
   const selectedIds = ref<Set<number>>(new Set())
+  // 当前活动文件 id（最后点击的文件），用于右侧详情栏展示
+  const activeId = ref<number | null>(null)
   const searchQuery = ref<SearchQuery>({})
   const totalCount = ref(0)
   const hasMore = ref(false)
@@ -134,6 +136,15 @@ export const useFileStore = defineStore('files', () => {
     return files.value.filter(f => selectedIds.value.has(f.id))
   })
 
+  // 当前活动文件（最后点击的文件）；不存在时回退到首个选中项
+  const activeFile = computed(() => {
+    if (activeId.value !== null) {
+      const f = files.value.find(file => file.id === activeId.value)
+      if (f) return f
+    }
+    return selectedFiles.value[0]
+  })
+
   const selectedCount = computed(() => selectedIds.value.size)
 
   const hasSelection = computed(() => selectedIds.value.size > 0)
@@ -192,28 +203,36 @@ export const useFileStore = defineStore('files', () => {
     if (multi) {
       if (selectedIds.value.has(id)) {
         selectedIds.value.delete(id)
+        // 取消选中活动文件时，活动文件回退到其余选中项的首个
+        if (activeId.value === id) {
+          activeId.value = selectedFiles.value[0]?.id ?? null
+        }
       } else {
         selectedIds.value.add(id)
+        activeId.value = id
       }
     } else {
       selectedIds.value.clear()
       selectedIds.value.add(id)
+      activeId.value = id
     }
   }
 
   function selectRange(startId: number, endId: number) {
     const startIndex = files.value.findIndex(f => f.id === startId)
     const endIndex = files.value.findIndex(f => f.id === endId)
-    
+
     if (startIndex === -1 || endIndex === -1) return
-    
-    const [min, max] = startIndex < endIndex 
-      ? [startIndex, endIndex] 
+
+    const [min, max] = startIndex < endIndex
+      ? [startIndex, endIndex]
       : [endIndex, startIndex]
-    
+
     for (let i = min; i <= max; i++) {
       selectedIds.value.add(files.value[i].id)
     }
+    // 活动文件更新为范围终点
+    activeId.value = endId
   }
 
   function selectAll() {
@@ -222,6 +241,7 @@ export const useFileStore = defineStore('files', () => {
 
   function clearSelection() {
     selectedIds.value.clear()
+    activeId.value = null
   }
 
   function toggleViewMode() {
@@ -305,6 +325,9 @@ export const useFileStore = defineStore('files', () => {
     if (index !== -1) {
       files.value.splice(index, 1)
       selectedIds.value.delete(fileId)
+      if (activeId.value === fileId) {
+        activeId.value = selectedFiles.value[0]?.id ?? null
+      }
       totalCount.value--
     }
   }
@@ -350,6 +373,7 @@ export const useFileStore = defineStore('files', () => {
   return {
     files,
     selectedIds,
+    activeId,
     searchQuery,
     totalCount,
     hasMore,
@@ -361,6 +385,7 @@ export const useFileStore = defineStore('files', () => {
     sortDesc,
     currentFolderPath,
     selectedFiles,
+    activeFile,
     selectedCount,
     hasSelection,
     isAllSelected,
