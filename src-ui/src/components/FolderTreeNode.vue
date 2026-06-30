@@ -4,11 +4,18 @@
       class="tree-node"
       :class="{
         selected: selectedPath === folder.path,
-        expanded: isExpanded
+        expanded: isExpanded,
+        'drop-active': isDropActive
       }"
       :style="{ paddingLeft: `${level * 16 + 8}px` }"
+      draggable="true"
       @click="handleClick"
       @contextmenu.prevent="handleContextMenu($event)"
+      @dragstart="handleDragStart"
+      @dragend="handleDragEnd"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop="handleDrop"
     >
       <!-- 展开/收起图标 -->
       <span 
@@ -44,7 +51,8 @@
         :selected-path="selectedPath"
         :level="level + 1"
         @select="$emit('select', $event)"
-          @contextmenu="$emit('contextmenu', $event)"
+        @contextmenu="$emit('contextmenu', $event)"
+        @item-drop="$emit('item-drop', $event)"
       />
     </div>
   </div>
@@ -54,6 +62,12 @@
 import { ref, watch } from 'vue'
 import { Folder, FolderOpened, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
 import type { FolderNode } from '../types'
+import {
+  setItemDragData,
+  clearItemDragState,
+  hasItemDrag,
+  getItemDrag,
+} from '../utils/dragItems'
 
 const props = defineProps<{
   folder: FolderNode
@@ -64,9 +78,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [path: string]
   contextmenu: [payload: { folder: FolderNode; event: MouseEvent }]
+  'item-drop': [payload: { targetPath: string; copy: boolean }]
 }>()
 
 const isExpanded = ref(false)
+// 拖拽悬停高亮
+const isDropActive = ref(false)
 
 // 监听 folder.is_expanded 初始值
 watch(() => props.folder.is_expanded, (val) => {
@@ -85,6 +102,44 @@ function handleClick() {
 
 function handleContextMenu(event: MouseEvent) {
   emit('contextmenu', { folder: props.folder, event })
+}
+
+// ─── 拖拽：本节点作为「文件夹」拖拽源 ──────────────────────────
+function handleDragStart(event: DragEvent) {
+  setItemDragData(event, {
+    kind: 'folder',
+    folderPath: props.folder.path,
+    label: props.folder.name,
+  })
+}
+
+function handleDragEnd() {
+  clearItemDragState()
+}
+
+// ─── 拖拽：本节点作为放置目标 ─────────────────────────────────
+function handleDragOver(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  const drag = getItemDrag()
+  // 文件夹拖到自身或自身路径上时不允许
+  if (drag?.kind === 'folder' && drag.folderPath === props.folder.path) return
+  event.preventDefault()
+  isDropActive.value = true
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+function handleDragLeave() {
+  isDropActive.value = false
+}
+
+function handleDrop(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  event.stopPropagation()
+  isDropActive.value = false
+  emit('item-drop', { targetPath: props.folder.path, copy: event.ctrlKey || event.metaKey })
 }
 </script>
 
@@ -112,6 +167,12 @@ function handleContextMenu(event: MouseEvent) {
 .tree-node.selected {
   background-color: var(--color-accent-light);
   color: var(--color-accent);
+}
+
+.tree-node.drop-active {
+  background-color: var(--color-accent-light);
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
 }
 
 .expand-icon {

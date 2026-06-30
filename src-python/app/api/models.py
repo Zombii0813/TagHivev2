@@ -181,6 +181,31 @@ class FileBatchResultDTO(BaseModel):
     target_dir: str
 
 
+class FolderMoveRequestDTO(BaseModel):
+    """移动文件夹请求 DTO
+
+    Attributes:
+        source_path: 待移动的源文件夹绝对路径
+        target_dir: 目标父目录绝对路径（可跨工作区）；文件夹将作为其子目录移入
+        target_workspace: 目标所在的工作区根路径；跨工作区移动时用于清理不再适用的标签关联，
+            为空表示不做工作区标签清理
+    """
+    source_path: str
+    target_dir: str
+    target_workspace: Optional[str] = None
+
+
+class FolderCopyRequestDTO(BaseModel):
+    """复制文件夹请求 DTO
+
+    Attributes:
+        source_path: 待复制的源文件夹绝对路径
+        target_dir: 目标父目录绝对路径（可跨工作区）；副本将作为其子目录写入
+    """
+    source_path: str
+    target_dir: str
+
+
 # ========== 标签相关 DTO ==========
 
 class TagDTO(BaseModel):

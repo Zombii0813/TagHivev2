@@ -11,7 +11,7 @@
       :style="floatStyle"
     >
       <!-- 图标（始终可见，可拖拽）：裸六边形，无背景方框 -->
-      <div class="hc-icon" @mousedown.left.prevent="startDrag" @mouseenter="onEnter" @mouseleave="onLeave" @contextmenu.prevent.stop="handleIconCtx">
+      <div class="hc-icon" @mousedown.left.prevent="startDrag" @mouseenter="onEnter" @mouseleave="onLeave" @dragenter="onDragEnter" @dragover="onDragEnter" @contextmenu.prevent.stop="handleIconCtx">
         <svg
           :viewBox="`${-R-2} ${-R-2} ${(R+2)*2} ${(R+2)*2}`"
           :width="ICON_W + 4"
@@ -78,12 +78,16 @@
               'is-page-btn': node.type === 'prev' || node.type === 'next',
               'is-page-inactive': (node.type === 'prev' || node.type === 'next') && node.parentPath !== 'active',
               'is-selected': selectedPath === node.path,
+              'is-drop-active': dropActivePath === node.path,
             }"
             :style="{ animationDelay: `${node.ring * 60}ms` }"
             @mouseenter="startScroll"
             @mouseleave="stopScroll"
             @click.stop="handleClick(node)"
             @contextmenu.prevent.stop="handleCtx(node, $event)"
+            @dragover="onNodeDragOver(node, $event)"
+            @dragleave="onNodeDragLeave(node)"
+            @drop="onNodeDrop(node, $event)"
           >
             <!-- 毛玻璃底层（模糊背景） -->
             <polygon
@@ -158,6 +162,14 @@
         <el-icon><FolderAdd /></el-icon>
         <span>新建子目录</span>
       </div>
+      <div v-if="!isCtxNodeRoot" class="context-menu-item" @click="emitFolderOp('move')">
+        <el-icon><FolderOpened /></el-icon>
+        <span>移动到...</span>
+      </div>
+      <div v-if="!isCtxNodeRoot" class="context-menu-item" @click="emitFolderOp('copy')">
+        <el-icon><CopyDocument /></el-icon>
+        <span>复制到...</span>
+      </div>
       <div class="context-menu-item context-menu-item--danger" @click="openDeleteDlg">
         <el-icon><Delete /></el-icon>
         <span>{{ isCtxNodeRoot ? '删除工作区' : '删除目录' }}</span>
@@ -178,13 +190,14 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Loading, FolderAdd, Delete } from '@element-plus/icons-vue'
+import { Loading, FolderAdd, Delete, FolderOpened, CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
 import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
+import { hasItemDrag, getItemDrag } from '../utils/dragItems'
 import type { FolderNode } from '../types'
 
 // ─── Props & Emits ────────────────────────────────────────────
@@ -198,6 +211,8 @@ const emit = defineEmits<{
   select: [path: string, wsPath?: string]
   'workspace-removed': [wsPath: string]
   'switch-workspace': [wsPath: string]
+  'folder-op': [payload: { mode: 'move' | 'copy'; path: string; wsPath: string }]
+  'item-drop': [payload: { targetPath: string; targetWs: string; copy: boolean }]
 }>()
 
 const appStore = useAppStore()
@@ -264,6 +279,12 @@ const floatStyle = computed(() => ({
 }))
 
 function onEnter() {
+  if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+  isExpanded.value = true
+}
+// 拖拽悬停到图标上时展开蜂巢，让节点可作为放置目标
+function onDragEnter(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
   if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
   isExpanded.value = true
 }
@@ -826,6 +847,47 @@ function handleIconCtx(e: MouseEvent) {
 
 function openCreateDlg() { ctxVisible.value=false; newName.value=''; showDlg.value=true }
 
+// 触发文件夹移动/复制：交给父组件打开对话框
+function emitFolderOp(mode: 'move' | 'copy') {
+  ctxVisible.value = false
+  unlockExpanded()
+  const node = ctxNode.value
+  if (!node) return
+  emit('folder-op', { mode, path: node.path, wsPath: node.wsPath })
+}
+
+// ─── 拖拽放置：节点作为目标 ───────────────────────────────────
+const dropActivePath = ref('')
+
+function onNodeDragOver(node: HcNode, event: DragEvent) {
+  // 翻页按钮不作为放置目标
+  if (node.type === 'prev' || node.type === 'next') return
+  const drag = getItemDrag()
+  if (!hasItemDrag(event) && !drag) return
+  if (drag?.kind === 'folder' && drag.folderPath === node.path) return
+  event.preventDefault()
+  dropActivePath.value = node.path
+  // 拖拽悬停期间保持展开
+  if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+  isExpanded.value = true
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+function onNodeDragLeave(node: HcNode) {
+  if (dropActivePath.value === node.path) dropActivePath.value = ''
+}
+
+function onNodeDrop(node: HcNode, event: DragEvent) {
+  if (node.type === 'prev' || node.type === 'next') return
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  event.stopPropagation()
+  dropActivePath.value = ''
+  emit('item-drop', { targetPath: node.path, targetWs: node.wsPath, copy: event.ctrlKey || event.metaKey })
+}
+
 // 当前右键节点是否是工作区根目录
 const isCtxNodeRoot = computed(() => {
   const node = ctxNode.value
@@ -1139,6 +1201,12 @@ watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await
 .hc-hex-stroke.stroke-selected {
   stroke: var(--color-accent);
   stroke-width: 2.5;
+}
+/* 拖拽放置高亮 */
+.hc-node-g.is-drop-active .hc-hex-stroke {
+  stroke: var(--color-accent);
+  stroke-width: 3;
+  stroke-dasharray: 5 3;
 }
 
 /* 毛玻璃整体投影 */

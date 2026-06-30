@@ -30,9 +30,12 @@
           v-for="ws in appStore.workspaces"
           :key="ws"
           class="workspace-item"
-          :class="{ active: !appStore.isGlobalView && appStore.activeWorkspace === ws }"
+          :class="{ active: !appStore.isGlobalView && appStore.activeWorkspace === ws, 'drop-active': dropActiveWs === ws }"
           @click="handleSwitchWorkspace(ws)"
           :title="ws"
+          @dragover="onWorkspaceDragOver(ws, $event)"
+          @dragleave="onWorkspaceDragLeave(ws)"
+          @drop="onWorkspaceDrop(ws, $event)"
         >
           <el-icon class="workspace-icon"><Folder /></el-icon>
           <span class="workspace-name">{{ getWorkspaceName(ws) }}</span>
@@ -353,6 +356,9 @@ import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
 import type { TagTreeNode } from '../stores/tags'
 import { isTagDragInProgress } from '../utils/drag'
+import { hasItemDrag, getItemDrag, clearItemDragState } from '../utils/dragItems'
+import { fileApi } from '../api/files'
+import { folderApi } from '../api/folders'
 
 const batchOpsRef = ref<InstanceType<typeof BatchOperations> | null>(null)
 const logViewerRef = ref<InstanceType<typeof LogViewer> | null>(null)
@@ -585,6 +591,76 @@ function handleSwitchWorkspace(ws: string) {
   refreshForWorkspace()
 }
 
+// ─── 拖拽文件/文件夹到侧栏工作区：移动/复制到该工作区的记忆层级 ───
+const dropActiveWs = ref('')
+
+// 解析目标目录：优先该工作区上次浏览层级（须仍位于该工作区下），否则工作区根
+function resolveWsTargetDir(ws: string): string {
+  const remembered = fileStore.getRememberedFolder(ws)
+  if (remembered) {
+    const r = remembered.replace(/\\/g, '/')
+    const root = ws.replace(/\\/g, '/')
+    if (r === root || r.startsWith(root + '/')) return remembered
+  }
+  return ws
+}
+
+function onWorkspaceDragOver(ws: string, event: DragEvent) {
+  const drag = getItemDrag()
+  if (!hasItemDrag(event) && !drag) return
+  // 文件夹拖到自身工作区根不允许（无意义/防自包含由后端兜底）
+  event.preventDefault()
+  dropActiveWs.value = ws
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+function onWorkspaceDragLeave(ws: string) {
+  if (dropActiveWs.value === ws) dropActiveWs.value = ''
+}
+
+async function onWorkspaceDrop(ws: string, event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  dropActiveWs.value = ''
+  const drag = getItemDrag()
+  clearItemDragState()
+  if (!drag) return
+  const copy = event.ctrlKey || event.metaKey
+  const targetDir = resolveWsTargetDir(ws)
+  try {
+    if (drag.kind === 'file' && drag.fileIds?.length) {
+      if (copy) {
+        const r = await fileApi.copy(drag.fileIds, targetDir, ws)
+        ElMessage.success(`已复制 ${r.files.length} 个文件到「${getWorkspaceName(ws)}」`)
+      } else {
+        const r = await fileApi.move(drag.fileIds, targetDir, ws)
+        ElMessage.success(`已移动 ${r.files.length} 个文件到「${getWorkspaceName(ws)}」`)
+      }
+    } else if (drag.kind === 'folder' && drag.folderPath) {
+      const src = drag.folderPath.replace(/\\/g, '/')
+      const dst = targetDir.replace(/\\/g, '/')
+      if (dst === src || dst.startsWith(src + '/')) {
+        ElMessage.warning('不能移动到文件夹自身或其子目录')
+        return
+      }
+      if (copy) {
+        await folderApi.copyFolder(drag.folderPath, targetDir)
+        ElMessage.success(`已复制文件夹到「${getWorkspaceName(ws)}」`)
+      } else {
+        await folderApi.moveFolder(drag.folderPath, targetDir, ws)
+        ElMessage.success(`已移动文件夹到「${getWorkspaceName(ws)}」`)
+      }
+    }
+    // 移动会从源（通常是当前工作区）移走文件，复制也可能落入当前工作区，
+    // 统一刷新当前工作区列表，确保卡片及时更新。
+    reloadCurrentFiles()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || (copy ? '复制失败' : '移动失败'))
+  }
+}
+
 function handleSetGlobalView() {
   appStore.setGlobalView(true)
   refreshForWorkspace()
@@ -607,6 +683,17 @@ function refreshForWorkspace() {
   // 此处不再 search 覆盖，避免回到根目录或与目录加载竞争。
   if (fileStore.browseMode !== 'all' && root) return
   fileStore.search({ root })
+}
+
+// 重新加载当前文件列表（不改变浏览模式/层级），用于移动、复制等操作后刷新。
+// 与 refreshForWorkspace 不同：folder/tree 模式下也会真正重载当前目录内容。
+function reloadCurrentFiles() {
+  const root = appStore.currentWorkspace || undefined
+  if (fileStore.browseMode !== 'all' && fileStore.currentFolderPath) {
+    fileStore.loadFolderContents(fileStore.currentFolderPath)
+  } else {
+    fileStore.search({ root })
+  }
 }
 
 // 扫描事件处理 - 使用变量跟踪是否已显示提示
@@ -773,6 +860,12 @@ function handleCollapsedTagClick(tagId: number) {
 
 .workspace-item.active .workspace-remove-btn {
   color: white;
+}
+
+.workspace-item.drop-active {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+  background: var(--color-bg-secondary);
 }
 
 .workspace-global {

@@ -16,6 +16,9 @@
         :class="{ 'file-drop-active': activeDropFileId === file.id }"
         :style="cellDropStyle(file.id)"
         :data-file-id="file.id"
+        draggable="true"
+        @dragstart="$emit('file-dragstart', file, $event)"
+        @dragend="$emit('file-dragend')"
         @dragover.prevent.stop="$emit('file-drag-over', file.id, $event)"
         @dragleave="$emit('file-drag-leave', file.id)"
         @drop.prevent.stop="$emit('file-drop', file, $event)"
@@ -56,6 +59,9 @@
       class="list-drop-target"
       :class="{ 'file-drop-active': activeDropFileId === item.id }"
       :style="cellDropStyle(item.id)"
+      draggable="true"
+      @dragstart="$emit('file-dragstart', item, $event)"
+      @dragend="$emit('file-dragend')"
       @dragover.prevent.stop="$emit('file-drag-over', item.id, $event)"
       @dragleave="$emit('file-drag-leave', item.id)"
       @drop.prevent.stop="$emit('file-drop', item, $event)"
@@ -116,6 +122,8 @@ defineEmits<{
   (e: 'file-drag-over', fileId: number, evt: DragEvent): void
   (e: 'file-drag-leave', fileId: number): void
   (e: 'file-drop', file: FileSummary, evt: DragEvent): void
+  (e: 'file-dragstart', file: FileSummary, evt: DragEvent): void
+  (e: 'file-dragend'): void
   (e: 'checkbox-click', fileId: number): void
 }>()
 

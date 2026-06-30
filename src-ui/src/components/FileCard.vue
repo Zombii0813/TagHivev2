@@ -20,6 +20,7 @@
           :src="thumbnailUrl"
           :alt="file.name"
           loading="lazy"
+          draggable="false"
           @load="handleImageLoad"
           @error="handleImageError"
           :class="{ 'image-loaded': imageLoaded, 'image-error': imageError }"

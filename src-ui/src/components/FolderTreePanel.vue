@@ -46,12 +46,15 @@
 
           <template v-else>
             <div v-for="root in treeRoots" :key="root.wsPath" class="ft-ws-block">
-              <!-- 工作区根节点 -->
+              <!-- 工作区根节点（可作为放置目标） -->
               <div
                 class="ft-root-node"
-                :class="{ selected: selectedPath === root.node.path }"
+                :class="{ selected: selectedPath === root.node.path, 'drop-active': dropActivePath === root.node.path }"
                 @click="onSelect(root.node.path, root.wsPath)"
                 @contextmenu.prevent="onNodeContextMenu({ folder: root.node, event: $event }, root.wsPath)"
+                @dragover="onRootDragOver(root.node.path, $event)"
+                @dragleave="onRootDragLeave(root.node.path)"
+                @drop="onRootDrop(root.node.path, root.wsPath, $event)"
               >
                 <el-icon class="ft-root-icon"><Folder /></el-icon>
                 <span class="ft-root-name">{{ root.node.name }}</span>
@@ -67,6 +70,7 @@
                 :level="1"
                 @select="(p: string) => onSelect(p, root.wsPath)"
                 @contextmenu="(payload) => onNodeContextMenu(payload, root.wsPath)"
+                @item-drop="(payload) => onChildItemDrop(payload, root.wsPath)"
               />
             </div>
           </template>
@@ -90,6 +94,14 @@
         <div class="context-menu-item" @click="openCreateDialog">
           <el-icon><FolderAdd /></el-icon>
           <span>新建子目录</span>
+        </div>
+        <div class="context-menu-item" @click="emitFolderOp('move')">
+          <el-icon><FolderOpened /></el-icon>
+          <span>移动到...</span>
+        </div>
+        <div class="context-menu-item" @click="emitFolderOp('copy')">
+          <el-icon><CopyDocument /></el-icon>
+          <span>复制到...</span>
         </div>
       </div>
     </el-popover>
@@ -121,13 +133,14 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Files, Folder, FolderAdd, Loading } from '@element-plus/icons-vue'
+import { Files, Folder, FolderAdd, FolderOpened, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { folderApi } from '../api/folders'
 import { wsClient } from '../api/websocket'
 import type { FolderNode } from '../types'
 import FolderTreeNode from './FolderTreeNode.vue'
+import { hasItemDrag, getItemDrag } from '../utils/dragItems'
 
 // ─── Props & Emits ────────────────────────────────────────────
 const props = defineProps<{
@@ -138,6 +151,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [path: string, wsPath?: string]
+  'folder-op': [payload: { mode: 'move' | 'copy'; path: string; wsPath: string }]
+  'item-drop': [payload: { targetPath: string; targetWs: string; copy: boolean }]
 }>()
 
 // ─── 浮层状态 ─────────────────────────────────────────────────
@@ -309,6 +324,46 @@ function openCreateDialog() {
   showCreateDialog.value = true
 }
 
+// 触发文件夹移动/复制：把来源文件夹及其工作区交给父组件打开对话框
+function emitFolderOp(mode: 'move' | 'copy') {
+  ctxVisible.value = false
+  const folder = ctxFolder.value
+  const ws = ctxWsPath.value
+  if (!folder || !ws) return
+  emit('folder-op', { mode, path: folder.path, wsPath: ws })
+}
+
+// ─── 拖拽放置 ─────────────────────────────────────────────────
+const dropActivePath = ref('')
+
+function onRootDragOver(rootPath: string, event: DragEvent) {
+  const drag = getItemDrag()
+  if (!hasItemDrag(event) && !drag) return
+  // 文件夹拖到自身不允许
+  if (drag?.kind === 'folder' && drag.folderPath === rootPath) return
+  event.preventDefault()
+  dropActivePath.value = rootPath
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+function onRootDragLeave(rootPath: string) {
+  if (dropActivePath.value === rootPath) dropActivePath.value = ''
+}
+
+function onRootDrop(rootPath: string, wsPath: string, event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  dropActivePath.value = ''
+  emit('item-drop', { targetPath: rootPath, targetWs: wsPath, copy: event.ctrlKey || event.metaKey })
+}
+
+// 子节点 drop 透传：补充目标工作区
+function onChildItemDrop(payload: { targetPath: string; copy: boolean }, wsPath: string) {
+  emit('item-drop', { targetPath: payload.targetPath, targetWs: wsPath, copy: payload.copy })
+}
+
 async function confirmCreate() {
   const name = newName.value.trim()
   const folder = ctxFolder.value
@@ -471,6 +526,7 @@ watch(() => props.boundary, async (el) => {
 }
 .ft-root-node:hover { background-color: var(--color-bg-hover); }
 .ft-root-node.selected { background-color: var(--color-accent-light); color: var(--color-accent); }
+.ft-root-node.drop-active { background-color: var(--color-accent-light); outline: 2px dashed var(--color-accent); outline-offset: -2px; }
 .ft-root-icon { font-size: 16px; color: #e6a23c; flex-shrink: 0; }
 .ft-root-node.selected .ft-root-icon { color: var(--color-accent); }
 .ft-root-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

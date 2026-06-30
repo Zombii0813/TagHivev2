@@ -45,6 +45,8 @@ from .models import (
     FileMoveRequestDTO,
     FileCopyRequestDTO,
     FileBatchResultDTO,
+    FolderMoveRequestDTO,
+    FolderCopyRequestDTO,
     TagExportRequestDTO,
     ExportedTagDTO,
     FileMatchEntryDTO,
@@ -1047,6 +1049,165 @@ async def delete_folder(
     await broadcast_folder_tree_changed(root_path.as_posix())
 
     return {"deleted": folder_path.as_posix(), "files_removed": len(file_ids)}
+
+
+def _build_unique_target_dir(target_parent: Path, folder_name: str) -> Path:
+    """为移动/复制的文件夹生成不冲突的目标目录路径。
+
+    与 _build_unique_target_path 类似，但针对目录（无扩展名）。
+    """
+    candidate = target_parent / folder_name
+    if not candidate.exists():
+        return candidate
+    counter = 1
+    while True:
+        candidate = target_parent / f"{folder_name} ({counter})"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _is_same_or_subpath(target: Path, source: Path) -> bool:
+    """判断 target 是否等于 source 或位于 source 之内（防止把目录移入自身/子孙）。"""
+    try:
+        target.resolve().relative_to(source.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+@router.post("/folders/move", response_model=FileBatchResultDTO)
+async def move_folder(
+    payload: FolderMoveRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """将整个文件夹移动到指定父目录（支持跨工作区）。
+
+    会同步更新该目录下所有文件记录的路径（保留文件 id 与标签关联）；跨工作区移动时，
+    剥离不属于目标工作区的标签，语义与单文件移动一致。
+    """
+    source_path = Path(payload.source_path)
+    target_parent = Path(payload.target_dir)
+
+    if not source_path.exists() or not source_path.is_dir():
+        raise HTTPException(status_code=400, detail="Source folder not found")
+    if not target_parent.exists() or not target_parent.is_dir():
+        raise HTTPException(status_code=400, detail="Target directory not found")
+
+    # 防止把目录移入其自身或子孙目录
+    if _is_same_or_subpath(target_parent, source_path):
+        raise HTTPException(status_code=400, detail="Cannot move a folder into itself or its subfolder")
+
+    target_workspace = (payload.target_workspace or "").strip() or None
+
+    dest_path = _build_unique_target_dir(target_parent, source_path.name)
+    source_posix = source_path.as_posix().rstrip("/")
+
+    # 先收集 DB 中该目录下所有文件记录（路径前缀匹配）
+    files_in_folder = repo.session.query(File).filter(
+        File.path.like(source_posix + "/%") | (File.path == source_posix)
+    ).all()
+    old_paths = {f.id: f.path for f in files_in_folder}
+
+    # 物理移动整棵目录
+    try:
+        shutil.move(str(source_path), str(dest_path))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to move folder: {exc}") from exc
+
+    dest_posix = dest_path.as_posix().rstrip("/")
+    moved_files: list[FileSummaryDTO] = []
+
+    for file in files_in_folder:
+        old_path = old_paths[file.id]
+        # 把旧路径的 source 前缀替换为 dest 前缀（按 / 边界，避免误伤）
+        if old_path == source_posix:
+            new_path = dest_posix
+        else:
+            new_path = dest_posix + old_path[len(source_posix):]
+
+        meta = build_file_meta(Path(new_path))
+        file_row = repo.upsert_file(meta, existing_id=file.id)
+
+        # 跨工作区移动时清理不属于目标工作区的标签关联
+        if target_workspace:
+            kept_tags = [
+                t for t in file_row.tags
+                if t.workspace is None or t.workspace == target_workspace
+            ]
+            if len(kept_tags) != len(file_row.tags):
+                file_row.tags = kept_tags
+
+        moved_files.append(FileSummaryDTO(
+            id=file_row.id,
+            name=file_row.name,
+            path=file_row.path,
+            type=file_row.type,
+            size=file_row.size,
+            modified_at=file_row.modified_at,
+            duration=file_row.duration,
+            tag_ids=[t.id for t in file_row.tags],
+        ))
+
+    repo.session.commit()
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
+    return FileBatchResultDTO(files=moved_files, target_dir=dest_path.as_posix())
+
+
+@router.post("/folders/copy", response_model=FileBatchResultDTO)
+async def copy_folder(
+    payload: FolderCopyRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """复制整个文件夹到指定父目录（副本入库，不含原标签）。"""
+    source_path = Path(payload.source_path)
+    target_parent = Path(payload.target_dir)
+
+    if not source_path.exists() or not source_path.is_dir():
+        raise HTTPException(status_code=400, detail="Source folder not found")
+    if not target_parent.exists() or not target_parent.is_dir():
+        raise HTTPException(status_code=400, detail="Target directory not found")
+
+    if _is_same_or_subpath(target_parent, source_path):
+        raise HTTPException(status_code=400, detail="Cannot copy a folder into itself or its subfolder")
+
+    dest_path = _build_unique_target_dir(target_parent, source_path.name)
+
+    # 物理复制整棵目录
+    try:
+        shutil.copytree(str(source_path), str(dest_path))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to copy folder: {exc}") from exc
+
+    copied_files: list[FileSummaryDTO] = []
+
+    # 递归遍历副本目录，把所有文件作为全新记录入库
+    for current_root, _dirs, file_names in os.walk(dest_path):
+        for fname in file_names:
+            fpath = Path(current_root) / fname
+            try:
+                meta = build_file_meta(fpath)
+            except Exception:
+                continue
+            file_row = repo.upsert_file(meta)
+            copied_files.append(FileSummaryDTO(
+                id=file_row.id,
+                name=file_row.name,
+                path=file_row.path,
+                type=file_row.type,
+                size=file_row.size,
+                modified_at=file_row.modified_at,
+                duration=file_row.duration,
+                tag_ids=[],
+            ))
+
+    repo.session.commit()
+    from ..core.query_cache import get_query_cache
+    get_query_cache().invalidate_pattern("folder:tree:")
+    await broadcast_folder_tree_changed()
+    return FileBatchResultDTO(files=copied_files, target_dir=dest_path.as_posix())
 
 
 # ========== 健康检查 ==========

@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FolderTree, FolderContents, CreateFolderResult } from '../types'
+import type { FolderTree, FolderContents, CreateFolderResult, FileBatchResult } from '../types'
 
 export const folderApi = {
   // 获取文件夹树结构
@@ -40,6 +40,23 @@ export const folderApi = {
     return apiClient.post('/api/folders/delete', {
       root_path: rootPath,
       folder_path: folderPath,
+    })
+  },
+
+  // 移动整个文件夹到目标父目录（支持跨工作区）
+  async moveFolder(sourcePath: string, targetDir: string, targetWorkspace?: string): Promise<FileBatchResult> {
+    return apiClient.post<FileBatchResult>('/api/folders/move', {
+      source_path: sourcePath,
+      target_dir: targetDir,
+      target_workspace: targetWorkspace,
+    })
+  },
+
+  // 复制整个文件夹到目标父目录（副本不含标签）
+  async copyFolder(sourcePath: string, targetDir: string): Promise<FileBatchResult> {
+    return apiClient.post<FileBatchResult>('/api/folders/copy', {
+      source_path: sourcePath,
+      target_dir: targetDir,
     })
   },
 }

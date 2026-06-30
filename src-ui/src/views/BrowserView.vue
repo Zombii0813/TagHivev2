@@ -28,6 +28,8 @@
           :boundary="scrollerRef"
           @select="handleFolderSelect"
           @switch-workspace="handleSwitchWorkspaceFromTree"
+          @folder-op="handleFolderOp"
+          @item-drop="handleTreeItemDrop"
         />
 
         <!-- 文件列表全宽 -->
@@ -53,6 +55,8 @@
             @file-drag-leave="handleFileDragLeave"
             @file-drop="handleFileDrop"
             @checkbox-click="handleCheckboxClick"
+            @file-dragstart="handleFileDragStart"
+            @file-dragend="handleItemDragEnd"
           />
 
           <!-- 加载更多提示 -->
@@ -72,6 +76,8 @@
           :root-path="appStore.currentWorkspace"
           :boundary="scrollerRef"
           @select="handleFolderSelect"
+          @folder-op="handleFolderOp"
+          @item-drop="handleTreeItemDrop"
         />
 
         <!-- 文件列表全宽 -->
@@ -97,6 +103,8 @@
             @file-drag-leave="handleFileDragLeave"
             @file-drop="handleFileDrop"
             @checkbox-click="handleCheckboxClick"
+            @file-dragstart="handleFileDragStart"
+            @file-dragend="handleItemDragEnd"
           />
 
           <!-- 加载更多提示 -->
@@ -115,6 +123,8 @@
           :workspaces="appStore.workspaces"
           :boundary="scrollerRef"
           @select="handleFolderSelect"
+          @folder-op="handleFolderOp"
+          @item-drop="handleTreeItemDrop"
         />
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
@@ -137,6 +147,8 @@
             @file-drag-leave="handleFileDragLeave"
             @file-drop="handleFileDrop"
             @checkbox-click="handleCheckboxClick"
+            @file-dragstart="handleFileDragStart"
+            @file-dragend="handleItemDragEnd"
           />
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
             <el-icon class="loading-icon"><Loading /></el-icon>
@@ -153,6 +165,8 @@
           :root-path="appStore.currentWorkspace"
           :boundary="scrollerRef"
           @select="handleFolderSelect"
+          @folder-op="handleFolderOp"
+          @item-drop="handleTreeItemDrop"
         />
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
@@ -175,6 +189,8 @@
             @file-drag-leave="handleFileDragLeave"
             @file-drop="handleFileDrop"
             @checkbox-click="handleCheckboxClick"
+            @file-dragstart="handleFileDragStart"
+            @file-dragend="handleItemDragEnd"
           />
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
             <el-icon class="loading-icon"><Loading /></el-icon>
@@ -296,11 +312,11 @@
         <div class="import-dialog-hero">
           <div>
             <div class="import-dialog-title-row">
-              <span class="import-dialog-title">{{ fileOpMode === 'move' ? '移动文件' : '复制文件' }}</span>
-              <span class="import-dialog-count">{{ contextMenuTargetIds.length }} 个文件</span>
+              <span class="import-dialog-title">{{ fileOpHeroTitle }}</span>
+              <span class="import-dialog-count">{{ fileOpHeroCount }}</span>
             </div>
             <p class="import-dialog-description">
-              请选择工作区中的目标目录，确认后会将文件{{ fileOpMode === 'move' ? '移动' : '复制' }}到该位置。
+              请选择工作区中的目标目录，确认后会将{{ fileOpFolderSource ? '文件夹' : '文件' }}{{ fileOpMode === 'move' ? '移动' : '复制' }}到该位置。
             </p>
           </div>
           <div class="import-dialog-workspace import-dialog-workspace-select">
@@ -546,6 +562,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
+import { setItemDragData, clearItemDragState, getItemDrag } from '../utils/dragItems'
 import type { TagDragMeta } from '../utils/drag'
 
 // 滚动加载配置
@@ -604,12 +621,27 @@ const showFileOpCreateFolder = ref(false)
 const fileOpNewFolderName = ref('')
 const fileOpCreatingFolder = ref(false)
 const fileOpTreeRef = ref<InstanceType<typeof ElTree> | null>(null)
+// 文件夹来源：非空时表示本次移动/复制的对象是一个文件夹（其路径），否则为文件
+const fileOpFolderSource = ref<string | null>(null)
+const fileOpFolderSourceWs = ref<string>('')
 
 const currentImportDirectory = computed(() => {
   if (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') {
     return fileStore.currentFolderPath || appStore.currentWorkspace
   }
   return appStore.currentWorkspace
+})
+
+// 移动/复制对话框标题与计数（区分文件夹来源与文件来源）
+const fileOpHeroTitle = computed(() => {
+  const verb = fileOpMode.value === 'move' ? '移动' : '复制'
+  return fileOpFolderSource.value ? `${verb}文件夹` : `${verb}文件`
+})
+const fileOpHeroCount = computed(() => {
+  if (fileOpFolderSource.value) {
+    return getFolderDisplayName(fileOpFolderSource.value)
+  }
+  return `${contextMenuTargetIds.value.length} 个文件`
 })
 
 const importTreeData = computed<FolderNode[]>(() => {
@@ -1325,6 +1357,65 @@ function handleSwitchWorkspaceFromTree(wsPath: string) {
   fileStore.search({ root: wsPath })
 }
 
+// 文件夹树右键「移动/复制到...」：打开目录选择对话框（文件夹来源）
+function handleFolderOp(payload: { mode: 'move' | 'copy'; path: string; wsPath: string }) {
+  openFolderOpDialog(payload.mode, payload.path, payload.wsPath)
+}
+
+// ─── 拖拽移动/复制 ────────────────────────────────────────────
+// 文件卡片/列表项开始拖拽：写入选中文件 ids（拖的项不在选中集时仅含自身）
+function handleFileDragStart(file: FileSummary, event: DragEvent) {
+  const fileIds = fileStore.selectedIds.has(file.id)
+    ? Array.from(fileStore.selectedIds)
+    : [file.id]
+  setItemDragData(event, {
+    kind: 'file',
+    fileIds,
+    label: fileIds.length > 1 ? `${fileIds.length} 个文件` : file.name,
+  })
+}
+
+function handleItemDragEnd() {
+  clearItemDragState()
+}
+
+// 拖拽放置到文件夹树节点：执行移动/复制（Ctrl=复制）
+async function handleTreeItemDrop(payload: { targetPath: string; targetWs: string; copy: boolean }) {
+  const drag = getItemDrag()
+  clearItemDragState()
+  if (!drag) return
+  const { targetPath, targetWs, copy } = payload
+  try {
+    if (drag.kind === 'file' && drag.fileIds?.length) {
+      if (copy) {
+        const r = await fileApi.copy(drag.fileIds, targetPath, targetWs)
+        ElMessage.success(`已复制 ${r.files.length} 个文件`)
+      } else {
+        const r = await fileApi.move(drag.fileIds, targetPath, targetWs)
+        ElMessage.success(`已移动 ${r.files.length} 个文件`)
+      }
+    } else if (drag.kind === 'folder' && drag.folderPath) {
+      // 防止把文件夹拖到自身或子目录
+      const src = drag.folderPath.replace(/\\/g, '/')
+      const dst = targetPath.replace(/\\/g, '/')
+      if (dst === src || dst.startsWith(src + '/')) {
+        ElMessage.warning('不能移动到文件夹自身或其子目录')
+        return
+      }
+      if (copy) {
+        await folderApi.copyFolder(drag.folderPath, targetPath)
+        ElMessage.success('已复制文件夹')
+      } else {
+        await folderApi.moveFolder(drag.folderPath, targetPath, targetWs)
+        ElMessage.success('已移动文件夹')
+      }
+    }
+    await refreshFileList()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || (copy ? '复制失败' : '移动失败'))
+  }
+}
+
 // ===== 文件右键菜单 =====
 
 function handleFileContextMenu(file: FileSummary, event: MouseEvent) {
@@ -1378,6 +1469,7 @@ async function confirmRename() {
 async function openMoveDialog() {
   fileContextMenuVisible.value = false
   fileOpMode.value = 'move'
+  fileOpFolderSource.value = null
   fileOpTargetWorkspace.value = appStore.currentWorkspace || appStore.workspaces[0] || ''
   fileOpTargetDir.value = currentImportDirectory.value || fileOpTargetWorkspace.value
   showFileOpCreateFolder.value = false
@@ -1389,12 +1481,39 @@ async function openMoveDialog() {
 async function openCopyDialog() {
   fileContextMenuVisible.value = false
   fileOpMode.value = 'copy'
+  fileOpFolderSource.value = null
   fileOpTargetWorkspace.value = appStore.currentWorkspace || appStore.workspaces[0] || ''
   fileOpTargetDir.value = currentImportDirectory.value || fileOpTargetWorkspace.value
   showFileOpCreateFolder.value = false
   fileOpNewFolderName.value = ''
   showFileOpDialog.value = true
   await loadFileOpFolderTree()
+}
+
+// 打开文件夹移动/复制对话框（由文件夹树右键菜单触发）
+async function openFolderOpDialog(mode: 'move' | 'copy', folderPath: string, sourceWs: string) {
+  fileOpMode.value = mode
+  fileOpFolderSource.value = folderPath
+  fileOpFolderSourceWs.value = sourceWs
+  // 默认目标工作区优先选「非来源工作区」的首个，便于跨工作区操作
+  const otherWs = appStore.workspaces.find(ws => ws !== sourceWs)
+  fileOpTargetWorkspace.value = otherWs || sourceWs || appStore.workspaces[0] || ''
+  // 目标目录走该工作区的浏览记忆
+  fileOpTargetDir.value = resolveDefaultTargetDir(fileOpTargetWorkspace.value)
+  showFileOpCreateFolder.value = false
+  fileOpNewFolderName.value = ''
+  showFileOpDialog.value = true
+  await loadFileOpFolderTree()
+}
+
+// 计算某工作区在对话框中的默认目标目录：优先上次浏览层级，否则工作区根
+function resolveDefaultTargetDir(workspace: string): string {
+  if (!workspace) return ''
+  const remembered = fileStore.getRememberedFolder(workspace)
+  if (remembered && findOwnerWorkspace(remembered) === workspace) {
+    return remembered
+  }
+  return workspace
 }
 
 async function loadFileOpFolderTree() {
@@ -1418,8 +1537,8 @@ async function loadFileOpFolderTree() {
 
 async function handleFileOpWorkspaceChange(workspace: string) {
   fileOpTargetWorkspace.value = workspace
-  // 切换工作区后，目标目录回退到该工作区根
-  fileOpTargetDir.value = workspace
+  // 切换工作区后，目标目录默认回到该工作区上次浏览的层级（无记忆则工作区根）
+  fileOpTargetDir.value = resolveDefaultTargetDir(workspace)
   showFileOpCreateFolder.value = false
   fileOpNewFolderName.value = ''
   await loadFileOpFolderTree()
@@ -1465,11 +1584,22 @@ async function createFolderInFileOpDialog() {
 }
 
 async function confirmFileOp() {
-  if (!fileOpTargetDir.value || !contextMenuTargetIds.value.length) return
+  // 文件夹来源：校验目标目录；文件来源：校验目标目录 + 选中文件
+  if (!fileOpTargetDir.value) return
+  if (!fileOpFolderSource.value && !contextMenuTargetIds.value.length) return
   const targetWs = fileOpTargetWorkspace.value || undefined
   fileOpSubmitting.value = true
   try {
-    if (fileOpMode.value === 'move') {
+    if (fileOpFolderSource.value) {
+      // 文件夹整体移动/复制
+      if (fileOpMode.value === 'move') {
+        await folderApi.moveFolder(fileOpFolderSource.value, fileOpTargetDir.value, targetWs)
+        ElMessage.success('已移动文件夹')
+      } else {
+        await folderApi.copyFolder(fileOpFolderSource.value, fileOpTargetDir.value)
+        ElMessage.success('已复制文件夹')
+      }
+    } else if (fileOpMode.value === 'move') {
       const result = await fileApi.move(contextMenuTargetIds.value, fileOpTargetDir.value, targetWs)
       ElMessage.success(`已移动 ${result.files.length} 个文件`)
     } else {
