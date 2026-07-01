@@ -3,6 +3,8 @@ import { defineStore } from 'pinia'
 import type { FileSummary, SearchQuery } from '../types'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
+import { useTagStore } from './tags'
+import { useAppStore } from './app'
 
 // 视图偏好持久化（全局，不按工作区隔离）
 const VIEW_PREF_KEY = 'taghive:view-prefs'
@@ -290,6 +292,37 @@ export const useFileStore = defineStore('files', () => {
     browseMode.value = mode
   }
 
+  // 按当前浏览上下文重新加载文件列表（排序变更后调用）。
+  //
+  // 排序必须在「当前视图」内生效，不能一律走全部文件搜索，否则蜂巢/树窗
+  // 模式下处于子目录层级时改排序会跳回全部文件。三种上下文各自的重载方式：
+  //   1. 标签过滤态：保留过滤条件重跑 search（loadFolderContents 不带 tag 过滤）
+  //   2. 蜂巢/树窗且已进入某层级：在当前文件夹层级内按新排序重载
+  //   3. 其余（全部文件模式）：按工作区根搜索全部文件
+  async function reloadCurrentView() {
+    // useTagStore/useAppStore 仅在函数内调用（非模块顶层），
+    // 故与 tags/app store 的循环静态引用不会在模块求值期触发问题
+    const tagStore = useTagStore()
+    const appStore = useAppStore()
+
+    if (tagStore.hasSelection) {
+      await search({
+        ...searchQuery.value,
+        tags: Array.from(tagStore.effectiveTagIds),
+        match_all_tags: false,
+      })
+      return
+    }
+
+    if ((browseMode.value === 'folder' || browseMode.value === 'tree') && currentFolderPath.value) {
+      await loadFolderContents(currentFolderPath.value)
+      return
+    }
+
+    await search({ root: appStore.currentWorkspace || undefined })
+  }
+
+  // 切换排序字段：同字段切换升/降序，异字段切换到升序，随后按当前视图重载
   function setSortBy(field: string) {
     if (sortBy.value === field) {
       sortDesc.value = !sortDesc.value
@@ -297,7 +330,14 @@ export const useFileStore = defineStore('files', () => {
       sortBy.value = field
       sortDesc.value = false
     }
-    search()
+    reloadCurrentView()
+  }
+
+  // 明确指定排序字段与方向，随后按当前视图重载
+  function setSort(field: string, desc: boolean) {
+    sortBy.value = field
+    sortDesc.value = desc
+    reloadCurrentView()
   }
 
   function updateFileTags(fileId: number, tagIds: number[]) {
@@ -437,6 +477,8 @@ export const useFileStore = defineStore('files', () => {
     toggleBrowseMode,
     setBrowseMode,
     setSortBy,
+    setSort,
+    reloadCurrentView,
     updateFileTags,
     updateBatchFileTags,
     addTagsToFile,

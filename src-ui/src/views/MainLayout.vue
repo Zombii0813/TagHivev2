@@ -458,8 +458,9 @@ const sortOptions: Record<string, { field: string; desc: boolean; label: string 
 const handleSortCommand = (command: string) => {
   const option = sortOptions[command]
   if (option) {
-    fileStore.setSortBy(option.field)
-    fileStore.sortDesc = option.desc
+    // 明确指定字段与方向，由 store 按当前浏览上下文（蜂巢/树窗层级、
+    // 标签过滤或全部文件）重载，避免跳回全部文件视图
+    fileStore.setSort(option.field, option.desc)
   }
 }
 
