@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import functools
+import re
+import sys
 from pathlib import Path
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -9,6 +12,86 @@ Base = declarative_base()
 SessionLocal = sessionmaker(autoflush=False, autocommit=False)
 _engine = None
 _engine_path: Path | None = None
+
+# 自然排序（natural sort）用的排序规则名称。
+# SQLite 默认按字符串码点比较，导致 "10" 排在 "2" 前面；
+# 该 collation 让文件名按 Windows 资源管理器的规则排序（符号 < 数字 < 字母，
+# 且数字段按数值大小比较），实现 1,2,...,10,11 的直觉顺序。
+NATURAL_COLLATION = "NATURAL"
+
+# 拆分「连续数字」与「非数字」片段，供跨平台回退的自然排序键使用
+_NATURAL_SPLIT_RE = re.compile(r"(\d+)")
+
+# Windows 平台优先复用资源管理器同款排序函数 StrCmpLogicalW，
+# 保证符号、数字、字母的相对顺序与文件管理器完全一致。
+_STRCMPLOGICAL = None
+if sys.platform == "win32":
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        _fn = ctypes.windll.shlwapi.StrCmpLogicalW
+        _fn.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        _fn.restype = ctypes.c_int
+        _STRCMPLOGICAL = _fn
+    except Exception:  # pragma: no cover - 极端环境下 shlwapi 不可用时回退
+        _STRCMPLOGICAL = None
+
+
+def _natural_sort_key(value: str) -> list:
+    """生成跨平台自然排序键：数字段转整数比较，其余按小写字符串比较
+
+    仅在非 Windows（无 StrCmpLogicalW）时作为回退使用。
+    例如 "img12.png" -> ["img", 12, ".png"]，使数字段按数值而非字典序排序。
+    """
+    parts = _NATURAL_SPLIT_RE.split(value or "")
+    # 偶数索引为非数字片段（大小写不敏感），奇数索引为数字片段（转 int）
+    return [
+        int(part) if index % 2 == 1 else part.lower()
+        for index, part in enumerate(parts)
+    ]
+
+
+def _natural_collation(a: str, b: str) -> int:
+    """SQLite 自定义排序规则：按自然顺序比较两个字符串
+
+    Windows 上直接委托给 StrCmpLogicalW（资源管理器同款）；其余平台走
+    Python 分段回退。返回 -1 / 0 / 1，供 ORDER BY ... COLLATE NATURAL 调用。
+    """
+    if _STRCMPLOGICAL is not None:
+        return _STRCMPLOGICAL(a or "", b or "")
+
+    ka, kb = _natural_sort_key(a), _natural_sort_key(b)
+    # list 之间可能因元素类型（int vs str）不同而无法直接比较，
+    # 逐段比较并对类型不一致的段回退到字符串比较，避免 TypeError。
+    for xa, xb in zip(ka, kb):
+        if type(xa) is not type(xb):
+            xa, xb = str(xa), str(xb)
+        if xa < xb:
+            return -1
+        if xa > xb:
+            return 1
+    if len(ka) < len(kb):
+        return -1
+    if len(ka) > len(kb):
+        return 1
+    return 0
+
+
+# 供 Python 端排序（如目录树）复用的 key，与 SQL 层 collation 行为一致
+natural_sort_key = functools.cmp_to_key(_natural_collation)
+
+
+def _register_natural_collation(engine) -> None:
+    """在每个新建的 SQLite 连接上注册自然排序 collation
+
+    连接池会复用/新建连接，需在 connect 事件上注册，确保池中每条
+    DBAPI 连接都可用 COLLATE NATURAL。
+    """
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_conn, _connection_record):  # noqa: ANN001
+        dbapi_conn.create_collation(NATURAL_COLLATION, _natural_collation)
 
 # 连接池配置常量
 POOL_SIZE = 5              # 连接池保持的连接数
@@ -41,6 +124,7 @@ def init_db(db_path: Path) -> None:
             pool_recycle=POOL_RECYCLE,
             pool_pre_ping=True,  # 连接前 ping 检测，自动回收失效连接
         )
+        _register_natural_collation(_engine)
         SessionLocal.configure(bind=_engine)
         Base.metadata.create_all(bind=_engine, tables=_schema_tables())
         _ensure_schema()

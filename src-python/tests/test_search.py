@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from app.core.search import SearchQuery
 from app.db import Repo
 
@@ -73,3 +77,53 @@ class TestPagination:
         assert repo.count_search(q) == 10
         page = repo.search_with_offset(q, offset=0, limit=100)
         assert len(page.items) == 10
+
+
+class TestNaturalSort:
+    """验证文件名按自然顺序排序：1,2,...,10,11 而非 1,10,11,2。"""
+
+    def test_name_sorted_numerically(self, repo: Repo):
+        # 乱序插入含纯数字与前缀+数字两种命名
+        for n in [10, 2, 1, 21, 3, 11, 20]:
+            repo.upsert_file(make_meta(f"D:/{n}.jpg"))
+        repo.session.commit()
+
+        page = repo.search_with_offset(SearchQuery(sort_by="name"), offset=0, limit=100)
+        names = [r.name for r in page.items]
+        assert names == ["1.jpg", "2.jpg", "3.jpg", "10.jpg", "11.jpg", "20.jpg", "21.jpg"]
+
+    def test_name_prefix_sorted_numerically(self, repo: Repo):
+        for n in [10, 2, 1, 11]:
+            repo.upsert_file(make_meta(f"D:/img{n}.png"))
+        repo.session.commit()
+
+        page = repo.search_with_offset(SearchQuery(sort_by="name"), offset=0, limit=100)
+        names = [r.name for r in page.items]
+        assert names == ["img1.png", "img2.png", "img10.png", "img11.png"]
+
+    def test_name_desc_reverses_natural_order(self, repo: Repo):
+        for n in [10, 2, 1, 11]:
+            repo.upsert_file(make_meta(f"D:/{n}.jpg"))
+        repo.session.commit()
+
+        page = repo.search_with_offset(
+            SearchQuery(sort_by="name", sort_desc=True), offset=0, limit=100
+        )
+        names = [r.name for r in page.items]
+        assert names == ["11.jpg", "10.jpg", "2.jpg", "1.jpg"]
+
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="符号权重依赖 Windows StrCmpLogicalW，仅在 Windows 上校验",
+    )
+    def test_symbols_sort_before_digits_like_explorer(self, repo: Repo):
+        # Windows 资源管理器：括号/下划线等符号排在数字前，连字符开头排在字母后
+        for n in ["10", "2", "1", "(a)", "_c", "abc", "-b"]:
+            repo.upsert_file(make_meta(f"D:/{n}.jpg"))
+        repo.session.commit()
+
+        page = repo.search_with_offset(SearchQuery(sort_by="name"), offset=0, limit=100)
+        names = [r.name for r in page.items]
+        assert names == [
+            "(a).jpg", "_c.jpg", "1.jpg", "2.jpg", "10.jpg", "abc.jpg", "-b.jpg",
+        ]

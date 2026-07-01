@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from ..db import get_session, Repo
 from ..db.models import File, Tag
+from ..db.session import NATURAL_COLLATION, natural_sort_key
 from ..core.search import SearchQuery
 from ..core.indexer import build_file_meta
 from ..services.scan_service import ScanService
@@ -837,7 +838,8 @@ def _build_folder_tree(root_path: str, repo: Repo) -> tuple[List[FolderNodeDTO],
 
     for current_root, dir_names, file_names in os.walk(root):
         current_path = Path(current_root)
-        dir_names.sort(key=str.lower)
+        # 目录名按 Windows 资源管理器规则排序（符号 < 数字 < 字母，数字按数值）
+        dir_names.sort(key=natural_sort_key)
 
         direct_file_count = 0
         for file_name in file_names:
@@ -934,6 +936,9 @@ async def get_folder_contents(
         "duration": File.duration,
     }
     sort_col = sort_col_map.get(sort_by, File.name)
+    # name 为文本列，套用自然排序 collation，使数字按数值大小排序（1,2,...,10）
+    if sort_col is File.name:
+        sort_col = sort_col.collate(NATURAL_COLLATION)
     order_expr = sa_desc(sort_col) if sort_desc else asc(sort_col)
 
     # 数据查询（LIMIT/OFFSET 在 SQL 层）

@@ -71,6 +71,7 @@ class CursorPaginator(Generic[T]):
         sort_columns: List[Column],
         sort_desc: bool = False,
         page_size: int = 50,
+        collation: Optional[str] = None,
     ):
         """初始化游标分页器
 
@@ -79,11 +80,19 @@ class CursorPaginator(Generic[T]):
             sort_columns: 排序字段列表
             sort_desc: 是否降序排序
             page_size: 每页大小
+            collation: 可选的排序规则名（如自然排序 NATURAL）。
+                指定后，ORDER BY 与游标过滤比较都会套用该 collation，
+                保证翻页边界与排序顺序一致，避免漏行/重复。
         """
         self._query = query
         self._sort_columns = sort_columns
         self._sort_desc = sort_desc
         self._page_size = page_size
+        self._collation = collation
+
+    def _order_expr(self, col: Column):
+        """按是否配置 collation 返回排序/比较用的列表达式"""
+        return col.collate(self._collation) if self._collation else col
 
     def _apply_cursor_filter(
         self,
@@ -103,19 +112,22 @@ class CursorPaginator(Generic[T]):
 
             cursor_value = cursor.values[col_name]
 
+            # 比较表达式需与 ORDER BY 使用相同 collation，否则边界判定不一致
+            cmp_col = self._order_expr(col)
+
             # 根据方向确定比较操作符
             if cursor.direction == "next":
                 # 下一页：获取排序值更大的记录
                 if self._sort_desc:
-                    conditions.append(col < cursor_value)
+                    conditions.append(cmp_col < cursor_value)
                 else:
-                    conditions.append(col > cursor_value)
+                    conditions.append(cmp_col > cursor_value)
             else:
                 # 上一页：获取排序值更小的记录
                 if self._sort_desc:
-                    conditions.append(col > cursor_value)
+                    conditions.append(cmp_col > cursor_value)
                 else:
-                    conditions.append(col < cursor_value)
+                    conditions.append(cmp_col < cursor_value)
 
         if conditions:
             from sqlalchemy import and_
@@ -152,10 +164,11 @@ class CursorPaginator(Generic[T]):
 
         # 应用排序
         for col in self._sort_columns:
+            order_col = self._order_expr(col)
             if self._sort_desc:
-                query = query.order_by(desc(col))
+                query = query.order_by(desc(order_col))
             else:
-                query = query.order_by(asc(col))
+                query = query.order_by(asc(order_col))
 
         # 获取多一条数据用于判断是否有更多
         results = query.limit(self._page_size + 1).all()
@@ -207,6 +220,7 @@ def paginate_with_cursor(
     page_size: int = 50,
     sort_desc: bool = False,
     mapper: Optional[Callable[[Any], T]] = None,
+    collation: Optional[str] = None,
 ) -> CursorPage[T]:
     """游标分页快捷函数
 
@@ -217,6 +231,7 @@ def paginate_with_cursor(
         page_size: 每页大小
         sort_desc: 是否降序
         mapper: 结果映射函数
+        collation: 可选排序规则名（如自然排序 NATURAL）
 
     Returns:
         CursorPage 分页结果
@@ -226,6 +241,7 @@ def paginate_with_cursor(
         sort_columns=[sort_by],
         sort_desc=sort_desc,
         page_size=page_size,
+        collation=collation,
     )
     return paginator.get_page(cursor, mapper)
 

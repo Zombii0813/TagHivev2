@@ -21,12 +21,24 @@ from ..core.cursor_pagination import (
     OffsetPage,
 )
 from .models import File, FileTag, FileSearch, Tag
+from .session import NATURAL_COLLATION
 
 # 批量操作默认批次大小
 DEFAULT_BATCH_SIZE = 500
 
 # 游标分页阈值 - 超过此数量使用游标分页
 CURSOR_PAGINATION_THRESHOLD = 10000
+
+
+def natural_order_column(sort_column):
+    """对文本列套用自然排序 collation，其余列原样返回
+
+    仅 name 等字符串列需要自然排序（1,2,...,10 而非 1,10,2）；
+    size/modified_at/duration 为数值列，按原生数值比较即可。
+    """
+    if sort_column is File.name or sort_column is File.type:
+        return sort_column.collate(NATURAL_COLLATION)
+    return sort_column
 
 
 @dataclass
@@ -594,12 +606,13 @@ class Repo:
         # 排序
         if query.sort_by:
             sort_column = getattr(File, query.sort_by, File.name)
+            order_col = natural_order_column(sort_column)
             if query.sort_desc:
-                stmt = stmt.order_by(sort_column.desc())
+                stmt = stmt.order_by(order_col.desc())
             else:
-                stmt = stmt.order_by(sort_column.asc())
+                stmt = stmt.order_by(order_col.asc())
         else:
-            stmt = stmt.order_by(File.name.asc())
+            stmt = stmt.order_by(File.name.collate(NATURAL_COLLATION).asc())
 
         # 分页
         if limit is not None:
@@ -837,6 +850,8 @@ class Repo:
 
         # 确定排序字段
         sort_column = getattr(File, query.sort_by, File.name) if query.sort_by else File.name
+        # 文本列启用自然排序 collation，与 order/游标比较保持一致
+        collation = NATURAL_COLLATION if sort_column in (File.name, File.type) else None
 
         # 使用游标分页
         def mapper(row) -> SearchResult:
@@ -854,6 +869,7 @@ class Repo:
             page_size=page_size,
             sort_desc=query.sort_desc,
             mapper=mapper,
+            collation=collation,
         )
 
     def count_search(self, query: SearchQuery) -> int:
@@ -955,12 +971,13 @@ class Repo:
         # 排序
         if query.sort_by:
             sort_column = getattr(File, query.sort_by, File.name)
+            order_col = natural_order_column(sort_column)
             if query.sort_desc:
-                stmt = stmt.order_by(sort_column.desc())
+                stmt = stmt.order_by(order_col.desc())
             else:
-                stmt = stmt.order_by(sort_column.asc())
+                stmt = stmt.order_by(order_col.asc())
         else:
-            stmt = stmt.order_by(File.name.asc())
+            stmt = stmt.order_by(File.name.collate(NATURAL_COLLATION).asc())
 
         # 直接用 SQLAlchemy 2.x execute 分页，避免旧版 Query.count() 兼容问题
         stmt = stmt.offset(offset).limit(limit)
