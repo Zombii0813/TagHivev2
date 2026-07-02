@@ -1249,11 +1249,14 @@ function handleGridMouseDown(e: MouseEvent) {
   e.preventDefault()
 
   const rect = container.getBoundingClientRect()
-  const x0 = e.clientX - rect.left + container.scrollTop  // 用 scrollTop 对齐虚拟滚动
+  // 框选起点以容器左上角为原点（.scroller-container 自身不滚动，滚动发生在内部
+  // 的虚拟滚动器；横向亦无滚动条，因此坐标无需叠加 scrollTop）
+  const x0 = e.clientX - rect.left
   const y0 = e.clientY - rect.top
+  const additive = e.ctrlKey || e.metaKey
 
   // 清除现有选择（除非按住 Ctrl），并退出多选模式
-  if (!e.ctrlKey && !e.metaKey) {
+  if (!additive) {
     fileStore.clearSelection()
     multiSelectMode.value = false
   }
@@ -1264,19 +1267,14 @@ function handleGridMouseDown(e: MouseEvent) {
   // 给 body 加禁用 user-select 的类，框选结束再移除
   document.body.classList.add('taghive-lasso-active')
 
-  const onMove = (ev: MouseEvent) => {
-    const x1 = ev.clientX - rect.left + container.scrollTop
-    const y1 = ev.clientY - rect.top
-    const moved = Math.abs(x1 - x0) > 4 || Math.abs(y1 - y0) > 4
-    lasso.value = { active: moved, x0, y0, x1, y1 }
-
-    if (!moved) return
-
-    // 命中检测：遍历所有 grid-cell，判断是否与框选矩形相交
-    const lx0 = Math.min(x0, x1) + rect.left - container.scrollTop
-    const ly0 = Math.min(y0, y1) + rect.top
-    const lx1 = Math.max(x0, x1) + rect.left - container.scrollTop
-    const ly1 = Math.max(y0, y1) + rect.top
+  // 命中检测：以鼠标视口坐标（clientX/clientY）为右下角，遍历所有 grid-cell
+  // 判断是否与框选矩形相交。抽成独立函数，move 与 up 均调用一次，
+  // 确保鼠标松开的最终位置（尤其是快速甩到最右列时）一定被纳入判定。
+  const applyHitTest = (clientX: number, clientY: number) => {
+    const lx0 = Math.min(e.clientX, clientX)
+    const ly0 = Math.min(e.clientY, clientY)
+    const lx1 = Math.max(e.clientX, clientX)
+    const ly1 = Math.max(e.clientY, clientY)
 
     const cells = container.querySelectorAll<HTMLElement>('.grid-cell')
     cells.forEach(cell => {
@@ -1285,12 +1283,27 @@ function handleGridMouseDown(e: MouseEvent) {
       const id = parseInt(cell.dataset.fileId!)
       if (!isNaN(id)) {
         if (hit) fileStore.selectedIds.add(id)
-        else if (!e.ctrlKey && !e.metaKey) fileStore.selectedIds.delete(id)
+        else if (!additive) fileStore.selectedIds.delete(id)
       }
     })
   }
 
-  const onUp = () => {
+  const onMove = (ev: MouseEvent) => {
+    const x1 = ev.clientX - rect.left
+    const y1 = ev.clientY - rect.top
+    const moved = Math.abs(x1 - x0) > 4 || Math.abs(y1 - y0) > 4
+    lasso.value = { active: moved, x0, y0, x1, y1 }
+
+    if (!moved) return
+    applyHitTest(ev.clientX, ev.clientY)
+  }
+
+  const onUp = (ev: MouseEvent) => {
+    // 若已进入拖拽框选，用松开位置再做一次命中检测，补齐最后一次 mousemove
+    // 未覆盖到的区域（快速拖拽时 mouseup 常落在最后一次 move 之外）
+    if (lasso.value.active) {
+      applyHitTest(ev.clientX, ev.clientY)
+    }
     // 框选结束后，若选中了文件则进入多选模式
     if (lasso.value.active && fileStore.selectedIds.size > 0) {
       multiSelectMode.value = true
