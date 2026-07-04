@@ -74,12 +74,18 @@ function formatDate(timestamp: number | undefined): string {
 </script>
 
 <style scoped>
+/* 行盒子约束在 RecycleScroller 固定的 60px 行高内（box-sizing + height:calc），
+   通过上下外边距在相邻行高亮之间留出间隙、左右外边距做内嵌，
+   配合圆角让选中/悬停高亮完整落在自身条目范围内，避免相邻高亮贴合重叠。 */
 .file-list-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-border);
+  box-sizing: border-box;
+  height: 52px;
+  margin: 4px 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 0.2s ease;
 }
