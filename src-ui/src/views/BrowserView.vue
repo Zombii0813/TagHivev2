@@ -1104,16 +1104,26 @@ watch(() => appStore.currentWorkspace, (newPath) => {
 // 监听浏览模式变化
 watch(() => fileStore.browseMode, async (newMode) => {
   if (!appStore.currentWorkspace) return
-  
+
   if (newMode === 'folder' || newMode === 'tree') {
     // 切换到文件夹浏览/树窗模式：恢复该工作区上次浏览的层级
     const ws = appStore.currentWorkspace
     const remembered = fileStore.getRememberedFolder(ws)
     const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
-    await fileStore.loadFolderContents(target)
+    if (tagStore.hasSelection) {
+      // 标签过滤态：保留过滤，将范围同步为该层级（仅显示当前层级下该标签的文件）
+      await fileStore.filterByTags(Array.from(tagStore.effectiveTagIds), target)
+    } else {
+      await fileStore.loadFolderContents(target)
+    }
   } else {
-    // 切换到全部文件模式：搜索所有文件
-    await fileStore.search({ root: appStore.currentWorkspace })
+    // 切换到全部文件模式
+    if (tagStore.hasSelection) {
+      // 标签过滤态：范围回到工作区根（显示该标签在整个工作区的文件）
+      await fileStore.filterByTags(Array.from(tagStore.effectiveTagIds), '')
+    } else {
+      await fileStore.search({ root: appStore.currentWorkspace })
+    }
   }
   
   // 等待 DOM 更新后重新设置 ResizeObserver
@@ -1770,21 +1780,9 @@ async function deleteContextMenuFiles() {
 }
 
 async function refreshFileList() {
-  // 处于标签过滤态时：保留过滤条件，按当前 searchQuery 重跑搜索；
-  // 不能走 loadFolderContents（按目录直查、不带 tag 过滤）也不能传 { root } 重置 query。
-  if (tagStore.hasSelection) {
-    await fileStore.search({
-      ...fileStore.searchQuery,
-      tags: Array.from(tagStore.effectiveTagIds),
-      match_all_tags: false,
-    })
-    return
-  }
-  if ((fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') && fileStore.currentFolderPath) {
-    await fileStore.loadFolderContents(fileStore.currentFolderPath)
-  } else {
-    await fileStore.search({ root: appStore.currentWorkspace || undefined })
-  }
+  // 委托 store 按当前上下文（标签过滤态 / 文件夹层级 / 全部文件）统一重载，
+  // 标签过滤时范围随浏览模式与当前层级同步。
+  await fileStore.reloadCurrentView()
 }
 
 function clearDropIndicators() {

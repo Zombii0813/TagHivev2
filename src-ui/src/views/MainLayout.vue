@@ -792,19 +792,15 @@ const browseModeTitle = computed(() => {
 // 折叠状态下点击标签图标：切换选中并触发搜索
 function handleCollapsedTagClick(tagId: number) {
   const multi = false
-  const root = appStore.currentWorkspace || undefined
   if (tagStore.selectedTagIds.has(tagId) && tagStore.selectedTagIds.size === 1) {
     tagStore.clearSelection()
-    fileStore.search({ root })
+    fileStore.reloadCurrentView()
     return
   }
   tagStore.selectTag(tagId, multi)
   if (tagStore.selectedTagIds.size > 0) {
-    fileStore.search({
-      root,
-      tags: Array.from(tagStore.effectiveTagIds),
-      match_all_tags: false,
-    })
+    // 过滤范围由 store 按当前浏览模式/层级统一决定
+    fileStore.filterByTags(Array.from(tagStore.effectiveTagIds))
   }
 }
 </script>

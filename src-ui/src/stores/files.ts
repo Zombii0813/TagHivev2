@@ -191,7 +191,7 @@ export const useFileStore = defineStore('files', () => {
         sort_by: sortBy.value,
         sort_desc: sortDesc.value,
       })
-      
+
       files.value = result.files
       totalCount.value = result.total
       hasMore.value = result.has_more
@@ -299,6 +299,35 @@ export const useFileStore = defineStore('files', () => {
   //   1. 标签过滤态：保留过滤条件重跑 search（loadFolderContents 不带 tag 过滤）
   //   2. 蜂巢/树窗且已进入某层级：在当前文件夹层级内按新排序重载
   //   3. 其余（全部文件模式）：按工作区根搜索全部文件
+  // 计算标签过滤应使用的路径范围（后端按此前缀递归匹配）：
+  //   - 全部文件模式：工作区根，显示该标签在整个工作区下的文件
+  //   - 蜂巢/树窗模式：当前浏览层级（未进入子目录时退回工作区根），
+  //     仅显示当前目录层级下（含子目录）该标签的文件
+  // 使得标签过滤范围始终与当前浏览模式/层级保持同步。
+  function resolveTagFilterRoot(): string | undefined {
+    const appStore = useAppStore()
+    if ((browseMode.value === 'folder' || browseMode.value === 'tree') && currentFolderPath.value) {
+      return currentFolderPath.value
+    }
+    return appStore.currentWorkspace || undefined
+  }
+
+  // 按当前浏览上下文对选中标签执行过滤搜索。
+  // folderContext 显式指定层级上下文（切换浏览模式时传入）：
+  //   传入非空路径 → 同步 currentFolderPath 为该层级（供取消标签后恢复）；
+  //   传入空串     → 全部文件模式，清空层级上下文；
+  //   不传（undefined）→ 沿用当前 currentFolderPath。
+  async function filterByTags(tagIds: number[], folderContext?: string) {
+    if (folderContext !== undefined) {
+      currentFolderPath.value = folderContext
+    }
+    await search({
+      root: resolveTagFilterRoot(),
+      tags: tagIds,
+      match_all_tags: false,
+    })
+  }
+
   async function reloadCurrentView() {
     // useTagStore/useAppStore 仅在函数内调用（非模块顶层），
     // 故与 tags/app store 的循环静态引用不会在模块求值期触发问题
@@ -306,8 +335,11 @@ export const useFileStore = defineStore('files', () => {
     const appStore = useAppStore()
 
     if (tagStore.hasSelection) {
+      // 标签过滤态：root 按当前浏览层级重算（排序变更不改层级，行为等价，但更稳健），
+      // 保留 searchQuery 中的文本/类型等其它过滤条件。
       await search({
         ...searchQuery.value,
+        root: resolveTagFilterRoot(),
         tags: Array.from(tagStore.effectiveTagIds),
         match_all_tags: false,
       })
@@ -479,6 +511,7 @@ export const useFileStore = defineStore('files', () => {
     setSortBy,
     setSort,
     reloadCurrentView,
+    filterByTags,
     updateFileTags,
     updateBatchFileTags,
     addTagsToFile,

@@ -1043,22 +1043,9 @@ watch(() => appStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
 })
 
 function restoreCurrentView() {
-  // folder 模式且在子目录中：回到该子目录的文件列表
-  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
-    fileStore.loadFolderContents(fileStore.currentFolderPath)
-  } else if (appStore.currentWorkspace) {
-    fileStore.search({ root: appStore.currentWorkspace })
-  } else {
-    fileStore.search({})
-  }
-}
-
-function getSearchRoot(): string | undefined {
-  // folder 模式且在子目录中：搜索范围限定在当前子目录
-  if (fileStore.browseMode === 'folder' && fileStore.currentFolderPath) {
-    return fileStore.currentFolderPath
-  }
-  return appStore.currentWorkspace || undefined
+  // 取消标签过滤后恢复当前视图：委托 store 按浏览模式/层级统一恢复
+  // （folder/tree 模式回到当前子目录层级，全部文件模式搜索工作区全部文件）
+  fileStore.reloadCurrentView()
 }
 
 function handleTagClick(tagId: number, event: MouseEvent) {
@@ -1074,13 +1061,10 @@ function handleTagClick(tagId: number, event: MouseEvent) {
 
   tagStore.selectTag(tagId, multi)
 
-  // 更新文件搜索（实际下发后代展开后的标签集合，由 store 根据当前模式计算）
+  // 更新文件搜索：过滤范围由 store 按当前浏览模式/层级统一决定
+  // （全部文件→工作区根；蜂巢/树窗→当前目录层级）
   if (tagStore.selectedTagIds.size > 0) {
-    fileStore.search({
-      root: getSearchRoot(),
-      tags: Array.from(tagStore.effectiveTagIds),
-      match_all_tags: false,
-    })
+    fileStore.filterByTags(Array.from(tagStore.effectiveTagIds))
   } else {
     restoreCurrentView()
   }
@@ -1091,11 +1075,7 @@ function handleFilterModeChange(value: string | number | boolean | undefined) {
   tagStore.setTagFilterMode(value)
   // 已有选中标签时，按新模式重新触发查询
   if (tagStore.selectedTagIds.size > 0) {
-    fileStore.search({
-      root: getSearchRoot(),
-      tags: Array.from(tagStore.effectiveTagIds),
-      match_all_tags: false,
-    })
+    fileStore.filterByTags(Array.from(tagStore.effectiveTagIds))
   }
 }
 
