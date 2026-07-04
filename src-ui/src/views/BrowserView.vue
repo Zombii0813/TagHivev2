@@ -1233,6 +1233,15 @@ function handleGridMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   const target = e.target as HTMLElement
   if (target.closest('.file-card') || target.closest('.select-checkbox')) return
+  // 点击/拖动滚动条时不触发框选、也不清除已有多选：滚动条落在虚拟滚动器
+  // 内容区（clientWidth/clientHeight，不含滚动条）之外，据此识别并跳过。
+  const scroller = target.closest<HTMLElement>('.vue-recycle-scroller')
+  if (scroller) {
+    const sr = scroller.getBoundingClientRect()
+    const onVScrollbar = e.clientX >= sr.left + scroller.clientWidth
+    const onHScrollbar = e.clientY >= sr.top + scroller.clientHeight
+    if (onVScrollbar || onHScrollbar) return
+  }
   if (fileStore.viewMode !== 'grid') return
 
   const container = scrollerRef.value
