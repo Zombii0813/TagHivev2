@@ -6,6 +6,7 @@
     :items="gridRows"
     :item-size="gridItemHeight"
     key-field="rowIndex"
+    @scroll-end="$emit('load-more')"
     v-slot="{ item: row }"
   >
     <div class="grid-row" :style="gridRowStyle">
@@ -53,6 +54,7 @@
     :items="files"
     :item-size="60"
     key-field="id"
+    @scroll-end="$emit('load-more')"
     v-slot="{ item }"
   >
     <div
@@ -125,6 +127,7 @@ defineEmits<{
   (e: 'file-dragstart', file: FileSummary, evt: DragEvent): void
   (e: 'file-dragend'): void
   (e: 'checkbox-click', fileId: number): void
+  (e: 'load-more'): void
 }>()
 
 // 把拖拽中的标签颜色作为 CSS 变量注入到当前作为 drop 目标的单元格上，

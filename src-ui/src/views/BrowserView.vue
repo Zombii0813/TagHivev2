@@ -57,6 +57,7 @@
             @checkbox-click="handleCheckboxClick"
             @file-dragstart="handleFileDragStart"
             @file-dragend="handleItemDragEnd"
+            @load-more="handleLoadMore"
           />
 
           <!-- 加载更多提示 -->
@@ -105,6 +106,7 @@
             @checkbox-click="handleCheckboxClick"
             @file-dragstart="handleFileDragStart"
             @file-dragend="handleItemDragEnd"
+            @load-more="handleLoadMore"
           />
 
           <!-- 加载更多提示 -->
@@ -149,6 +151,7 @@
             @checkbox-click="handleCheckboxClick"
             @file-dragstart="handleFileDragStart"
             @file-dragend="handleItemDragEnd"
+            @load-more="handleLoadMore"
           />
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
             <el-icon class="loading-icon"><Loading /></el-icon>
@@ -191,6 +194,7 @@
             @checkbox-click="handleCheckboxClick"
             @file-dragstart="handleFileDragStart"
             @file-dragend="handleItemDragEnd"
+            @load-more="handleLoadMore"
           />
           <div v-if="fileStore.hasMore && fileStore.isLoading" class="load-more">
             <el-icon class="loading-icon"><Loading /></el-icon>
@@ -225,6 +229,7 @@
           @file-drag-leave="handleFileDragLeave"
           @file-drop="handleFileDrop"
           @checkbox-click="handleCheckboxClick"
+          @load-more="handleLoadMore"
         />
       </div>
 
@@ -565,9 +570,6 @@ import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isT
 import { setItemDragData, clearItemDragState, getItemDrag } from '../utils/dragItems'
 import type { TagDragMeta } from '../utils/drag'
 
-// 滚动加载配置
-const SCROLL_THRESHOLD = 100 // 距离底部多少像素时触发加载
-
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
@@ -802,16 +804,21 @@ function updateContainerWidth() {
   }
 }
 
-// 处理滚动事件，实现无限滚动加载
-function handleScroll(event: Event) {
-  const target = event.target as HTMLElement
-  if (!target) return
+// 触底加载更多。真正滚动的是 RecycleScroller 自身（内部 overflow:auto），
+// 其 @scroll-end 在最后一个 item 可见时触发，故由 FileScrollerArea 透传上来。
+// 按当前浏览上下文分发到对应的分页加载：文件夹/树窗模式走目录内分页，
+// 其余（全部文件 / 标签过滤）走搜索分页。
+function handleLoadMore() {
+  if (!fileStore.hasMore || fileStore.isLoading) return
 
-  const { scrollTop, scrollHeight, clientHeight } = target
-  const distanceToBottom = scrollHeight - scrollTop - clientHeight
+  const inFolderContext =
+    (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') &&
+    !tagStore.hasSelection &&
+    !!fileStore.currentFolderPath
 
-  // 当距离底部小于阈值时，加载更多
-  if (distanceToBottom < SCROLL_THRESHOLD && fileStore.hasMore && !fileStore.isLoading) {
+  if (inFolderContext) {
+    fileStore.loadMoreFolderContents()
+  } else {
     fileStore.loadMore()
   }
 }
@@ -1023,11 +1030,6 @@ onMounted(() => {
     resizeObserver.observe(scrollerRef.value)
   }
   
-  // 添加滚动监听
-  if (scrollerRef.value) {
-    scrollerRef.value.addEventListener('scroll', handleScroll)
-  }
-  
   if (appStore.currentWorkspace) {
     if (fileStore.browseMode === 'tree') {
       // 树窗模式：FolderTreePanel 不自动 emit，初始挂载时按记忆层级加载文件列表
@@ -1057,11 +1059,6 @@ onUnmounted(() => {
     resizeObserver = null
   }
   
-  // 移除滚动监听
-  if (scrollerRef.value) {
-    scrollerRef.value.removeEventListener('scroll', handleScroll)
-  }
-
   if (unlistenNativeDragDrop) {
     unlistenNativeDragDrop()
     unlistenNativeDragDrop = null
@@ -1129,10 +1126,6 @@ watch(() => fileStore.browseMode, async (newMode) => {
       updateContainerWidth()
     })
     resizeObserver.observe(scrollerRef.value)
-    
-    // 重新添加滚动监听
-    scrollerRef.value.removeEventListener('scroll', handleScroll)
-    scrollerRef.value.addEventListener('scroll', handleScroll)
   }
 })
 
