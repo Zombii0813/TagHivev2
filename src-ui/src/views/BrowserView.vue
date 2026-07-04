@@ -805,11 +805,19 @@ function updateContainerWidth() {
 }
 
 // 触底加载更多。真正滚动的是 RecycleScroller 自身（内部 overflow:auto），
-// 其 @scroll-end 在最后一个 item 可见时触发，故由 FileScrollerArea 透传上来。
-// 按当前浏览上下文分发到对应的分页加载：文件夹/树窗模式走目录内分页，
-// 其余（全部文件 / 标签过滤）走搜索分页。
+// 其 @scroll-end 在最后一个 item 进入渲染范围时就 emit——框选自动滚动贴底时
+// 会几乎每帧触发，若不节流会连续串行翻页几十次，把后端 COUNT+全表重排与
+// 缩略图请求打满，导致文件加载不出、扫描也排不上。故加一个短冷却窗口，
+// 两次加载至少间隔 LOAD_MORE_COOLDOWN，杜绝洪水式翻页。
+// 按当前浏览上下文分发：文件夹/树窗模式走目录内分页，其余走搜索分页。
+const LOAD_MORE_COOLDOWN = 400 // ms
+let lastLoadMoreAt = 0
+
 function handleLoadMore() {
   if (!fileStore.hasMore || fileStore.isLoading) return
+  const now = performance.now()
+  if (now - lastLoadMoreAt < LOAD_MORE_COOLDOWN) return
+  lastLoadMoreAt = now
 
   const inFolderContext =
     (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') &&
@@ -1269,14 +1277,102 @@ function handleGridMouseDown(e: MouseEvent) {
   // 给 body 加禁用 user-select 的类，框选结束再移除
   document.body.classList.add('taghive-lasso-active')
 
+  // ─── 框选时的边缘自动滚动 ───────────────────────────────────
+  // 真正滚动的是内部 .vue-recycle-scroller；鼠标靠近其上/下边缘时，
+  // 用 requestAnimationFrame 持续滚动，并每帧以最新鼠标坐标重做命中检测，
+  // 让新滚入视口的卡片也被纳入框选。
+  const EDGE = 48        // 触发自动滚动的边缘感应区高度（px）
+  const MAX_SPEED = 32   // 贴边时的最大滚动速度（px/帧）
+  let lastClientX = e.clientX
+  let lastClientY = e.clientY
+  let autoScrollRaf = 0
+  const scrollEl = container.querySelector<HTMLElement>('.vue-recycle-scroller')
+
+  // 框选锚点固定在「内容坐标」上（复刻资源管理器）：记录按下瞬间的
+  // scrollTop，命中/遮罩计算时用当前 scrollTop 反推锚点的实时视口位置。
+  // 这样自动滚动时矩形上边界随内容一起移动，先前框中的项不会因内容上移
+  // 而滑出矩形被取消选择。横向无滚动，故仅补偿纵向。
+  const anchorScrollTop = scrollEl ? scrollEl.scrollTop : 0
+  const scrollDelta = () => (scrollEl ? scrollEl.scrollTop - anchorScrollTop : 0)
+  // 锚点当前的视口 Y（clientY 坐标系，供命中检测用）
+  const anchorClientY = () => e.clientY - scrollDelta()
+  // 锚点当前相对 container 顶部的 Y（供遮罩渲染用）
+  const anchorContainerY = () => y0 - scrollDelta()
+
+  const stopAutoScroll = () => {
+    if (autoScrollRaf) {
+      cancelAnimationFrame(autoScrollRaf)
+      autoScrollRaf = 0
+    }
+  }
+
+  // 每帧实时计算滚动速度（px/帧）。返回 0 表示鼠标不在感应区。
+  // t 为进入感应区的归一化深度，鼠标冲出滚动器边界时 t 可 >1，
+  // 故放开上限到 OVER_MAX，让甩到窗口边缘时滚得更快。
+  const OVER_MAX = 2.5
+  const computeSpeed = (): number => {
+    if (!scrollEl) return 0
+    const sr = scrollEl.getBoundingClientRect()
+    if (lastClientY < sr.top + EDGE) {
+      const t = Math.min(OVER_MAX, (sr.top + EDGE - lastClientY) / EDGE)
+      return -MAX_SPEED * t * t
+    }
+    if (lastClientY > sr.bottom - EDGE) {
+      const t = Math.min(OVER_MAX, (lastClientY - (sr.bottom - EDGE)) / EDGE)
+      return MAX_SPEED * t * t
+    }
+    return 0
+  }
+
+  const maybeAutoScroll = () => {
+    if (!scrollEl) return
+    if (computeSpeed() === 0) {
+      stopAutoScroll()
+      return
+    }
+    if (autoScrollRaf) return  // 已在滚动循环中
+
+    const step = () => {
+      const speed = computeSpeed()
+      if (speed === 0) {
+        autoScrollRaf = 0
+        return
+      }
+      const before = scrollEl.scrollTop
+      scrollEl.scrollTop = before + speed
+      if (scrollEl.scrollTop === before) {
+        // 已到达当前已加载内容的边界。若仍有未加载的下一页（向下滚时），
+        // 触发加载并保持循环——新内容进来后下一帧即可继续滚动，
+        // 不会因“卡到底”而中断（这正是拉到底变慢/停住的主因）。
+        if (speed > 0 && fileStore.hasMore) {
+          handleLoadMore()
+          autoScrollRaf = requestAnimationFrame(step)
+          return
+        }
+        // 到顶、或确无更多内容：停止
+        autoScrollRaf = 0
+        return
+      }
+      // 滚动后视口内容变化，用最新鼠标位置更新框选矩形与命中判定；
+      // 矩形上边界用锚点的实时 container Y（随内容一起移动）
+      const cx = lastClientX - rect.left
+      const cy = lastClientY - rect.top
+      lasso.value = { active: true, x0, y0: anchorContainerY(), x1: cx, y1: cy }
+      applyHitTest(lastClientX, lastClientY)
+      autoScrollRaf = requestAnimationFrame(step)
+    }
+    autoScrollRaf = requestAnimationFrame(step)
+  }
+
   // 命中检测：以鼠标视口坐标（clientX/clientY）为右下角，遍历所有 grid-cell
   // 判断是否与框选矩形相交。抽成独立函数，move 与 up 均调用一次，
   // 确保鼠标松开的最终位置（尤其是快速甩到最右列时）一定被纳入判定。
   const applyHitTest = (clientX: number, clientY: number) => {
+    const ay = anchorClientY()
     const lx0 = Math.min(e.clientX, clientX)
-    const ly0 = Math.min(e.clientY, clientY)
+    const ly0 = Math.min(ay, clientY)
     const lx1 = Math.max(e.clientX, clientX)
-    const ly1 = Math.max(e.clientY, clientY)
+    const ly1 = Math.max(ay, clientY)
 
     const cells = container.querySelectorAll<HTMLElement>('.grid-cell')
     cells.forEach(cell => {
@@ -1294,13 +1390,19 @@ function handleGridMouseDown(e: MouseEvent) {
     const x1 = ev.clientX - rect.left
     const y1 = ev.clientY - rect.top
     const moved = Math.abs(x1 - x0) > 4 || Math.abs(y1 - y0) > 4
-    lasso.value = { active: moved, x0, y0, x1, y1 }
+    lasso.value = { active: moved, x0, y0: anchorContainerY(), x1, y1 }
 
     if (!moved) return
+    // 记录最新鼠标视口坐标，供自动滚动的每帧命中检测复用
+    lastClientX = ev.clientX
+    lastClientY = ev.clientY
     applyHitTest(ev.clientX, ev.clientY)
+    // 鼠标靠近上/下边缘时启动窗口跟随滚动
+    maybeAutoScroll()
   }
 
   const onUp = (ev: MouseEvent) => {
+    stopAutoScroll()
     // 若已进入拖拽框选，用松开位置再做一次命中检测，补齐最后一次 mousemove
     // 未覆盖到的区域（快速拖拽时 mouseup 常落在最后一次 move 之外）
     if (lasso.value.active) {
