@@ -7,6 +7,12 @@ export const thumbnailApi = {
     return `${getApiBaseUrl()}/api/thumbnails/${fileId}?size=${size}`
   },
 
+  // 按任意本地文件路径获取缩略图 URL（用于 explorer 目录自定义封面）
+  getThumbnailUrlByPath(path: string, size: 'small' | 'medium' | 'large' = 'medium'): string {
+    const params = new URLSearchParams({ path, size })
+    return `${getApiBaseUrl()}/api/thumbnails/by-path?${params.toString()}`
+  },
+
   // 获取原始文件 URL（用于视频播放）
   getFileUrl(fileId: number): string {
     return `${getApiBaseUrl()}/api/files/${fileId}/preview`

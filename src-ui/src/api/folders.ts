@@ -15,7 +15,8 @@ export const folderApi = {
     offset: number = 0,
     limit: number = 500,
     sortBy: string = 'name',
-    sortDesc: boolean = false
+    sortDesc: boolean = false,
+    includeDirs: boolean = false
   ): Promise<FolderContents> {
     // URLSearchParams 会自动编码参数，不需要手动 encodeURIComponent
     const params = new URLSearchParams({
@@ -24,8 +25,25 @@ export const folderApi = {
       limit: limit.toString(),
       sort_by: sortBy,
       sort_desc: sortDesc.toString(),
+      include_dirs: includeDirs.toString(),
     })
     return apiClient.get<FolderContents>(`/api/folders/contents?${params.toString()}`)
+  },
+
+  // 设置目录自定义封面（explorer 模式）
+  async setCover(folderPath: string, coverPath: string, workspace?: string): Promise<void> {
+    return apiClient.post('/api/folders/cover', {
+      folder_path: folderPath,
+      cover_path: coverPath,
+      workspace: workspace ?? null,
+    })
+  },
+
+  // 清除目录自定义封面，恢复自动九宫格
+  async clearCover(folderPath: string): Promise<void> {
+    return apiClient.post('/api/folders/cover/clear', {
+      folder_path: folderPath,
+    })
   },
 
   async createFolder(rootPath: string, parentPath: string, name: string): Promise<CreateFolderResult> {

@@ -331,6 +331,7 @@ import {
   Loading,
   Refresh,
   Folder,
+  FolderOpened,
   Files,
   ScaleToOriginal,
   MoreFilled,
@@ -775,9 +776,13 @@ const toggleBrowseMode = () => {
   fileStore.toggleBrowseMode()
 }
 
-// 浏览模式按钮图标：蜂巢/树窗用文件夹相关图标，区分两种导航形态
+// 浏览模式按钮图标：各模式用不同图标区分导航形态
 const browseModeIcon = computed(() => {
-  return fileStore.browseMode === 'tree' ? Files : Folder
+  switch (fileStore.browseMode) {
+    case 'tree': return Files
+    case 'explorer': return FolderOpened
+    default: return Folder
+  }
 })
 
 // 浏览模式按钮提示：指向「下一个」将要切换到的模式
@@ -785,6 +790,7 @@ const browseModeTitle = computed(() => {
   switch (fileStore.browseMode) {
     case 'all': return '切换到蜂巢导航'
     case 'folder': return '切换到文件夹树窗'
+    case 'tree': return '切换到资源管理器'
     default: return '切换到全部文件'
   }
 })

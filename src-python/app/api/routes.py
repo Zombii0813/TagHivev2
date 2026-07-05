@@ -39,9 +39,12 @@ from .models import (
     FolderTreeDTO,
     FolderNodeDTO,
     FolderContentsDTO,
+    ChildDirDTO,
     FolderCreateRequestDTO,
     FolderCreateResultDTO,
     FolderDeleteRequestDTO,
+    FolderCoverRequestDTO,
+    FolderCoverClearRequestDTO,
     FileRenameRequestDTO,
     FileMoveRequestDTO,
     FileCopyRequestDTO,
@@ -911,9 +914,14 @@ async def get_folder_contents(
     limit: int = 500,
     sort_by: str = "name",
     sort_desc: bool = False,
+    include_dirs: bool = False,
     repo: Repo = Depends(get_repo),
 ):
-    """获取指定文件夹的直接子文件（SQL 层过滤，不加载深层文件）"""
+    """获取指定文件夹的直接子文件（SQL 层过滤，不加载深层文件）
+
+    include_dirs 为真时（explorer 浏览模式），额外返回当前层的直接子目录，
+    并为每个子目录附带其内部（含深层）前若干个可缩略图文件的 id，供前端拼九宫格封面。
+    """
     from sqlalchemy import func, asc, desc as sa_desc
 
     folder_path = Path(path)
@@ -965,12 +973,131 @@ async def get_folder_contents(
         for f in page_files
     ]
 
+    # explorer 浏览模式：派生当前层的直接子目录 + 每个目录的封面文件 id
+    dir_dtos: List[ChildDirDTO] = []
+    if include_dirs:
+        dir_dtos = _build_child_dirs(folder_path, folder_posix, repo)
+
     return FolderContentsDTO(
         path=path,
         files=file_dtos,
         total=total,
         has_more=offset + limit < total,
+        dirs=dir_dtos,
     )
+
+
+# 每个目录卡片最多取的封面缩略图数量（九宫格实际用前 4 张拼 2x2）
+_COVER_LIMIT = 4
+
+
+def _build_child_dirs(
+    folder_path: Path, folder_posix: str, repo: Repo
+) -> List[ChildDirDTO]:
+    """派生指定目录的直接子目录，并为每个子目录附带封面文件 id。
+
+    子目录来源于文件系统扫描（与目录树同源，可包含空目录）；
+    封面取子目录内（含深层）前 _COVER_LIMIT 个 image/video 文件的 id。
+
+    Args:
+        folder_path: 目标目录的 Path 对象
+        folder_posix: 目标目录的 POSIX 路径（已去尾部斜杠）
+        repo: 数据库仓储
+
+    Returns:
+        按资源管理器规则排序的子目录 DTO 列表
+    """
+    from sqlalchemy import func
+
+    # 1) 文件系统扫描直接子目录（含空目录），按资源管理器规则排序
+    try:
+        child_names = sorted(
+            (e.name for e in os.scandir(folder_path) if e.is_dir()),
+            key=natural_sort_key,
+        )
+    except OSError:
+        return []
+    if not child_names:
+        return []
+
+    child_paths = [(folder_path / name).as_posix() for name in child_names]
+
+    # 2) 每个子目录的直接子文件数（一次分组查询）
+    count_rows = repo.session.execute(
+        select(File.parent_dir, func.count())
+        .where(File.parent_dir.in_(child_paths))
+        .group_by(File.parent_dir)
+    ).all()
+    count_map: dict[str, int] = {pd: c for pd, c in count_rows}
+
+    # 3) 每个子目录（含深层）的封面文件 id：一次查询取回全部候选，Python 侧按目录归类取前 N
+    #    深层匹配用 path LIKE "<dir>/%"，命中 idx_files_path。
+    cover_map: dict[str, list[int]] = {p: [] for p in child_paths}
+    like_clauses = [File.path.like(f"{p}/%") for p in child_paths]
+    if like_clauses:
+        from sqlalchemy import or_
+
+        cover_rows = repo.session.execute(
+            select(File.id, File.path)
+            .where(File.type.in_(("image", "video")))
+            .where(or_(*like_clauses))
+            .order_by(File.path.collate(NATURAL_COLLATION))
+        ).all()
+        # 按最长前缀归属到对应子目录（子目录路径互不为前缀，直接前缀匹配即可）
+        for fid, fpath in cover_rows:
+            for p in child_paths:
+                if fpath.startswith(p + "/"):
+                    bucket = cover_map[p]
+                    if len(bucket) < _COVER_LIMIT:
+                        bucket.append(fid)
+                    break
+
+    # 4) 批量查询用户自定义封面（优先于九宫格）
+    custom_covers = repo.get_folder_covers(child_paths)
+
+    return [
+        ChildDirDTO(
+            name=name,
+            path=p,
+            file_count=count_map.get(p, 0),
+            cover_file_ids=cover_map.get(p, []),
+            cover_path=custom_covers.get(p),
+        )
+        for name, p in zip(child_names, child_paths)
+    ]
+
+
+@router.post("/folders/cover")
+async def set_folder_cover(
+    payload: FolderCoverRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """设置目录的自定义封面（explorer 模式）。
+
+    cover_path 可为该目录内的文件，也可为任意本地图片/视频；仅校验其存在。
+    """
+    cover = Path(payload.cover_path)
+    if not cover.exists() or not cover.is_file():
+        raise HTTPException(status_code=404, detail="Cover file not found")
+
+    folder_posix = Path(payload.folder_path).as_posix().rstrip("/")
+    cover_posix = cover.as_posix()
+    workspace = (
+        Path(payload.workspace).as_posix().rstrip("/") if payload.workspace else None
+    )
+    repo.set_folder_cover(folder_posix, cover_posix, workspace)
+    return {"folder_path": folder_posix, "cover_path": cover_posix}
+
+
+@router.post("/folders/cover/clear")
+async def clear_folder_cover(
+    payload: FolderCoverClearRequestDTO,
+    repo: Repo = Depends(get_repo),
+):
+    """清除目录的自定义封面，恢复为自动九宫格。"""
+    folder_posix = Path(payload.folder_path).as_posix().rstrip("/")
+    repo.clear_folder_cover(folder_posix)
+    return {"folder_path": folder_posix}
 
 
 @router.post("/folders/create", response_model=FolderCreateResultDTO)

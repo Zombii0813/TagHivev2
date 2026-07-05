@@ -39,6 +39,30 @@ def _placeholder_response(file_id: int, file_path: str, size: str) -> Response:
     )
 
 
+@router.get("/by-path")
+async def get_thumbnail_by_path(path: str, size: str = "medium"):
+    """按任意本地文件路径获取缩略图（用于 explorer 目录自定义封面）。
+
+    与按 file_id 的端点不同，此处不要求文件已入库；缓存命中即返，
+    未命中则同步生成（封面数量少，同步开销可接受）。
+    """
+    from pathlib import Path as _Path
+
+    file_path = _Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    service = get_thumbnail_service()
+    # POSIX 形式作为缓存 key，与前端传入路径保持一致
+    posix_path = file_path.as_posix()
+    thumb_path = service.get_thumbnail_path(posix_path, size)
+    if not thumb_path.exists():
+        result = service.generate_thumbnail(posix_path, size)
+        if result is None or not thumb_path.exists():
+            raise HTTPException(status_code=415, detail="Cannot generate thumbnail for this file")
+    return FileResponse(str(thumb_path))
+
+
 @router.get("/{file_id}")
 async def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = False):
     """获取文件缩略图（缓存命中即返；未命中异步生成 + 占位响应）"""

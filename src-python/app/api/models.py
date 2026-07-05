@@ -115,12 +115,39 @@ class FolderTreeDTO(BaseModel):
     root_file_count: int = 0  # 根目录下的直接文件数
 
 
+class ChildDirDTO(BaseModel):
+    """子目录 DTO - 用于 explorer 浏览模式的目录卡片
+
+    cover_file_ids 为该目录内（含深层）前若干个可生成缩略图的文件 id，
+    供前端拼九宫格封面使用；无媒体文件时为空列表。
+    cover_path 为用户自定义封面路径（优先于九宫格）；未自定义时为 None。
+    """
+    name: str
+    path: str
+    file_count: int = 0  # 直接子文件数
+    cover_file_ids: List[int] = Field(default_factory=list)
+    cover_path: Optional[str] = None  # 自定义封面路径（POSIX），优先于九宫格
+
+
 class FolderContentsDTO(BaseModel):
     """文件夹内容 DTO"""
     path: str
     files: List[FileSummaryDTO]
     total: int
     has_more: bool
+    dirs: List[ChildDirDTO] = Field(default_factory=list)  # explorer 模式的子目录（include_dirs=true 时返回）
+
+
+class FolderCoverRequestDTO(BaseModel):
+    """设置目录封面请求 DTO"""
+    folder_path: str  # 目标目录路径（POSIX 形式）
+    cover_path: str   # 作为封面的图片/视频路径（POSIX 形式）
+    workspace: Optional[str] = None  # 所属工作区根，便于按工作区清理
+
+
+class FolderCoverClearRequestDTO(BaseModel):
+    """清除目录封面请求 DTO"""
+    folder_path: str  # 目标目录路径（POSIX 形式）
 
 
 class FolderCreateRequestDTO(BaseModel):

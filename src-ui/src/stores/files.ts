@@ -1,6 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
-import type { FileSummary, SearchQuery } from '../types'
+import type { FileSummary, SearchQuery, ChildDir } from '../types'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 import { useTagStore } from './tags'
@@ -9,7 +9,13 @@ import { useAppStore } from './app'
 // 视图偏好持久化（全局，不按工作区隔离）
 const VIEW_PREF_KEY = 'taghive:view-prefs'
 type ViewMode = 'grid' | 'list'
-type BrowseMode = 'folder' | 'all' | 'tree'
+type BrowseMode = 'folder' | 'all' | 'tree' | 'explorer'
+
+// 是否为「按目录层级浏览」的模式（folder/tree/explorer）——这些模式共享
+// currentFolderPath 层级记忆与 loadFolderContents 加载逻辑，区别于 all（全部文件）。
+function isFolderScoped(mode: BrowseMode): boolean {
+  return mode === 'folder' || mode === 'tree' || mode === 'explorer'
+}
 interface ViewPrefs {
   viewMode: ViewMode
   browseMode: BrowseMode
@@ -31,7 +37,7 @@ function loadViewPrefs(): ViewPrefs {
     const parsed = JSON.parse(raw) as Partial<ViewPrefs>
     return {
       viewMode: parsed.viewMode === 'list' ? 'list' : 'grid',
-      browseMode: parsed.browseMode === 'folder' || parsed.browseMode === 'tree'
+      browseMode: parsed.browseMode === 'folder' || parsed.browseMode === 'tree' || parsed.browseMode === 'explorer'
         ? parsed.browseMode
         : 'all',
       gridItemSize: typeof parsed.gridItemSize === 'number'
@@ -85,6 +91,8 @@ export const useFileStore = defineStore('files', () => {
   // 文件夹浏览模式状态
   const currentFolderPath = ref<string>('')
   const folderContentsOffset = ref(0)
+  // explorer 浏览模式：当前层的子目录（仅 explorer 模式加载，其他模式恒为空）
+  const childDirs = ref<ChildDir[]>([])
 
   // 每个工作区最后浏览到的文件夹路径（会话内记忆）。
   // 用于切换工作区时恢复到上次浏览的层级，而非每次都回到根目录。
@@ -112,26 +120,35 @@ export const useFileStore = defineStore('files', () => {
     if (!append) {
       folderContentsOffset.value = 0
       files.value = []
+      childDirs.value = []
     }
-    
+
     currentFolderPath.value = folderPath
     isLoading.value = true
-    
+
+    // 仅 explorer 模式请求子目录，且只在首页请求（分页加载更多文件时无需重复）
+    const wantDirs = browseMode.value === 'explorer' && !append
+
     try {
       const result = await folderApi.getContents(
         folderPath,
         folderContentsOffset.value,
         500,
         sortBy.value,
-        sortDesc.value
+        sortDesc.value,
+        wantDirs
       )
-      
+
       if (append) {
         files.value.push(...result.files)
       } else {
         files.value = result.files
       }
-      
+
+      if (wantDirs) {
+        childDirs.value = result.dirs ?? []
+      }
+
       totalCount.value = result.total
       hasMore.value = result.has_more
     } catch (error) {
@@ -183,6 +200,11 @@ export const useFileStore = defineStore('files', () => {
     if (query) {
       searchQuery.value = query
     }
+
+    // search 语义为跨层级文件检索（含标签过滤），不属于目录层级浏览，
+    // 故清空 explorer 的子目录卡片——与树窗/蜂巢过滤态只显示文件保持一致。
+    // 取消过滤后经 reloadCurrentView → loadFolderContents 重新加载目录卡片。
+    childDirs.value = []
 
     isLoading.value = true
     try {
@@ -282,8 +304,8 @@ export const useFileStore = defineStore('files', () => {
   }
 
   function toggleBrowseMode() {
-    // 三态循环：全部文件 → 蜂巢导航 → 文件夹树窗 → 全部文件
-    const order: BrowseMode[] = ['all', 'folder', 'tree']
+    // 四态循环：全部文件 → 蜂巢导航 → 文件夹树窗 → 资源管理器 → 全部文件
+    const order: BrowseMode[] = ['all', 'folder', 'tree', 'explorer']
     const i = order.indexOf(browseMode.value)
     browseMode.value = order[(i + 1) % order.length]
   }
@@ -306,7 +328,7 @@ export const useFileStore = defineStore('files', () => {
   // 使得标签过滤范围始终与当前浏览模式/层级保持同步。
   function resolveTagFilterRoot(): string | undefined {
     const appStore = useAppStore()
-    if ((browseMode.value === 'folder' || browseMode.value === 'tree') && currentFolderPath.value) {
+    if (isFolderScoped(browseMode.value) && currentFolderPath.value) {
       return currentFolderPath.value
     }
     return appStore.currentWorkspace || undefined
@@ -346,7 +368,7 @@ export const useFileStore = defineStore('files', () => {
       return
     }
 
-    if ((browseMode.value === 'folder' || browseMode.value === 'tree') && currentFolderPath.value) {
+    if (isFolderScoped(browseMode.value) && currentFolderPath.value) {
       await loadFolderContents(currentFolderPath.value)
       return
     }
@@ -482,6 +504,7 @@ export const useFileStore = defineStore('files', () => {
     sortBy,
     sortDesc,
     currentFolderPath,
+    childDirs,
     selectedFiles,
     activeFile,
     selectedCount,

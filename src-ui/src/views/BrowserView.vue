@@ -204,6 +204,91 @@
       </div>
     </template>
 
+    <!-- 资源管理器模式：无侧栏，主区面包屑 + 目录卡片 + 文件，双击目录进入下一层 -->
+    <template v-else-if="fileStore.browseMode === 'explorer' && (appStore.currentWorkspace || appStore.isGlobalView)">
+      <div class="explorer-container">
+        <!-- 面包屑导航 -->
+        <div class="explorer-breadcrumb">
+          <span
+            v-for="(seg, idx) in explorerCrumbs"
+            :key="seg.path"
+            class="crumb"
+          >
+            <span
+              class="crumb-label"
+              :class="{ 'is-current': idx === explorerCrumbs.length - 1 }"
+              @click="idx < explorerCrumbs.length - 1 && handleExplorerCrumbClick(seg.path)"
+            >{{ seg.name }}</span>
+            <el-icon v-if="idx < explorerCrumbs.length - 1" class="crumb-sep"><ArrowRight /></el-icon>
+          </span>
+        </div>
+
+        <!-- 滚动内容区：目录卡片网格 + 文件区 -->
+        <div ref="scrollerRef" class="explorer-scroll" @mousedown="handleGridMouseDown">
+          <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
+
+          <!-- 子目录网格 -->
+          <div v-if="fileStore.childDirs.length" class="explorer-grid" :style="explorerGridStyle">
+            <div
+              v-for="dir in fileStore.childDirs"
+              :key="dir.path"
+              class="explorer-dir-cell"
+            >
+              <FolderCard
+                :dir="dir"
+                :size="gridItemWidth"
+                @open="handleExplorerOpenDir"
+                @contextmenu="handleDirContextMenu"
+              />
+            </div>
+          </div>
+
+          <!-- 分隔标题：当同时存在目录与文件时 -->
+          <div v-if="fileStore.childDirs.length && fileStore.files.length" class="explorer-divider">
+            文件
+          </div>
+
+          <!-- 当前目录的文件（非虚拟化，随外层滚动） -->
+          <div v-if="fileStore.files.length" class="explorer-grid" :style="explorerGridStyle">
+            <div
+              v-for="file in fileStore.files"
+              :key="file.id"
+              class="explorer-file-cell"
+              :data-file-id="file.id"
+            >
+              <FileCard
+                :file="file"
+                :selected="fileStore.selectedIds.has(file.id)"
+                :multi-select="multiSelectMode"
+                :size="gridItemWidth"
+                @click="handleFileClick(file.id, $event)"
+                @checkbox-click="handleCheckboxClick"
+                @dblclick="handleFileDblClick(file)"
+                @contextmenu.prevent="handleFileContextMenu(file, $event)"
+              />
+            </div>
+          </div>
+
+          <!-- 空目录提示 -->
+          <div
+            v-if="!fileStore.childDirs.length && !fileStore.files.length && !fileStore.isLoading"
+            class="explorer-empty"
+          >
+            <el-icon :size="40"><FolderOpened /></el-icon>
+            <span>此文件夹为空</span>
+          </div>
+
+          <!-- 触底加载更多文件 -->
+          <div v-if="fileStore.hasMore" ref="explorerSentinel" class="explorer-sentinel">
+            <template v-if="fileStore.isLoading">
+              <el-icon class="loading-icon"><Loading /></el-icon>
+              <span>加载中...</span>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- 文件列表（all 模式） -->
     <template v-else>
       <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
@@ -283,6 +368,59 @@
         </div>
       </div>
     </el-popover>
+
+    <!-- explorer 目录右键菜单 -->
+    <el-popover
+      :visible="dirContextMenuVisible"
+      :virtual-ref="dirContextMenuTrigger"
+      virtual-triggering
+      trigger="contextmenu"
+      placement="bottom-start"
+      :width="180"
+      popper-class="context-menu-popover"
+      @update:visible="(val: boolean) => { if (!val) dirContextMenuVisible = false }"
+    >
+      <div class="context-menu">
+        <div class="context-menu-item" @click="chooseCoverFromFolder()">
+          <el-icon><Picture /></el-icon>
+          <span>用目录内文件设为封面</span>
+        </div>
+        <div class="context-menu-item" @click="chooseCoverFromLocal()">
+          <el-icon><FolderOpened /></el-icon>
+          <span>选择本地图片设为封面</span>
+        </div>
+        <div
+          v-if="contextMenuTargetDir?.cover_path"
+          class="context-menu-item"
+          @click="clearDirCover()"
+        >
+          <el-icon><Delete /></el-icon>
+          <span>清除自定义封面</span>
+        </div>
+      </div>
+    </el-popover>
+
+    <!-- 目录封面选择器：从目录内媒体文件中挑选 -->
+    <el-dialog
+      v-model="showCoverPicker"
+      :title="coverPickerDir ? `选择「${coverPickerDir.name}」的封面` : '选择封面'"
+      width="640px"
+      append-to-body
+      destroy-on-close
+    >
+      <div class="cover-picker-grid">
+        <div
+          v-for="file in coverPickerFiles"
+          :key="file.id"
+          class="cover-picker-cell"
+          :title="file.name"
+          @click="selectCoverFile(file)"
+        >
+          <img :src="coverPickerThumb(file.id)" loading="lazy" draggable="false" />
+          <span class="cover-picker-name">{{ file.name }}</span>
+        </div>
+      </div>
+    </el-dialog>
 
     <!-- 重命名对话框 -->
     <el-dialog
@@ -555,16 +693,19 @@ import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import FileScrollerArea from '../components/FileScrollerArea.vue'
+import FileCard from '../components/FileCard.vue'
+import FolderCard from '../components/FolderCard.vue'
 import HoneycombTree from '../components/HoneycombTree.vue'
 import FolderTreePanel from '../components/FolderTreePanel.vue'
 import EmptyState from '../components/EmptyState.vue'
-import type { FileSummary, FolderNode } from '../types'
+import type { FileSummary, FolderNode, ChildDir } from '../types'
 import { open } from '@tauri-apps/plugin-shell'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
+import { thumbnailApi } from '../api/thumbnails'
 import { wsClient } from '../api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search } from '@element-plus/icons-vue'
+import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search, ArrowRight, Picture } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
 import { setItemDragData, clearItemDragState, getItemDrag } from '../utils/dragItems'
@@ -576,6 +717,9 @@ const fileStore = useFileStore()
 const tagStore = useTagStore()
 
 const scrollerRef = ref<HTMLElement | null>(null)
+// explorer 模式触底加载哨兵元素（普通滚动容器，无虚拟滚动的 scroll-end 事件）
+const explorerSentinel = ref<HTMLElement | null>(null)
+let explorerObserver: IntersectionObserver | null = null
 const containerWidth = ref(0)
 const activeDropFileId = ref<number | null>(null)
 const dragTagMeta = ref<TagDragMeta | null>(null)
@@ -597,6 +741,16 @@ const fileContextMenuVisible = ref(false)
 const fileContextMenuTrigger = ref<HTMLElement>()
 const contextMenuTargetIds = ref<number[]>([])
 const contextMenuTargetFile = ref<FileSummary | null>(null)
+
+// explorer 目录右键菜单状态（复用同一锚点）
+const dirContextMenuVisible = ref(false)
+const dirContextMenuTrigger = ref<HTMLElement>()
+const contextMenuTargetDir = ref<ChildDir | null>(null)
+
+// 目录封面选择器（从目录内媒体文件中挑选）
+const showCoverPicker = ref(false)
+const coverPickerDir = ref<ChildDir | null>(null)
+const coverPickerFiles = ref<FileSummary[]>([])
 
 // 右键菜单锚点（单例，始终存在于 DOM，避免删除时闪烁）
 const fileContextMenuAnchor = (() => {
@@ -628,7 +782,11 @@ const fileOpFolderSource = ref<string | null>(null)
 const fileOpFolderSourceWs = ref<string>('')
 
 const currentImportDirectory = computed(() => {
-  if (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') {
+  if (
+    fileStore.browseMode === 'folder' ||
+    fileStore.browseMode === 'tree' ||
+    fileStore.browseMode === 'explorer'
+  ) {
     return fileStore.currentFolderPath || appStore.currentWorkspace
   }
   return appStore.currentWorkspace
@@ -820,7 +978,7 @@ function handleLoadMore() {
   lastLoadMoreAt = now
 
   const inFolderContext =
-    (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') &&
+    (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') &&
     !tagStore.hasSelection &&
     !!fileStore.currentFolderPath
 
@@ -1039,8 +1197,8 @@ onMounted(() => {
   }
   
   if (appStore.currentWorkspace) {
-    if (fileStore.browseMode === 'tree') {
-      // 树窗模式：FolderTreePanel 不自动 emit，初始挂载时按记忆层级加载文件列表
+    if (fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') {
+      // 树窗/资源管理器模式：无侧栏自动 emit，初始挂载时按记忆层级加载文件列表
       const ws = appStore.currentWorkspace
       const remembered = fileStore.getRememberedFolder(ws)
       const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
@@ -1066,6 +1224,12 @@ onUnmounted(() => {
     resizeObserver.disconnect()
     resizeObserver = null
   }
+
+  // 移除 explorer 触底加载 observer
+  if (explorerObserver) {
+    explorerObserver.disconnect()
+    explorerObserver = null
+  }
   
   if (unlistenNativeDragDrop) {
     unlistenNativeDragDrop()
@@ -1089,8 +1253,8 @@ watch(() => appStore.currentWorkspace, (newPath) => {
     if (fileStore.browseMode === 'folder') {
       // 文件夹浏览模式：由 HoneycombTree 加载完目录树后 emit 记忆层级，
       // 经 handleFolderSelect 恢复文件列表，这里不重复加载，避免闪烁与竞争。
-    } else if (fileStore.browseMode === 'tree') {
-      // 树窗模式：FolderTreePanel 不自动 emit，这里恢复该工作区上次浏览的层级
+    } else if (fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') {
+      // 树窗/资源管理器模式：无侧栏自动 emit，这里恢复该工作区上次浏览的层级
       const remembered = fileStore.getRememberedFolder(newPath)
       const target = remembered && findOwnerWorkspace(remembered) === newPath ? remembered : newPath
       fileStore.loadFolderContents(target)
@@ -1105,8 +1269,8 @@ watch(() => appStore.currentWorkspace, (newPath) => {
 watch(() => fileStore.browseMode, async (newMode) => {
   if (!appStore.currentWorkspace) return
 
-  if (newMode === 'folder' || newMode === 'tree') {
-    // 切换到文件夹浏览/树窗模式：恢复该工作区上次浏览的层级
+  if (newMode === 'folder' || newMode === 'tree' || newMode === 'explorer') {
+    // 切换到文件夹浏览/树窗/资源管理器模式：恢复该工作区上次浏览的层级
     const ws = appStore.currentWorkspace
     const remembered = fileStore.getRememberedFolder(ws)
     const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
@@ -1165,7 +1329,11 @@ async function selectWorkspace() {
       const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
         ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
         // 扫描完成后刷新文件列表：保持当前浏览模式
-        if (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree') {
+        if (
+          fileStore.browseMode === 'folder' ||
+          fileStore.browseMode === 'tree' ||
+          fileStore.browseMode === 'explorer'
+        ) {
           const targetPath = fileStore.currentFolderPath || path
           fileStore.loadFolderContents(targetPath)
         } else {
@@ -1250,10 +1418,16 @@ function handleGridMouseDown(e: MouseEvent) {
   // 只响应左键在空白处的拖拽（不是在卡片上）
   if (e.button !== 0) return
   const target = e.target as HTMLElement
-  if (target.closest('.file-card') || target.closest('.select-checkbox')) return
-  // 点击/拖动滚动条时不触发框选、也不清除已有多选：滚动条落在虚拟滚动器
+  if (
+    target.closest('.file-card') ||
+    target.closest('.folder-card') ||
+    target.closest('.select-checkbox')
+  ) return
+  // 点击/拖动滚动条时不触发框选、也不清除已有多选：滚动条落在滚动容器
   // 内容区（clientWidth/clientHeight，不含滚动条）之外，据此识别并跳过。
-  const scroller = target.closest<HTMLElement>('.vue-recycle-scroller')
+  const scroller =
+    target.closest<HTMLElement>('.vue-recycle-scroller') ||
+    target.closest<HTMLElement>('.explorer-scroll')
   if (scroller) {
     const sr = scroller.getBoundingClientRect()
     const onVScrollbar = e.clientX >= sr.left + scroller.clientWidth
@@ -1265,12 +1439,24 @@ function handleGridMouseDown(e: MouseEvent) {
   const container = scrollerRef.value
   if (!container) return
 
+  // 两种容器形态：
+  //   - 虚拟滚动（all/folder/tree）：container 自身不滚动，滚动发生在内部
+  //     的 .vue-recycle-scroller；命中卡片类名为 .grid-cell。
+  //   - explorer：container（.explorer-scroll）自身滚动，无虚拟滚动器；
+  //     命中卡片类名为 .explorer-file-cell。
+  const isExplorer = fileStore.browseMode === 'explorer'
+  const scrollEl = isExplorer
+    ? container
+    : container.querySelector<HTMLElement>('.vue-recycle-scroller')
+  const cellSelector = isExplorer ? '.explorer-file-cell' : '.grid-cell'
+
   // 阻止浏览器在 mousedown 上开启文本选择，避免框选时连带选中页面文字
   e.preventDefault()
 
   const rect = container.getBoundingClientRect()
-  // 框选起点以容器左上角为原点（.scroller-container 自身不滚动，滚动发生在内部
-  // 的虚拟滚动器；横向亦无滚动条，因此坐标无需叠加 scrollTop）
+  // 框选起点以容器左上角为原点（视口相对坐标）。两种容器的遮罩定位父元素
+  // 都不随内容滚动（虚拟模式=不滚动的 container；explorer=遮罩绝对定位在
+  // explorer-scroll 的 padding box，也不随 scrollTop 移动），故统一用视口相对坐标。
   const x0 = e.clientX - rect.left
   const y0 = e.clientY - rect.top
   const additive = e.ctrlKey || e.metaKey
@@ -1296,7 +1482,7 @@ function handleGridMouseDown(e: MouseEvent) {
   let lastClientX = e.clientX
   let lastClientY = e.clientY
   let autoScrollRaf = 0
-  const scrollEl = container.querySelector<HTMLElement>('.vue-recycle-scroller')
+  // scrollEl 已在上方按容器形态确定（explorer=container 自身，虚拟模式=内部滚动器）
 
   // 框选锚点固定在「内容坐标」上（复刻资源管理器）：记录按下瞬间的
   // scrollTop，命中/遮罩计算时用当前 scrollTop 反推锚点的实时视口位置。
@@ -1306,8 +1492,12 @@ function handleGridMouseDown(e: MouseEvent) {
   const scrollDelta = () => (scrollEl ? scrollEl.scrollTop - anchorScrollTop : 0)
   // 锚点当前的视口 Y（clientY 坐标系，供命中检测用）
   const anchorClientY = () => e.clientY - scrollDelta()
-  // 锚点当前相对 container 顶部的 Y（供遮罩渲染用）
+  // 锚点当前相对 container 顶部的 Y（供遮罩渲染用）：两种容器的遮罩父元素
+  // 都不随内容滚动，故统一按 scrollDelta 反推锚点的实时视口位置。
   const anchorContainerY = () => y0 - scrollDelta()
+
+  // 将鼠标视口 Y 转为遮罩渲染坐标（相对 container 顶部的视口坐标）
+  const lassoY = (clientY: number) => clientY - rect.top
 
   const stopAutoScroll = () => {
     if (autoScrollRaf) {
@@ -1366,7 +1556,7 @@ function handleGridMouseDown(e: MouseEvent) {
       // 滚动后视口内容变化，用最新鼠标位置更新框选矩形与命中判定；
       // 矩形上边界用锚点的实时 container Y（随内容一起移动）
       const cx = lastClientX - rect.left
-      const cy = lastClientY - rect.top
+      const cy = lassoY(lastClientY)
       lasso.value = { active: true, x0, y0: anchorContainerY(), x1: cx, y1: cy }
       applyHitTest(lastClientX, lastClientY)
       autoScrollRaf = requestAnimationFrame(step)
@@ -1384,7 +1574,7 @@ function handleGridMouseDown(e: MouseEvent) {
     const lx1 = Math.max(e.clientX, clientX)
     const ly1 = Math.max(ay, clientY)
 
-    const cells = container.querySelectorAll<HTMLElement>('.grid-cell')
+    const cells = container.querySelectorAll<HTMLElement>(cellSelector)
     cells.forEach(cell => {
       const cr = cell.getBoundingClientRect()
       const hit = cr.left < lx1 && cr.right > lx0 && cr.top < ly1 && cr.bottom > ly0
@@ -1398,7 +1588,7 @@ function handleGridMouseDown(e: MouseEvent) {
 
   const onMove = (ev: MouseEvent) => {
     const x1 = ev.clientX - rect.left
-    const y1 = ev.clientY - rect.top
+    const y1 = lassoY(ev.clientY)
     const moved = Math.abs(x1 - x0) > 4 || Math.abs(y1 - y0) > 4
     lasso.value = { active: moved, x0, y0: anchorContainerY(), x1, y1 }
 
@@ -1461,6 +1651,83 @@ async function handleFolderSelect(folderPath: string, _wsPath?: string) {
   tagStore.clearSelection()
   await fileStore.loadFolderContents(folderPath)
 }
+
+// explorer 模式：双击目录卡片进入该子目录
+function handleExplorerOpenDir(dir: ChildDir) {
+  // 记住当前层级的滚动位置，返回上级时恢复
+  saveExplorerScroll()
+  explorerNavigate(dir.path)
+}
+
+// explorer 各层级的滚动位置记忆（路径 → scrollTop）
+const explorerScrollMemory = new Map<string, number>()
+
+// 记录当前 explorer 层级的滚动位置
+function saveExplorerScroll() {
+  const el = scrollerRef.value
+  const cur = fileStore.currentFolderPath
+  if (el && cur) explorerScrollMemory.set(cur, el.scrollTop)
+}
+
+// explorer 导航到目标层级：加载完成后恢复该层级上次的滚动位置（无记忆则置顶）
+async function explorerNavigate(folderPath: string) {
+  await handleFolderSelect(folderPath)
+  await nextTick()
+  const el = scrollerRef.value
+  if (el) el.scrollTop = explorerScrollMemory.get(folderPath) ?? 0
+}
+
+// explorer 面包屑点击：返回上级层级，恢复其上次浏览位置
+function handleExplorerCrumbClick(folderPath: string) {
+  saveExplorerScroll()
+  explorerNavigate(folderPath)
+}
+
+// explorer 触底加载：监听哨兵元素进入视口，出现即加载下一页文件
+watch(explorerSentinel, (el) => {
+  explorerObserver?.disconnect()
+  explorerObserver = null
+  if (!el || typeof IntersectionObserver === 'undefined') return
+  explorerObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) handleLoadMore()
+    },
+    { root: scrollerRef.value, rootMargin: '200px' }
+  )
+  explorerObserver.observe(el)
+})
+
+// explorer 网格布局：按卡片宽度自适应列数（CSS grid 自动换行）
+const explorerGridStyle = computed(() => ({
+  display: 'grid',
+  gridTemplateColumns: `repeat(auto-fill, ${gridItemWidth.value}px)`,
+  gap: '16px',
+  justifyContent: 'center',
+}))
+
+// explorer 面包屑：从工作区根到当前目录的层级链
+const explorerCrumbs = computed<{ name: string; path: string }[]>(() => {
+  const current = fileStore.currentFolderPath
+  const ws = findOwnerWorkspace(current) || appStore.currentWorkspace
+  if (!ws) return []
+  const wsPosix = ws.replace(/\\/g, '/').replace(/\/$/, '')
+  const curPosix = (current || wsPosix).replace(/\\/g, '/').replace(/\/$/, '')
+
+  // 工作区根作为首个面包屑（显示工作区文件夹名）
+  const wsName = wsPosix.split('/').filter(Boolean).pop() || wsPosix
+  const crumbs = [{ name: wsName, path: wsPosix }]
+
+  // 当前目录在工作区根之下时，逐层追加
+  if (curPosix !== wsPosix && curPosix.startsWith(wsPosix + '/')) {
+    const rest = curPosix.slice(wsPosix.length + 1).split('/')
+    let acc = wsPosix
+    for (const seg of rest) {
+      acc = `${acc}/${seg}`
+      crumbs.push({ name: seg, path: acc })
+    }
+  }
+  return crumbs
+})
 
 // 根据文件夹路径反查所属工作区根
 function findOwnerWorkspace(folderPath: string): string | undefined {
@@ -1562,6 +1829,94 @@ function handleFileContextMenu(file: FileSummary, event: MouseEvent) {
 
 function onFileContextMenuVisibleChange(val: boolean) {
   if (!val) fileContextMenuVisible.value = false
+}
+
+// ===== explorer 目录右键菜单 =====
+
+function handleDirContextMenu(dir: ChildDir, event: MouseEvent) {
+  window.dispatchEvent(new Event('close-context-menus'))
+  contextMenuTargetDir.value = dir
+  fileContextMenuAnchor.style.left = `${event.clientX}px`
+  fileContextMenuAnchor.style.top = `${event.clientY}px`
+  dirContextMenuTrigger.value = fileContextMenuAnchor
+  dirContextMenuVisible.value = true
+}
+
+// 应用封面并刷新当前 explorer 视图
+async function applyDirCover(folderPath: string, coverPath: string) {
+  try {
+    await folderApi.setCover(folderPath, coverPath, appStore.currentWorkspace || undefined)
+    ElMessage.success('已设置目录封面')
+    if (fileStore.currentFolderPath) {
+      await fileStore.loadFolderContents(fileStore.currentFolderPath)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '设置封面失败')
+  }
+}
+
+// 从目录内文件中选择封面：拉取该目录的媒体文件供挑选
+async function chooseCoverFromFolder() {
+  const dir = contextMenuTargetDir.value
+  dirContextMenuVisible.value = false
+  if (!dir) return
+  try {
+    // 拉取该目录的直接子文件，过滤出可缩略图的图片/视频
+    const result = await folderApi.getContents(dir.path, 0, 500, 'name', false, false)
+    const media = result.files.filter((f) => f.type === 'image' || f.type === 'video')
+    if (!media.length) {
+      ElMessage.warning('该目录内没有可作为封面的图片或视频')
+      return
+    }
+    coverPickerDir.value = dir
+    coverPickerFiles.value = media
+    showCoverPicker.value = true
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '读取目录内容失败')
+  }
+}
+
+// 从选择器中选定某个文件作为封面
+async function selectCoverFile(file: FileSummary) {
+  const dir = coverPickerDir.value
+  showCoverPicker.value = false
+  if (!dir) return
+  await applyDirCover(dir.path, file.path)
+}
+
+// 封面选择器缩略图 URL
+function coverPickerThumb(fileId: number): string {
+  return thumbnailApi.getThumbnailUrl(fileId, 'small')
+}
+
+// 选择本地任意图片作为封面（Tauri 文件对话框）
+async function chooseCoverFromLocal() {
+  const dir = contextMenuTargetDir.value
+  dirContextMenuVisible.value = false
+  if (!dir) return
+  try {
+    const selected = await invoke<string | null>('open_file_dialog', { extension: null })
+    if (!selected) return
+    await applyDirCover(dir.path, selected.replace(/\\/g, '/'))
+  } catch (error: any) {
+    ElMessage.error('选择文件失败')
+  }
+}
+
+// 清除自定义封面
+async function clearDirCover() {
+  const dir = contextMenuTargetDir.value
+  dirContextMenuVisible.value = false
+  if (!dir) return
+  try {
+    await folderApi.clearCover(dir.path)
+    ElMessage.success('已清除自定义封面')
+    if (fileStore.currentFolderPath) {
+      await fileStore.loadFolderContents(fileStore.currentFolderPath)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '清除封面失败')
+  }
 }
 
 function closeFileContextMenu() {
@@ -1926,6 +2281,141 @@ async function handleExternalDrop(event: DragEvent) {
   width: 100%;
   position: relative;
 }
+
+/* ===== explorer（资源管理器）模式 ===== */
+.explorer-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.explorer-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.explorer-breadcrumb .crumb {
+  display: inline-flex;
+  align-items: center;
+}
+
+.crumb-label {
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-label:not(.is-current):hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-accent);
+}
+
+.crumb-label.is-current {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  cursor: default;
+}
+
+.crumb-sep {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  margin: 0 2px;
+}
+
+.explorer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  padding: 16px;
+}
+
+.explorer-divider {
+  margin: 20px 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.5px;
+}
+
+.explorer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 240px;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+}
+
+.explorer-sentinel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  margin-top: 12px;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+/* 目录封面选择器网格 */
+.cover-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 120px);
+  gap: 12px;
+  justify-content: center;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.cover-picker-cell {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.cover-picker-cell:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+}
+
+.cover-picker-cell img {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  display: block;
+  background: var(--color-bg-secondary);
+}
+
+.cover-picker-name {
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 .scroller {
   height: 100%;

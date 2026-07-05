@@ -20,7 +20,7 @@ from ..core.cursor_pagination import (
     paginate_with_offset,
     OffsetPage,
 )
-from .models import File, FileTag, FileSearch, Tag
+from .models import File, FileTag, FileSearch, Tag, FolderCover
 from .session import NATURAL_COLLATION
 
 # 批量操作默认批次大小
@@ -727,6 +727,64 @@ class Repo:
         # 缓存结果
         cache.set(cache_key, tags, ttl)
         return tags
+
+    def set_folder_cover(
+        self, folder_path: str, cover_path: str, workspace: str | None = None
+    ) -> None:
+        """设置（或更新）目录的自定义封面
+
+        Args:
+            folder_path: 目录路径（POSIX 形式）
+            cover_path: 作为封面的图片/视频路径（POSIX 形式）
+            workspace: 所属工作区根路径，便于按工作区清理
+        """
+        stmt = sqlite_insert(FolderCover).values(
+            folder_path=folder_path,
+            cover_path=cover_path,
+            workspace=workspace,
+            updated_at=datetime.utcnow(),
+        )
+        # 主键冲突时更新封面路径（UPSERT）
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[FolderCover.folder_path],
+            set_={
+                "cover_path": cover_path,
+                "workspace": workspace,
+                "updated_at": datetime.utcnow(),
+            },
+        )
+        self.session.execute(stmt)
+        self.session.commit()
+
+    def clear_folder_cover(self, folder_path: str) -> None:
+        """清除目录的自定义封面（恢复为自动九宫格）
+
+        Args:
+            folder_path: 目录路径（POSIX 形式）
+        """
+        self.session.execute(
+            delete(FolderCover).where(FolderCover.folder_path == folder_path)
+        )
+        self.session.commit()
+
+    def get_folder_covers(self, folder_paths: Iterable[str]) -> dict[str, str]:
+        """批量获取多个目录的自定义封面路径
+
+        Args:
+            folder_paths: 目录路径列表（POSIX 形式）
+
+        Returns:
+            {目录路径: 封面路径} 映射；未设置封面的目录不在结果中
+        """
+        paths = list(folder_paths)
+        if not paths:
+            return {}
+        rows = self.session.execute(
+            select(FolderCover.folder_path, FolderCover.cover_path).where(
+                FolderCover.folder_path.in_(paths)
+            )
+        ).all()
+        return {fp: cp for fp, cp in rows}
 
     def get_folder_tree_cached(self, root: str, ttl: int = 300) -> dict:
         """获取文件夹树（带缓存）

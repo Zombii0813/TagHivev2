@@ -70,10 +70,12 @@ import { Document, VideoCamera, Headset, Folder, Picture } from '@element-plus/i
 import { useTagStore } from '../stores/tags'
 import { thumbnailApi } from '../api/thumbnails'
 import { wsClient } from '../api/websocket'
-import type { FileItem, ThumbnailReadyEvent } from '../types'
+import type { FileSummary, ThumbnailReadyEvent } from '../types'
 
 const props = defineProps<{
-  file: FileItem
+  // 仅使用 FileSummary 字段（id/name/path/type/size/tag_ids）；
+  // 列表与 explorer 网格传入的都是 FileSummary。
+  file: FileSummary
   selected: boolean
   multiSelect?: boolean
   size?: number

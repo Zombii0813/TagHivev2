@@ -101,6 +101,26 @@ class FileTag(Base):
     )
 
 
+class FolderCover(Base):
+    """目录封面模型 - 存储 explorer 浏览模式下用户自定义的目录封面
+
+    目录本身不是实体（目录树由文件 path 派生），故封面以目录路径为主键单独存储。
+    cover_path 指向作为封面的图片/视频路径（可为该目录内的文件，也可为任意本地图片）；
+    缩略图按路径生成，复用现有缩略图服务。
+    """
+
+    __tablename__ = "folder_covers"
+
+    folder_path = Column(Text, primary_key=True)  # 目录路径（POSIX 形式）
+    cover_path = Column(Text, nullable=False)  # 封面图片/视频路径（POSIX 形式）
+    workspace = Column(Text, nullable=True)  # 所属工作区根，便于按工作区批量清理
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_folder_covers_workspace", "workspace"),  # 按工作区筛选/清理
+    )
+
+
 class FileSearch(Base):
     """FTS5 全文搜索虚拟表 - 用于高性能文件名搜索
     

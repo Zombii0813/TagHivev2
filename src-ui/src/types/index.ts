@@ -176,11 +176,21 @@ export interface FolderTree {
   root_file_count: number
 }
 
+// explorer 浏览模式的子目录：cover_file_ids 用于拼九宫格封面
+export interface ChildDir {
+  name: string
+  path: string
+  file_count: number
+  cover_file_ids: number[]
+  cover_path?: string | null  // 自定义封面路径，优先于九宫格
+}
+
 export interface FolderContents {
   path: string
   files: FileSummary[]
   total: number
   has_more: boolean
+  dirs: ChildDir[]
 }
 
 export interface CreateFolderResult {
