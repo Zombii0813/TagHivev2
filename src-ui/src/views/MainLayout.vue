@@ -150,14 +150,34 @@
             </template>
           </el-dropdown>
 
-          <!-- 浏览模式切换：全部 → 蜂巢 → 树窗 循环 -->
-          <el-button
-            :class="['browse-mode-btn', { active: fileStore.browseMode !== 'all' }]"
-            :icon="browseModeIcon"
-            circle
-            @click="toggleBrowseMode"
-            :title="browseModeTitle"
-          />
+          <!-- 浏览模式切换：点击展开下拉，横向图标选择 -->
+          <el-dropdown
+            ref="browseModeDropdownRef"
+            trigger="click"
+            popper-class="browse-mode-dropdown"
+          >
+            <el-button
+              :class="['browse-mode-btn', { active: fileStore.browseMode !== 'all' }]"
+              :icon="browseModeIcon"
+              circle
+              :title="`浏览模式：${currentBrowseModeLabel}`"
+            />
+            <template #dropdown>
+              <div class="browse-mode-options">
+                <button
+                  v-for="opt in browseModeOptions"
+                  :key="opt.value"
+                  type="button"
+                  :class="['browse-mode-option', { active: fileStore.browseMode === opt.value }]"
+                  :title="opt.label"
+                  @click="handleSelectBrowseMode(opt.value)"
+                >
+                  <el-icon :size="18"><component :is="opt.icon" /></el-icon>
+                  <span class="browse-mode-option-label">{{ opt.label }}</span>
+                </button>
+              </div>
+            </template>
+          </el-dropdown>
 
           <!-- 视图模式切换 -->
           <el-button-group class="view-mode-group">
@@ -332,7 +352,9 @@ import {
   Refresh,
   Folder,
   FolderOpened,
-  Files,
+  Menu,
+  Connection,
+  Operation,
   ScaleToOriginal,
   MoreFilled,
   Plus,
@@ -351,7 +373,7 @@ import AppMenuBar from '../components/AppMenuBar.vue'
 import LogViewer from '../components/LogViewer.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import TagTransferDialog from './TagTransferDialog.vue'
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
@@ -771,29 +793,34 @@ const truncateFileName = (path: string, maxLength: number = 30): string => {
   return fileName.substring(0, maxLength - 3) + '...'
 }
 
-// 切换浏览模式：全部 → 蜂巢 → 树窗 循环（循环逻辑在 store）
-const toggleBrowseMode = () => {
-  fileStore.toggleBrowseMode()
-}
+// 浏览模式选项：下拉横向图标选择（value 与 store 的 BrowseMode 一致）
+const browseModeOptions = [
+  { value: 'all', label: '全部文件', icon: markRaw(Menu) },
+  { value: 'folder', label: '蜂巢导航', icon: markRaw(Connection) },
+  { value: 'tree', label: '文件夹树窗', icon: markRaw(Operation) },
+  { value: 'explorer', label: '资源管理器', icon: markRaw(FolderOpened) },
+] as const
 
-// 浏览模式按钮图标：各模式用不同图标区分导航形态
+// 当前模式对应的触发按钮图标
 const browseModeIcon = computed(() => {
-  switch (fileStore.browseMode) {
-    case 'tree': return Files
-    case 'explorer': return FolderOpened
-    default: return Folder
-  }
+  const opt = browseModeOptions.find((o) => o.value === fileStore.browseMode)
+  return opt ? opt.icon : Menu
 })
 
-// 浏览模式按钮提示：指向「下一个」将要切换到的模式
-const browseModeTitle = computed(() => {
-  switch (fileStore.browseMode) {
-    case 'all': return '切换到蜂巢导航'
-    case 'folder': return '切换到文件夹树窗'
-    case 'tree': return '切换到资源管理器'
-    default: return '切换到全部文件'
-  }
+// 当前模式名称（触发按钮 tooltip 用）
+const currentBrowseModeLabel = computed(() => {
+  const opt = browseModeOptions.find((o) => o.value === fileStore.browseMode)
+  return opt ? opt.label : '全部文件'
 })
+
+// 浏览模式下拉引用（选中后手动收起）
+const browseModeDropdownRef = ref()
+
+// 选择浏览模式并收起下拉
+function handleSelectBrowseMode(mode: typeof browseModeOptions[number]['value']) {
+  fileStore.setBrowseMode(mode)
+  browseModeDropdownRef.value?.handleClose?.()
+}
 
 // 折叠状态下点击标签图标：切换选中并触发搜索
 function handleCollapsedTagClick(tagId: number) {
@@ -1389,5 +1416,51 @@ function handleCollapsedTagClick(tagId: number) {
   .scan-file {
     display: none;
   }
+}
+</style>
+
+<!-- 浏览模式下拉：teleport 到 body，需非 scoped 全局样式 -->
+<style>
+.browse-mode-dropdown .el-dropdown-menu {
+  padding: 6px !important;
+}
+
+.browse-mode-options {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.browse-mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 72px;
+  padding: 10px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.browse-mode-option:hover {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.browse-mode-option.active {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.browse-mode-option-label {
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 </style>
