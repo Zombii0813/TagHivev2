@@ -41,19 +41,27 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 
 - Node.js 20+
 - Python 3.12+
-- Rust 1.75+
 - [uv](https://docs.astral.sh/uv/)（Python 包管理器）
+- Tauri CLI 2.x
 
 ### 安装依赖
 
-```bash
+```powershell
 # 安装前端依赖
 cd src-ui
-npm install
+npm ci
 
 # 安装 Python 依赖（使用 uv 管理，自动创建 src-python/.venv）
 cd ../src-python
-uv sync
+uv sync --python 3.12
+
+# 安装 Tauri CLI 2
+cd ..
+cargo install tauri-cli --version "^2.0.0" --locked
+cargo tauri --version
+
+# 验证 Tauri 开发模式
+cargo tauri dev
 ```
 
 ## 开发模式运行
