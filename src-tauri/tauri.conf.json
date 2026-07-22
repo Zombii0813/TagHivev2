@@ -4,8 +4,8 @@
   "version": "0.8.0",
   "identifier": "com.taghive.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../src-ui" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../src-ui" },
     "devUrl": "http://localhost:5173",
     "frontendDist": "../src-ui/dist"
   },
