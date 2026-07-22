@@ -146,13 +146,29 @@ Python Sidecar 默认运行在 `http://127.0.0.1:8721`
 
 ## 构建生产版本
 
-### 独立安装包（推荐）
+### 一键构建（推荐）
 
-独立安装包包含所有依赖，无需安装 Python 环境即可运行：
+`scripts/build.py` 把完整生产流程串成一步：环境检查 → 打包 Python Sidecar
+→ 前端依赖 → `cargo tauri build`（自动构建前端并打出安装包）→ 汇总产物。
+
+```bash
+# 项目根目录执行（--project 指定 Python 环境但不切换工作目录）
+uv run --project src-python python scripts/build.py
+```
+
+常用选项：
+
+- `--skip-sidecar`：跳过 Sidecar 打包，复用已有 `src-tauri/resources/taghive-sidecar`
+- `--npm-install`：强制执行 `npm install`（默认仅在缺 `node_modules` 时执行）
+- `--skip-tauri`：只打 Sidecar，不跑 `cargo tauri build`（调试用）
+
+### 分步构建
+
+如需手动控制各步骤：
 
 ```bash
 # 1. 打包 Python Sidecar
-uv run scripts/build-sidecar.py
+uv run --project src-python python scripts/build-sidecar.py
 
 # 2. 构建 Tauri 应用，根目录下运行即可
 cargo tauri build
@@ -162,9 +178,9 @@ cargo tauri build
 
 ### 各平台输出
 
-- **Windows**:
-  - `TagHive_0.0.1_x64_en-US.msi` - MSI 安装程序
-  - `TagHive_0.0.1_x64-setup.exe` - NSIS 安装程序
+- **Windows**: `TagHive_<version>_x64-setup.exe` - NSIS 安装程序
+  （打包目标默认限定为 NSIS，如需 MSI 请在 `src-tauri/tauri.conf.json`
+  的 `bundle.targets` 中加入 `"msi"`，首次会从 GitHub 下载 WiX3 工具集）
 - **macOS**: `dmg` 磁盘映像
 - **Linux**: `AppImage` 或 `deb` 包
 
