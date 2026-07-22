@@ -700,6 +700,8 @@ function refreshForWorkspace() {
   const root = appStore.currentWorkspace || undefined
   tagStore.loadTags(root)
   tagStore.clearSelection()
+  // 切换工作区时清空文件选择，避免带着上个工作区的选中项进入新工作区
+  fileStore.clearSelection()
   if (fileStore.browseMode !== 'all' && !root && !appStore.isGlobalView) {
     fileStore.setBrowseMode('all')
   }

@@ -1748,6 +1748,8 @@ function handleSwitchWorkspaceFromTree(wsPath: string) {
   appStore.switchWorkspace(wsPath)
   tagStore.loadTags(wsPath)
   tagStore.clearSelection()
+  // 切换工作区时清空文件选择，避免带着上个工作区的选中项进入新工作区
+  fileStore.clearSelection()
   fileStore.search({ root: wsPath })
 }
 
