@@ -31,7 +31,8 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 │  ├─ Socket.IO (实时通信)                 │
 │  ├─ SQLAlchemy + SQLite                │
 │  ├─ Watchdog (文件监控)                  │
-│  └─ Pillow (缩略图生成)                  │
+│  ├─ Pillow (图片缩略图生成)              │
+│  └─ PyAV (视频首帧抽取，内置 FFmpeg)     │
 └─────────────────────────────────────────┘
 ```
 
@@ -43,6 +44,8 @@ TagHive 是一个基于标签的文件管理工具，采用 Tauri + Vue3 + Pytho
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)（Python 包管理器）
 - Tauri CLI 2.x
+
+> 视频缩略图由 PyAV（内置 FFmpeg 动态库）在进程内生成，无需在运行环境单独安装 ffmpeg。
 
 ### 安装依赖
 

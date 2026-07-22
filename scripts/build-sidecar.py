@@ -172,6 +172,11 @@ def build_sidecar():
         "--hidden-import", "sqlalchemy",
         "--hidden-import", "watchdog",
         "--hidden-import", "PIL",
+        "--hidden-import", "av",
+        "--hidden-import", "app.utils.video_frame",
+        # PyAV 内置 FFmpeg 动态库，需完整收集其二进制与数据文件，
+        # 否则打包后在无系统 ffmpeg 的机器上无法解码视频帧
+        "--collect-all", "av",
         # 工作目录
         "--workpath", str(build_dir),
         "--distpath", str(dist_dir),

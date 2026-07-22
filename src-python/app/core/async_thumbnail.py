@@ -13,9 +13,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
-import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +23,8 @@ from queue import PriorityQueue, Queue
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from PIL import Image
+
+from ..utils.video_frame import extract_video_frame
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +166,7 @@ class MultiSizeThumbnailGenerator:
             
             if ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"}:
                 return self._generate_image_thumbnail(path, thumb_path, size)
-            elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+            elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp"}:
                 return self._generate_video_thumbnail(path, thumb_path, size)
             else:
                 return None
@@ -185,110 +184,75 @@ class MultiSizeThumbnailGenerator:
         """生成图片缩略图"""
         try:
             with Image.open(source) as img:
-                # 转换为 RGB
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                
-                # 获取目标尺寸
-                target_size = self.SIZES.get(size, self.SIZES["medium"])
-                target_width, target_height = target_size
-                
-                # 使用高质量缩放
-                img.thumbnail((target_width * 2, target_height * 2), Image.Resampling.LANCZOS)
-                
-                # 创建正方形画布
-                final_img = Image.new("RGB", target_size, (32, 32, 32))
-                
-                # 计算居中位置
-                img_width, img_height = img.size
-                scale = min(target_width / img_width, target_height / img_height)
-                new_width = int(img_width * scale)
-                new_height = int(img_height * scale)
-                
-                # 高质量缩放
-                if new_width != img_width or new_height != img_height:
-                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # 粘贴到居中位置
-                offset_x = (target_width - new_width) // 2
-                offset_y = (target_height - new_height) // 2
-                final_img.paste(img, (offset_x, offset_y))
-                
-                # 保存为 WebP 或 JPEG
-                if self.webp_supported:
-                    final_img.save(target, "WEBP", quality=WebPConverter.DEFAULT_QUALITY, method=6)
-                else:
-                    final_img.save(target, "JPEG", quality=WebPConverter.DEFAULT_QUALITY)
-                
-                return f"file://{target}"
-                
+                return self._fit_and_save(img, target, size)
         except Exception as e:
             logger.error(f"Failed to generate image thumbnail: {e}")
             return None
-    
+
     def _generate_video_thumbnail(
         self,
         source: Path,
         target: Path,
         size: str
     ) -> Optional[str]:
-        """生成视频缩略图"""
+        """生成视频缩略图（使用 PyAV 在进程内解码首帧，无需系统 ffmpeg）"""
         try:
-            target_size = self.SIZES.get(size, self.SIZES["medium"])
-            target_width, target_height = target_size
-            
-            # 使用 FFmpeg 提取第一帧
-            vf_filter = (
-                f"scale='iw*min({target_width}/iw\\,{target_height}/ih):"
-                f"ih*min({target_width}/iw\\,{target_height}/ih)':"
-                f"force_original_aspect_ratio=decrease,"
-                f"pad={target_width}:{target_height}:({target_width}-iw)/2:({target_height}-ih)/2:black"
-            )
-            
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-i", str(source),
-                "-ss", "00:00:01",
-                "-vframes", "1",
-                "-vf", vf_filter,
-                "-y",
-                str(target)
-            ]
-            
-            creationflags = 0
-            if sys.platform == "win32":
-                creationflags = subprocess.CREATE_NO_WINDOW
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                creationflags=creationflags
-            )
-            
-            if result.returncode == 0 and target.exists():
-                # 转换为 WebP
-                if self.webp_supported and target.suffix != ".webp":
-                    webp_target = target.with_suffix(".webp")
-                    if WebPConverter.convert_to_webp(target, webp_target):
-                        target.unlink()  # 删除原始文件
-                        return f"file://{webp_target}"
-                return f"file://{target}"
-            else:
-                logger.warning(f"FFmpeg failed: {result.stderr}")
+            frame = extract_video_frame(source)
+            if frame is None:
+                logger.warning(f"无法从视频解码首帧: {source}")
                 return None
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"FFmpeg timeout for {source}")
-            return None
-        except FileNotFoundError:
-            logger.warning("FFmpeg not found, skipping video thumbnail")
-            return None
+            return self._fit_and_save(frame, target, size)
         except Exception as e:
             logger.error(f"Failed to generate video thumbnail: {e}")
+            return None
+
+    def _fit_and_save(
+        self,
+        img: Image.Image,
+        target: Path,
+        size: str
+    ) -> Optional[str]:
+        """将 PIL 图像拟合到正方形黑色画布并保存，图片与视频缩略图共用。"""
+        try:
+            # 转换为 RGB
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # 获取目标尺寸
+            target_size = self.SIZES.get(size, self.SIZES["medium"])
+            target_width, target_height = target_size
+
+            # 使用高质量缩放
+            img.thumbnail((target_width * 2, target_height * 2), Image.Resampling.LANCZOS)
+
+            # 创建正方形画布
+            final_img = Image.new("RGB", target_size, (32, 32, 32))
+
+            # 计算居中位置
+            img_width, img_height = img.size
+            scale = min(target_width / img_width, target_height / img_height)
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+
+            # 高质量缩放
+            if new_width != img_width or new_height != img_height:
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # 粘贴到居中位置
+            offset_x = (target_width - new_width) // 2
+            offset_y = (target_height - new_height) // 2
+            final_img.paste(img, (offset_x, offset_y))
+
+            # 保存为 WebP 或 JPEG
+            if self.webp_supported:
+                final_img.save(target, "WEBP", quality=WebPConverter.DEFAULT_QUALITY, method=6)
+            else:
+                final_img.save(target, "JPEG", quality=WebPConverter.DEFAULT_QUALITY)
+
+            return f"file://{target}"
+
+        except Exception as e:
+            logger.error(f"Failed to fit and save thumbnail: {e}")
             return None
 
 
