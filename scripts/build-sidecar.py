@@ -132,9 +132,14 @@ def build_sidecar():
 
     # 构建命令 - 使用 sidecar_entry.py 作为入口
     # 通过 uv run 调用 pyinstaller，确保使用 src-python/.venv 中的依赖
+    # 通过 `python -m PyInstaller` 调用，而非 pyinstaller.exe 入口脚本。
+    # uv 生成的 .venv/Scripts/pyinstaller.exe 是一个 trampoline shim，其中
+    # 内嵌了目标脚本路径；一旦 venv 被移动/重建导致该内嵌路径失效，就会报
+    # `uv trampoline failed to canonicalize script path`。以模块方式调用可绕过
+    # 该 shim，直接用解释器运行 PyInstaller，稳健性更好。
     cmd = [
         "uv", "run", "--directory", str(src_python),
-        "pyinstaller",
+        "python", "-m", "PyInstaller",
         "--name", "taghive-sidecar",
         "--onedir",   # 目录模式：启动更快，无需每次解压到临时目录
         "--noconsole",  # 隐藏控制台窗口（生产环境）
