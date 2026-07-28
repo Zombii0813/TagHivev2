@@ -1,6 +1,6 @@
 [project]
 name = "taghive-sidecar"
-version = "0.8.0"
+version = "0.8.1"
 description = "TagHive Python sidecar (FastAPI backend)"
 requires-python = ">=3.12"
 dependencies = [

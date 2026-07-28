@@ -310,53 +310,49 @@ impl PythonSidecar {
     }
     
     /// 停止 Sidecar
+    ///
+    /// 关键：本方法在 `CloseRequested` 的 `block_on` 中于 **UI 线程**同步执行，
+    /// 因此必须近乎瞬时返回，否则窗口会卡住不消失。此前实现有两处阻塞：
+    ///   1. `taskkill ... .output()` 会 spawn taskkill.exe 并同步等它跑完
+    ///      （生产环境叠加杀软扫描可达数秒）；
+    ///   2. 之后最长 5s 的 `try_wait` 轮询循环。
+    /// 现改为「fire-and-forget」策略：
+    ///   - Windows：派发 `taskkill /T /F` 清扫进程树（含扫描期 ProcessPoolExecutor
+    ///     子进程），用 `spawn` 而非 `output`，**不等待其完成**；
+    ///   - 其它平台：直接对进程句柄发 kill 信号。
+    /// 立即返回，窗口即时关闭。`parent_watch.py` 的父进程监控作为兜底：宿主一旦
+    /// 退出，sidecar 会通过 WaitForSingleObject 感知并 `os._exit(0)` 自我终止，
+    /// 不会残留孤儿进程。由于原本就是 `/F` 强杀（无优雅关闭窗口），此改动不引入
+    /// 额外的数据风险（SQLite WAL 下次打开自动恢复）。
     pub fn stop(mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Stopping Python sidecar process...");
-        
-        // 首先尝试优雅地终止进程
+        println!("Stopping Python sidecar process (non-blocking)...");
+
         #[cfg(windows)]
         {
-            // Windows: 使用 taskkill 发送 SIGTERM
-            let pid = self.process.id();
-            if let Some(pid) = pid {
+            use std::os::windows::process::CommandExt;
+            // 隐藏 taskkill 可能弹出的控制台窗口
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+            // taskkill /PID x /T /F 会同时杀掉主进程与其全部子孙进程；
+            // 用 spawn 派发后立即返回，taskkill 作为独立进程会在后台完成清理，
+            // 即使宿主随后退出也不受影响。
+            if let Some(pid) = self.process.id() {
                 let _ = std::process::Command::new("taskkill")
                     .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .output();
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn(); // 注意：spawn 而非 output，绝不阻塞 UI 线程
             }
         }
-        
+
         #[cfg(not(windows))]
         {
-            // Unix: 发送 SIGTERM
+            // Unix: 直接发送 kill 信号，非阻塞
             let _ = self.process.start_kill();
         }
-        
-        // 等待进程退出（最多 5 秒）
-        let start = std::time::Instant::now();
-        loop {
-            match self.process.try_wait() {
-                Ok(Some(_)) => {
-                    println!("Python sidecar process exited");
-                    break;
-                }
-                Ok(None) => {
-                    if start.elapsed().as_secs() > 5 {
-                        println!("Timeout waiting for sidecar, forcing kill...");
-                        let _ = self.process.kill();
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                Err(e) => {
-                    eprintln!("Error waiting for sidecar: {}", e);
-                    break;
-                }
-            }
-        }
-        
-        // 取消日志任务
+
+        // 取消日志转发任务，随后立即返回
         self.log_handle.abort();
-        
+
         Ok(())
     }
 }
