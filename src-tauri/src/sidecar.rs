@@ -127,6 +127,11 @@ impl PythonSidecar {
             // 传入主进程 PID，供 sidecar 监控父进程存活；父进程异常退出时
             // sidecar 自我终止，避免孤儿进程锁定安装目录文件
             .env("TAGHIVE_PARENT_PID", std::process::id().to_string())
+            // 强制 Python 以 UTF-8 输出 stdout/stderr。中文 Windows 默认本地编码
+            // (GBK/CP936)，而 Rust 端按 UTF-8 解码日志，含中文时会报
+            // "stream did not contain valid UTF-8" 并中断日志流。
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         
@@ -211,12 +216,15 @@ impl PythonSidecar {
         let log_file_path_clone = log_file_path.clone();
         
         let log_handle = tauri::async_runtime::spawn(async move {
-            let stdout_reader = BufReader::new(stdout);
-            let stderr_reader = BufReader::new(stderr);
-            
-            let mut stdout_lines = stdout_reader.lines();
-            let mut stderr_lines = stderr_reader.lines();
-            
+            let mut stdout_reader = BufReader::new(stdout);
+            let mut stderr_reader = BufReader::new(stderr);
+
+            // 按裸字节读取而非 .lines()：后者对每行强制 UTF-8 解码，中文 Windows 下
+            // 若子进程输出非 UTF-8 字节会返回 Err 并中断整个日志流。改为 read_until
+            // 读取原始字节，再用 from_utf8_lossy 容错解码，单行乱码也不会中断后续日志。
+            let mut stdout_buf: Vec<u8> = Vec::with_capacity(1024);
+            let mut stderr_buf: Vec<u8> = Vec::with_capacity(1024);
+
             // 打开日志文件（追加模式）
             let mut log_file = match OpenOptions::new()
                 .create(true)
@@ -235,54 +243,48 @@ impl PythonSidecar {
             
             // 写入启动时间
             if let Some(ref mut file) = log_file {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let _ = writeln!(file, "[{}] Sidecar started", timestamp);
+                let _ = writeln!(file, "[{}] Sidecar started", unix_ts());
             }
             
-            loop {
+            // 标记两条流是否已到达 EOF，都结束后退出循环
+            let mut stdout_done = false;
+            let mut stderr_done = false;
+
+            while !(stdout_done && stderr_done) {
                 tokio::select! {
-                    line = stdout_lines.next_line() => {
-                        match line {
-                            Ok(Some(line)) => {
-                                // 同时输出到控制台和日志文件
+                    n = stdout_reader.read_until(b'\n', &mut stdout_buf), if !stdout_done => {
+                        match n {
+                            Ok(0) => stdout_done = true, // EOF
+                            Ok(_) => {
+                                let line = decode_log_line(&stdout_buf);
+                                stdout_buf.clear();
                                 println!("[Sidecar] {}", line);
                                 if let Some(ref mut file) = log_file {
-                                    let timestamp = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    let _ = writeln!(file, "[{}] [INFO] {}", timestamp, line);
+                                    let _ = writeln!(file, "[{}] [INFO] {}", unix_ts(), line);
                                 }
                             }
-                            Ok(None) => break,
                             Err(e) => {
+                                // I/O 错误（非解码错误）：记录并标记该流结束，不影响另一条流
                                 eprintln!("Error reading stdout: {}", e);
-                                break;
+                                stdout_done = true;
                             }
                         }
                     }
-                    line = stderr_lines.next_line() => {
-                        match line {
-                            Ok(Some(line)) => {
-                                // 根据日志内容检测级别
+                    n = stderr_reader.read_until(b'\n', &mut stderr_buf), if !stderr_done => {
+                        match n {
+                            Ok(0) => stderr_done = true, // EOF
+                            Ok(_) => {
+                                let line = decode_log_line(&stderr_buf);
+                                stderr_buf.clear();
                                 let level = detect_log_level(&line);
-                                // 同时输出到控制台和日志文件
                                 eprintln!("[Sidecar {}] {}", level, line);
                                 if let Some(ref mut file) = log_file {
-                                    let timestamp = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    let _ = writeln!(file, "[{}] [{}] {}", timestamp, level, line);
+                                    let _ = writeln!(file, "[{}] [{}] {}", unix_ts(), level, line);
                                 }
                             }
-                            Ok(None) => break,
                             Err(e) => {
                                 eprintln!("Error reading stderr: {}", e);
-                                break;
+                                stderr_done = true;
                             }
                         }
                     }
@@ -291,11 +293,7 @@ impl PythonSidecar {
             
             // 写入停止时间
             if let Some(ref mut file) = log_file {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let _ = writeln!(file, "[{}] Sidecar stopped", timestamp);
+                let _ = writeln!(file, "[{}] Sidecar stopped", unix_ts());
             }
         });
         
@@ -479,6 +477,21 @@ fn find_available_port(start: u16) -> Result<u16, Box<dyn std::error::Error>> {
 fn is_port_available(port: u16) -> bool {
     use std::net::TcpListener;
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// 获取当前 Unix 时间戳（秒）
+fn unix_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 将一行原始字节容错解码为字符串，并去除行尾的 \r\n。
+/// 使用 from_utf8_lossy：非法字节替换为 U+FFFD，绝不因编码问题丢弃整行或中断流。
+fn decode_log_line(raw: &[u8]) -> String {
+    let s = String::from_utf8_lossy(raw);
+    s.trim_end_matches(['\n', '\r']).to_string()
 }
 
 /// 根据日志内容检测日志级别

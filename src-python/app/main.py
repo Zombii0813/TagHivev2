@@ -103,6 +103,16 @@ def main():
     """主入口函数"""
     import uvicorn
 
+    # 强制 stdout/stderr 使用 UTF-8。中文 Windows 默认本地编码 (GBK/CP936)，
+    # 而 Rust 端按 UTF-8 读取日志管道，含中文时会解码失败。Rust 侧已设置
+    # PYTHONUTF8/PYTHONIOENCODING，此处 reconfigure 为独立运行等场景兜底。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError):
+            # 流不支持 reconfigure（如已被重定向为非 TextIOWrapper）时忽略
+            pass
+
     # 启动父进程监控：宿主（Tauri 主进程）异常退出时自我终止，避免孤儿残留
     from app.utils.parent_watch import start_parent_watchdog
     start_parent_watchdog()
