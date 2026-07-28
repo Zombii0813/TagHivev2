@@ -165,15 +165,27 @@ const selectedFile = computed(() => {
   return fileStore.activeFile
 })
 
+// 浏览器 <video> 可原生播放的容器；其余走服务端转码流
+const NATIVE_PLAYABLE = new Set(['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v'])
+
+function isNativePlayable(file: { ext?: string; name?: string }): boolean {
+  const ext = (file.ext || file.name?.split('.').pop() || '')
+    .toLowerCase()
+    .replace(/^\./, '')
+  return NATIVE_PLAYABLE.has(ext)
+}
+
 const previewUrl = computed(() => {
   if (!selectedFile.value) return ''
   // 图片使用缩略图API
   if (selectedFile.value.type === 'image') {
     return thumbnailApi.getThumbnailUrl(selectedFile.value.id, 'large')
   }
-  // 视频使用原始文件URL
+  // 视频：原生格式直传原始文件，其余走转码流（ts/rmvb/wmv 等）
   if (selectedFile.value.type === 'video') {
-    return thumbnailApi.getFileUrl(selectedFile.value.id)
+    return isNativePlayable(selectedFile.value)
+      ? thumbnailApi.getFileUrl(selectedFile.value.id)
+      : thumbnailApi.getTranscodeUrl(selectedFile.value.id)
   }
   return ''
 })
@@ -183,10 +195,22 @@ const fileTags = computed(() => {
   return tagStore.getTagsByIds(selectedFile.value.tag_ids)
 })
 
-function handleVideoError(event: Event) {
+async function handleVideoError(event: Event) {
   const video = event.target as HTMLVideoElement
   console.error('Video error:', video.error)
-  ElMessage.error('视频加载失败，请检查文件是否存在')
+  // 转码流也可能因源编码异常/文件损坏失败：提示并提供系统播放器降级入口
+  try {
+    await ElMessageBox.confirm(
+      '该视频无法在线播放，可能是格式不受支持或文件损坏。是否用系统播放器打开？',
+      '无法在线播放',
+      { confirmButtonText: '用系统播放器打开', cancelButtonText: '取消', type: 'warning' },
+    )
+    if (selectedFile.value) {
+      await openFile()
+    }
+  } catch {
+    // 用户取消，不做处理
+  }
 }
 
 watch(() => selectedFile.value, (file) => {

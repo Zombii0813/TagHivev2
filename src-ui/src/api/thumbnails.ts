@@ -13,9 +13,14 @@ export const thumbnailApi = {
     return `${getApiBaseUrl()}/api/thumbnails/by-path?${params.toString()}`
   },
 
-  // 获取原始文件 URL（用于视频播放）
+  // 获取原始文件 URL（用于原生可播放视频，如 mp4/webm）
   getFileUrl(fileId: number): string {
     return `${getApiBaseUrl()}/api/files/${fileId}/preview`
+  },
+
+  // 获取转码流 URL（用于 ts/rmvb 等非原生格式，服务端转封装/转码为 fMP4）
+  getTranscodeUrl(fileId: number): string {
+    return `${getApiBaseUrl()}/api/files/${fileId}/transcode`
   },
 
   // 清理过期缩略图

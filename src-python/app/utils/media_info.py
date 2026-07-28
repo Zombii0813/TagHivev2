@@ -8,9 +8,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 视频和音频文件扩展名
-VIDEO_EXTENSIONS = {"mp4", "mov", "mkv", "avi", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "3gp"}
-AUDIO_EXTENSIONS = {"mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "opus"}
+# 视频和音频文件扩展名 —— 统一复用 file_types 中的权威定义，避免多处分歧
+from app.utils.file_types import VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
 
 
 def extract_duration(path: Path) -> Optional[float]:

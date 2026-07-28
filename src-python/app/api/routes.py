@@ -335,10 +335,23 @@ async def get_file_preview(
             '.mp4': 'video/mp4',
             '.webm': 'video/webm',
             '.ogg': 'video/ogg',
+            '.ogv': 'video/ogg',
             '.mov': 'video/quicktime',
             '.avi': 'video/x-msvideo',
             '.mkv': 'video/x-matroska',
             '.flv': 'video/x-flv',
+            '.f4v': 'video/x-f4v',
+            '.m4v': 'video/x-m4v',
+            '.3gp': 'video/3gpp',
+            '.wmv': 'video/x-ms-wmv',
+            '.asf': 'video/x-ms-asf',
+            '.mpg': 'video/mpeg',
+            '.mpeg': 'video/mpeg',
+            '.m2v': 'video/mpeg',
+            '.ts': 'video/mp2t',
+            '.m2ts': 'video/mp2t',
+            '.mts': 'video/mp2t',
+            '.vob': 'video/mpeg',
         }
         mime_type = mime_mapping.get(ext, 'application/octet-stream')
     
@@ -350,6 +363,45 @@ async def get_file_preview(
             "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "*",
         }
+    )
+
+
+@router.get("/files/{file_id}/transcode")
+async def transcode_file(
+    file_id: int,
+    repo: Repo = Depends(get_repo),
+):
+    """把浏览器无法原生播放的视频进程内转封装/转码为 fragmented MP4 流式返回。
+
+    用于 .ts / .rmvb / .wmv / .vob 等非原生格式的在线播放：H.264+AAC 源走流拷贝
+    （几乎零开销），其余实时转码为 libx264/aac。前端对非原生格式改用此端点。
+    """
+    from fastapi.responses import StreamingResponse
+    from app.utils.video_stream import stream_fmp4
+
+    file = repo.get_file_by_id(file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = Path(file.path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    try:
+        generator = stream_fmp4(file_path)
+    except RuntimeError as exc:
+        # PyAV 缺失或无视频流：415 Unsupported Media Type
+        raise HTTPException(status_code=415, detail=str(exc))
+
+    return StreamingResponse(
+        generator,
+        media_type="video/mp4",
+        headers={
+            # fMP4 渐进式流不支持任意 Range，显式声明 none 避免浏览器发 Range 请求
+            "Accept-Ranges": "none",
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 

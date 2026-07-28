@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from PIL import Image
 
 from ..utils.video_frame import extract_video_frame
+from ..utils.file_types import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +165,11 @@ class MultiSizeThumbnailGenerator:
             
             ext = path.suffix.lower()
             
-            if ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"}:
+            # 统一复用 file_types 的权威扩展名集合（其元素不含前导点，故去点比较）
+            bare_ext = ext.lstrip(".")
+            if bare_ext in IMAGE_EXTENSIONS:
                 return self._generate_image_thumbnail(path, thumb_path, size)
-            elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp"}:
+            elif bare_ext in VIDEO_EXTENSIONS:
                 return self._generate_video_thumbnail(path, thumb_path, size)
             else:
                 return None
