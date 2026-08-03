@@ -128,6 +128,33 @@ cargo tauri dev
 1. **uv 虚拟环境**: `src-python/.venv/Scripts/python.exe` (Windows) 或 `src-python/.venv/bin/python` (Linux/macOS)
 2. **系统 Python**: `python` 或 `python3`
 
+### 多机环境比对（排查 dev 效果差异）
+
+在多台机器上开发时，`cargo tauri dev` 的表现可能不一致（渲染差异、sidecar 启动失败、
+搜索或视频功能降级）。`scripts/env-report.py` 会输出影响 dev 行为的全部环境配置，
+只读采集、不修改任何文件，仅依赖 Python 标准库：
+
+```bash
+# 在每台机器上执行，报告写入 .taghive/env-report-<主机名>.json
+python scripts/env-report.py
+
+# 只看指纹与排查提示
+python scripts/env-report.py --quiet
+
+# 把两台机器的 JSON 收集到一处后逐字段对比
+python scripts/env-report.py --compare pc-a.json pc-b.json
+```
+
+采集范围：OS 版本与代码页、DPI 缩放、WebView2 Runtime 版本、rustc/cargo/node/npm/uv
+版本、被 `.gitignore` 忽略的 `src-tauri/config.json` 与 `.env`、Python 解释器解析结果
+（复刻 `sidecar.rs` 的四级回退）、`Cargo.lock`/`package-lock.json`/`uv.lock` 指纹与关键
+包实际版本、SQLite FTS5 与 PyAV/MediaInfo 可用性、PATH 上重复的 OpenSSL/MediaInfo DLL、
+端口占用、Git 状态与 `core.autocrlf`。
+
+差异高发项依次是：`src-tauri/config.json`（未纳入版本控制，决定用哪个 Python 与数据目录）、
+WebView2 Runtime 版本（决定渲染行为）、`Cargo.lock` 缺失导致 tauri/wry 小版本漂移、
+系统代码页与显示缩放。
+
 ### 方式二：手动分别启动
 
 如果需要单独调试前端或后端：
@@ -224,7 +251,12 @@ TagHive/
 │   │   ├── core/         # 核心业务逻辑
 │   │   ├── db/           # 数据库模型
 │   │   └── services/     # 服务
-│   └── requirements.txt
+│   └── pyproject.toml
+├── scripts/               # 开发与构建脚本
+│   ├── build.py          # 一键生产构建
+│   ├── build-sidecar.py  # PyInstaller 打包 sidecar
+│   ├── dev.py            # 手动启动 sidecar + 前端
+│   └── env-report.py     # 环境体检与多机对比
 └── docs/                  # 文档
 ```
 
