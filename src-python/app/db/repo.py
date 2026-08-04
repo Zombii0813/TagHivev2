@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Iterable, Optional
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, text, update, insert
+from sqlalchemy import case, delete, func, select, text, update, insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,23 @@ DEFAULT_BATCH_SIZE = 500
 
 # 游标分页阈值 - 超过此数量使用游标分页
 CURSOR_PAGINATION_THRESHOLD = 10000
+
+
+def _content_changed_clause(stmt):
+    """构造「文件内容已变化」的 SQL 条件（供 UPSERT 冲突分支判断是否清除探测缓存）。
+
+    以待写入值与库中现值的大小/修改时间差异作为判据；两者一致时视为同一文件，
+    保留惰性探测得到的分辨率与比特率。
+
+    Args:
+        stmt: sqlite_insert 语句对象，用于取 excluded 伪表列。
+
+    Returns:
+        SQLAlchemy 布尔表达式。
+    """
+    return (stmt.excluded.size != File.size) | (
+        stmt.excluded.modified_at != File.modified_at
+    )
 
 
 def natural_order_column(sort_column):
@@ -78,11 +95,24 @@ class Repo:
                 existing.parent_dir = parent_dir  # type: ignore[assignment]
                 existing.name = meta.name  # type: ignore[assignment]
                 existing.ext = meta.ext  # type: ignore[assignment]
+                # 文件内容变化（大小或修改时间不同）时清除媒体探测缓存，让详情栏重新探测；
+                # 未变化则保留已探测的时长/分辨率/比特率——扫描本身不做探测，
+                # meta.duration 恒为 None，直接覆盖会把已探测结果清空。
+                content_changed = (
+                    existing.size != meta.size or existing.modified_at != meta.modified_at
+                )
                 existing.size = meta.size  # type: ignore[assignment]
                 existing.type = meta.type  # type: ignore[assignment]
                 existing.hash = meta.sha256  # type: ignore[assignment]
                 existing.modified_at = meta.modified_at  # type: ignore[assignment]
-                existing.duration = meta.duration  # type: ignore[assignment]
+                if meta.duration is not None:
+                    existing.duration = meta.duration  # type: ignore[assignment]
+                if content_changed:
+                    existing.duration = meta.duration  # type: ignore[assignment]
+                    existing.width = None  # type: ignore[assignment]
+                    existing.height = None  # type: ignore[assignment]
+                    existing.bitrate = None  # type: ignore[assignment]
+                    existing.media_probed = 0  # type: ignore[assignment]
                 existing.updated_at = datetime.utcnow()  # type: ignore[assignment]
                 self.clear_search_cache()
                 return existing
@@ -111,10 +141,11 @@ class Repo:
             'type': meta.type,
             'hash': meta.sha256,
             'modified_at': meta.modified_at,
-            'duration': meta.duration,
+            # 扫描不做媒体探测（meta.duration 恒为 None），用 COALESCE 保留已探测的时长
+            'duration': func.coalesce(stmt.excluded.duration, File.duration),
             'updated_at': datetime.utcnow(),
         }
-        
+
         stmt = stmt.on_conflict_do_update(
             index_elements=['path'],
             set_=update_dict
@@ -188,7 +219,21 @@ class Repo:
                     'type': stmt.excluded.type,
                     'hash': stmt.excluded.hash,
                     'modified_at': stmt.excluded.modified_at,
-                    'duration': stmt.excluded.duration,
+                    # 保留已探测的时长（扫描侧恒为 None）
+                    'duration': func.coalesce(stmt.excluded.duration, File.duration),
+                    # 文件大小/修改时间变化 → 清除探测缓存以便详情栏重探
+                    'width': case(
+                        (_content_changed_clause(stmt), None), else_=File.width
+                    ),
+                    'height': case(
+                        (_content_changed_clause(stmt), None), else_=File.height
+                    ),
+                    'bitrate': case(
+                        (_content_changed_clause(stmt), None), else_=File.bitrate
+                    ),
+                    'media_probed': case(
+                        (_content_changed_clause(stmt), 0), else_=File.media_probed
+                    ),
                     'updated_at': now,
                 }
             )
@@ -200,6 +245,10 @@ class Repo:
                 path_str = meta.path.as_posix()
                 idx = path_str.rfind("/")
                 parent_dir = path_str[:idx] if idx >= 0 else ""
+                # 内容是否变化：以库中现值与待写入值比较，决定是否清除媒体探测缓存
+                changed = (File.size != meta.size) | (
+                    File.modified_at != meta.modified_at
+                )
                 self.session.execute(
                     update(File).where(File.path == path_str).values(
                         parent_dir=parent_dir,
@@ -209,7 +258,15 @@ class Repo:
                         type=meta.type,
                         hash=meta.sha256,
                         modified_at=meta.modified_at,
-                        duration=meta.duration,
+                        # 扫描不探测（meta.duration 恒为 None）：内容未变则保留已探测时长
+                        duration=case(
+                            (changed, meta.duration),
+                            else_=func.coalesce(meta.duration, File.duration),
+                        ),
+                        width=case((changed, None), else_=File.width),
+                        height=case((changed, None), else_=File.height),
+                        bitrate=case((changed, None), else_=File.bitrate),
+                        media_probed=case((changed, 0), else_=File.media_probed),
                         updated_at=now,
                     )
                 )
@@ -300,6 +357,40 @@ class Repo:
     def get_file_by_id(self, file_id: int) -> File | None:
         """通过 ID 获取文件"""
         return self.session.execute(select(File).where(File.id == file_id)).scalar_one_or_none()
+
+    def update_media_info(
+        self,
+        file_id: int,
+        duration: float | None,
+        width: int | None,
+        height: int | None,
+        bitrate: int | None,
+    ) -> None:
+        """回写惰性探测得到的媒体元数据，并标记为已探测。
+
+        标记 media_probed=1 是为了让探测失败（各字段均为 None）的文件也不再重复解封装，
+        避免每次打开详情栏都对损坏/不受支持的文件重试。
+
+        Args:
+            file_id: 文件 ID。
+            duration: 时长（秒），未探测到传 None。
+            width: 视频宽度（像素），未探测到传 None。
+            height: 视频高度（像素），未探测到传 None。
+            bitrate: 整体比特率（bps），未探测到传 None。
+        """
+        self.session.execute(
+            update(File)
+            .where(File.id == file_id)
+            .values(
+                duration=duration,
+                width=width,
+                height=height,
+                bitrate=bitrate,
+                media_probed=1,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        self.clear_search_cache()
 
     def list_files(self, limit: int | None = None) -> list[File]:
         """获取文件列表"""

@@ -37,7 +37,17 @@
 
       <!-- 文件信息 -->
       <div class="info">
-        <h3 class="name">{{ selectedFile.name }}</h3>
+        <!-- 文件名即「打开文件」入口：与下方路径点击打开目录形成一组对称操作，
+             不占额外纵向空间，也避免与视频播放器控件区域争抢点击 -->
+        <h3
+          class="name name-link"
+          role="button"
+          tabindex="0"
+          :title="`打开文件：${selectedFile.name}`"
+          @click="openFile"
+          @keydown.enter.prevent="openFile"
+          @keydown.space.prevent="openFile"
+        >{{ selectedFile.name }}</h3>
         
         <div class="meta-list">
           <div class="meta-item">
@@ -50,12 +60,36 @@
           </div>
           <div class="meta-item">
             <span class="label">路径</span>
-            <span class="value path" :title="selectedFile.path">{{ selectedFile.path }}</span>
+            <span
+              class="value value-link path-value"
+              role="button"
+              tabindex="0"
+              title="打开所在文件夹"
+              @click="openFolder"
+              @keydown.enter.prevent="openFolder"
+              @keydown.space.prevent="openFolder"
+            >{{ selectedFile.path }}</span>
           </div>
           <div class="meta-item">
             <span class="label">修改时间</span>
             <span class="value">{{ formatDate(selectedFile.modified_at) }}</span>
           </div>
+
+          <!-- 视频/音频专属属性：由后端惰性探测，加载中先占位 -->
+          <template v-if="showMediaMeta">
+            <div class="meta-item">
+              <span class="label">时长</span>
+              <span class="value">{{ mediaText(formatDuration(mediaInfo?.duration)) }}</span>
+            </div>
+            <div v-if="selectedFile.type === 'video'" class="meta-item">
+              <span class="label">分辨率</span>
+              <span class="value">{{ mediaText(formatResolution(mediaInfo?.width, mediaInfo?.height)) }}</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">比特率</span>
+              <span class="value">{{ mediaText(formatBitrate(mediaInfo?.bitrate)) }}</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -90,21 +124,6 @@
         </div>
       </div>
 
-      <!-- 操作按钮 -->
-      <div class="actions">
-        <el-button type="primary" class="action-btn" @click="openFile">
-          <el-icon><FolderOpened /></el-icon>
-          打开文件
-        </el-button>
-        <el-button class="action-btn" @click="openFolder">
-          <el-icon><Folder /></el-icon>
-          打开所在文件夹
-        </el-button>
-        <el-button type="danger" plain class="action-btn" @click="deleteFile">
-          <el-icon><Delete /></el-icon>
-          删除文件
-        </el-button>
-      </div>
     </template>
 
     <!-- 标签编辑对话框 -->
@@ -137,7 +156,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Document, Headset, Folder, FolderOpened, Delete, Plus } from '@element-plus/icons-vue'
+import { Document, Headset, Folder, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { open } from '@tauri-apps/plugin-shell'
 import { invoke } from '@tauri-apps/api/core'
@@ -145,6 +164,7 @@ import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import { fileApi } from '../api/files'
 import { thumbnailApi } from '../api/thumbnails'
+import type { FileSummary, MediaInfo } from '../types'
 
 const fileStore = useFileStore()
 const tagStore = useTagStore()
@@ -153,6 +173,15 @@ const showTagDialog = ref(false)
 const selectedTagIds = ref<number[]>([])
 const videoRef = ref<HTMLVideoElement | null>(null)
 const videoAspectRatio = ref(16 / 9)
+
+// 媒体元数据（时长/分辨率/比特率）：后端惰性探测，前端按当前选中文件异步拉取
+const mediaInfo = ref<MediaInfo | null>(null)
+const mediaLoading = ref(false)
+// 请求失败（sidecar 未就绪 / 端点不可用 / 超时）单独标记，
+// 与「文件本身探测不出元数据」区分开，避免两种情况都显示 '-' 无从排查
+const mediaError = ref(false)
+// 记录发起请求时的文件 id，用于丢弃快速切换选中项时的过期响应
+let mediaRequestId: number | null = null
 
 function onVideoLoaded(event: Event) {
   const video = event.target as HTMLVideoElement
@@ -195,6 +224,98 @@ const fileTags = computed(() => {
   return tagStore.getTagsByIds(selectedFile.value.tag_ids)
 })
 
+// 仅视频/音频展示媒体属性行（音频无分辨率，模板内单独判断）
+const showMediaMeta = computed(() => {
+  const type = selectedFile.value?.type
+  return type === 'video' || type === 'audio'
+})
+
+// 拉取当前文件的媒体元数据；非媒体文件直接清空，不发请求
+async function loadMediaInfo(fileId: number | null) {
+  mediaInfo.value = null
+  mediaError.value = false
+  mediaRequestId = fileId
+
+  if (fileId === null || !showMediaMeta.value) {
+    mediaLoading.value = false
+    return
+  }
+
+  // 列表接口已带回媒体字段：后端此前探测过，直接同步渲染，
+  // 与文件名/大小等属性同一帧出现，不发请求也无加载态
+  const cached = selectedFile.value
+  if (cached && cached.id === fileId && hasMediaFields(cached)) {
+    mediaInfo.value = {
+      file_id: fileId,
+      duration: cached.duration,
+      width: cached.width,
+      height: cached.height,
+      bitrate: cached.bitrate,
+    }
+    mediaLoading.value = false
+    return
+  }
+
+  mediaLoading.value = true
+  try {
+    const info = await fileApi.getMediaInfo(fileId)
+    // 请求期间用户已切到别的文件：丢弃过期结果
+    if (mediaRequestId !== fileId) return
+    mediaInfo.value = info
+    // 回填到列表数据，使本会话内再次选中该文件时走同步分支（无请求、无加载态）
+    fileStore.updateFileMediaInfo(fileId, info)
+  } catch (error) {
+    if (mediaRequestId !== fileId) return
+    console.error('Failed to load media info:', error)
+    mediaInfo.value = null
+    mediaError.value = true
+  } finally {
+    if (mediaRequestId === fileId) {
+      mediaLoading.value = false
+    }
+  }
+}
+
+// 列表数据里是否已带回媒体元数据（即后端此前已探测过该文件）。
+// 视频看分辨率、音频看时长/比特率——音频本身没有分辨率，不能只判 width。
+function hasMediaFields(file: FileSummary): boolean {
+  if (file.type === 'video') {
+    return file.width != null && file.height != null
+  }
+  return file.duration != null || file.bitrate != null
+}
+
+// 媒体属性的三态显示：加载中 / 请求失败 / 已取到值（取不到时为 '-'）
+function mediaText(formatted: string): string {
+  if (mediaLoading.value) return '读取中…'
+  if (mediaError.value) return '读取失败'
+  return formatted
+}
+
+// 时长格式化为 HH:MM:SS（不足 1 小时省略小时段）
+function formatDuration(seconds?: number | null): string {
+  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '-'
+  const total = Math.round(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
+
+// 分辨率格式化为「1920 × 1080」
+function formatResolution(width?: number | null, height?: number | null): string {
+  if (!width || !height) return '-'
+  return `${width} × ${height}`
+}
+
+// 比特率格式化：≥1 Mbps 用 Mbps，否则用 kbps
+function formatBitrate(bitrate?: number | null): string {
+  if (!bitrate || bitrate <= 0) return '-'
+  if (bitrate >= 1_000_000) return `${(bitrate / 1_000_000).toFixed(2)} Mbps`
+  return `${Math.round(bitrate / 1000)} kbps`
+}
+
 async function handleVideoError(event: Event) {
   const video = event.target as HTMLVideoElement
   console.error('Video error:', video.error)
@@ -218,6 +339,15 @@ watch(() => selectedFile.value, (file) => {
     selectedTagIds.value = [...file.tag_ids]
   }
 })
+
+// 仅在选中文件真正变化时重新探测（标签更新等场景不触发）
+watch(
+  () => selectedFile.value?.id ?? null,
+  (fileId) => {
+    loadMediaInfo(fileId)
+  },
+  { immediate: true }
+)
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -260,24 +390,6 @@ async function openFolder() {
     const lastSlash = path.lastIndexOf('\\') > path.lastIndexOf('/') ? path.lastIndexOf('\\') : path.lastIndexOf('/')
     const folderPath = lastSlash > 0 ? path.substring(0, lastSlash) : path
     await open(folderPath)
-  }
-}
-
-async function deleteFile() {
-  if (!selectedFile.value) return
-  
-  try {
-    await ElMessageBox.confirm('确定要将此文件移至回收站吗？', '确认删除', {
-      confirmButtonText: '移至回收站',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-    
-    await fileApi.delete(selectedFile.value.id)
-    fileStore.removeFile(selectedFile.value.id)
-    ElMessage.success('文件已移至回收站')
-  } catch (error) {
-    // 用户取消
   }
 }
 
@@ -396,6 +508,43 @@ async function saveTags() {
   word-break: break-all;
 }
 
+/* 文件名作为「打开文件」入口：与路径字段同一套悬停反馈 */
+.name-link {
+  position: relative;
+  isolation: isolate;
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 6px;
+  margin: -2px -6px 12px;
+  border-radius: 6px;
+}
+
+.name-link::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 6px;
+  background: linear-gradient(
+    135deg,
+    var(--color-accent-light) 0%,
+    var(--color-bg-hover) 100%
+  );
+  box-shadow: 0 0 0 1px var(--color-accent-light);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.name-link:hover::before,
+.name-link:focus-visible::before {
+  opacity: 1;
+}
+
+.name-link:focus-visible {
+  outline: none;
+}
+
 .meta-list {
   display: flex;
   flex-direction: column;
@@ -404,26 +553,81 @@ async function saveTags() {
 
 .meta-item {
   display: flex;
+  /* 字段值自带 6px 左内边距（为悬停背景留出呼吸空间），
+     故此处 gap 收窄，标签到文字的视觉间距仍约 8px */
+  gap: 2px;
+  /* 基线对齐：属性名与字段值的文字底部对齐；
+     路径换行成多行时标签仍与首行基线对齐，不会下沉到末行 */
+  align-items: baseline;
   font-size: 13px;
+  line-height: 1.6;
 }
 
+/* 属性名与字段值统一字号/行高，仅颜色区分，保证左对齐后逐行文字底部齐平 */
 .label {
-  width: 80px;
-  color: var(--color-text-tertiary);
+  width: 72px;
   flex-shrink: 0;
+  text-align: left;
+  color: var(--color-text-tertiary);
 }
 
 .value {
-  color: var(--color-text-primary);
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  text-align: left;
+  color: var(--color-text-primary);
+  /* 统一为可换行：长文本整体折行而非截断，避免与其他行字号不一致 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  /* 所有字段值共用同一内边距：链接悬停出现背景框时不产生位移，
+     且各行文字起始位置保持一致（含非链接字段） */
+  padding: 2px 6px;
+  border-radius: 6px;
 }
 
-.value.path {
-  font-family: monospace;
-  font-size: 11px;
+/* 可点击字段（文件名 / 路径）：常态与普通文字完全一致——不着色、不加下划线；
+   仅在悬停时浮出圆角渐变背景作为可点击提示 */
+.value-link {
+  position: relative;
+  /* 自成层叠上下文，使 z-index:-1 的伪元素停留在本元素内部
+     （否则会沉到面板背景之下而不可见） */
+  isolation: isolate;
+  cursor: pointer;
+  /* 收缩到内容宽度，避免短路径出现横贯整行的高亮块；长路径仍按容器宽度换行 */
+  max-width: fit-content;
+}
+
+/* 渐变背景由伪元素承载：常态 opacity 0 完全不可见，
+   悬停时淡入，避免直接给元素设 background-image 导致常态就有底色 */
+.value-link::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 6px;
+  /* 沿用全局 .gradient-accent 的 135deg 走向；两端均为主题变量，深浅色自适应 */
+  background: linear-gradient(
+    135deg,
+    var(--color-accent-light) 0%,
+    var(--color-bg-hover) 100%
+  );
+  box-shadow: 0 0 0 1px var(--color-accent-light);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.value-link:hover::before,
+.value-link:focus-visible::before {
+  opacity: 1;
+}
+
+.value-link:focus-visible {
+  outline: none;
+}
+
+.path-value {
+  /* 路径完整展示，随宽度换行 */
+  white-space: pre-wrap;
 }
 
 .tags-section {
@@ -465,24 +669,9 @@ async function saveTags() {
   color: var(--color-text-tertiary);
 }
 
-.actions {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.action-btn {
-  width: 100%;
-  min-width: 100%;
-  justify-content: flex-start;
-  box-sizing: border-box;
-  margin: 0 !important;
-  margin-left: 0 !important;
-  margin-right: 0 !important;
-}
-
-.actions .el-button + .el-button {
-  margin-left: 0;
+/* 标签区作为面板末节，补足底部留白（原由操作按钮区提供） */
+.tags-section:last-child {
+  border-bottom: none;
+  padding-bottom: 20px;
 }
 </style>

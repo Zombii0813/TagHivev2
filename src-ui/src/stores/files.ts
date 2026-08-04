@@ -1,6 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
-import type { FileSummary, SearchQuery, ChildDir } from '../types'
+import type { FileSummary, SearchQuery, ChildDir, MediaInfo } from '../types'
 import { fileApi } from '../api/files'
 import { folderApi } from '../api/folders'
 import { useTagStore } from './tags'
@@ -394,6 +394,16 @@ export const useFileStore = defineStore('files', () => {
     reloadCurrentView()
   }
 
+  // 回填惰性探测得到的媒体元数据，避免同一会话内重复请求
+  function updateFileMediaInfo(fileId: number, info: MediaInfo) {
+    const file = files.value.find(f => f.id === fileId)
+    if (!file) return
+    file.duration = info.duration
+    file.width = info.width
+    file.height = info.height
+    file.bitrate = info.bitrate
+  }
+
   function updateFileTags(fileId: number, tagIds: number[]) {
     const file = files.value.find(f => f.id === fileId)
     if (file) {
@@ -535,6 +545,7 @@ export const useFileStore = defineStore('files', () => {
     setSort,
     reloadCurrentView,
     filterByTags,
+    updateFileMediaInfo,
     updateFileTags,
     updateBatchFileTags,
     addTagsToFile,

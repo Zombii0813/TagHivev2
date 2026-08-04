@@ -18,7 +18,11 @@ class FileSummaryDTO(BaseModel):
     type: str
     size: int
     modified_at: Optional[float] = None
+    # 媒体元数据随列表一同下发：已探测过的文件详情栏可直接渲染，无需额外请求
     duration: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    bitrate: Optional[int] = None
     tag_ids: List[int] = Field(default_factory=list)
 
     class Config:
@@ -41,6 +45,18 @@ class FileDTO(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MediaInfoDTO(BaseModel):
+    """媒体元数据 DTO - 视频/音频的时长、分辨率与比特率
+
+    各字段均可为空：非媒体文件、文件损坏或编码不受支持时探测不到对应值。
+    """
+    file_id: int
+    duration: Optional[float] = None   # 时长（秒）
+    width: Optional[int] = None        # 视频宽度（像素）
+    height: Optional[int] = None       # 视频高度（像素）
+    bitrate: Optional[int] = None      # 整体比特率（bps）
 
 
 class SearchResultDTO(BaseModel):

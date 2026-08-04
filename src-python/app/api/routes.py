@@ -28,6 +28,7 @@ from .models import (
     FileResolveRequestDTO,
     FileResolveResultDTO,
     FileSummaryDTO,
+    MediaInfoDTO,
     TagDTO,
     TagCreateDTO,
     TagUpdateDTO,
@@ -104,6 +105,35 @@ def get_repo(db: Session = Depends(get_db)) -> Repo:
 
 # ========== 文件相关 API ==========
 
+def _to_file_summary(row, tag_ids: List[int] | None = None) -> FileSummaryDTO:
+    """把 File 行转为文件摘要 DTO。
+
+    收敛所有构造点，避免新增字段时漏改某处（媒体元数据随列表下发，
+    前端据此免去一次探测请求）。
+
+    Args:
+        row: File ORM 行对象。
+        tag_ids: 显式指定标签 ID；为 None 时取自 row.tags。
+            复制文件等场景副本不携带原标签，显式传 [] 以表达该语义。
+
+    Returns:
+        FileSummaryDTO。
+    """
+    return FileSummaryDTO(
+        id=row.id,
+        name=row.name,
+        path=row.path,
+        type=row.type,
+        size=row.size,
+        modified_at=row.modified_at,
+        duration=row.duration,
+        width=row.width,
+        height=row.height,
+        bitrate=row.bitrate,
+        tag_ids=tag_ids if tag_ids is not None else [t.id for t in row.tags],
+    )
+
+
 def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
     """构建搜索结果（SQL 层分页，不全量加载）"""
     search_query = SearchQuery(
@@ -133,16 +163,7 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
     for r in page.items:
         f = file_map.get(r.file_id)
         if f:
-            file_dtos.append(FileSummaryDTO(
-                id=f.id,
-                name=f.name,
-                path=f.path,
-                type=f.type,
-                size=f.size,
-                modified_at=f.modified_at,
-                duration=f.duration,
-                tag_ids=[t.id for t in f.tags],
-            ))
+            file_dtos.append(_to_file_summary(f))
 
     return SearchResultDTO(
         files=file_dtos,
@@ -215,16 +236,7 @@ async def resolve_files_by_paths(
             missing_paths.append(path)
             continue
 
-        resolved_files.append(FileSummaryDTO(
-            id=file.id,
-            name=file.name,
-            path=file.path,
-            type=file.type,
-            size=file.size,
-            modified_at=file.modified_at,
-            duration=file.duration,
-            tag_ids=[tag.id for tag in file.tags],
-        ))
+        resolved_files.append(_to_file_summary(file))
 
     return FileResolveResultDTO(files=resolved_files, missing_paths=missing_paths)
 
@@ -264,16 +276,7 @@ async def import_files_to_directory(
             existing_id=(source_existing.id if source_existing else (existing.id if existing else None)),
         )
 
-        imported_files.append(FileSummaryDTO(
-            id=file_row.id,
-            name=file_row.name,
-            path=file_row.path,
-            type=file_row.type,
-            size=file_row.size,
-            modified_at=file_row.modified_at,
-            duration=file_row.duration,
-            tag_ids=[tag.id for tag in file_row.tags],
-        ))
+        imported_files.append(_to_file_summary(file_row))
 
     repo.session.commit()
     # 文件结构/数量变化，失效 folder_tree 缓存
@@ -309,6 +312,72 @@ async def update_file_tags(
     
     repo.session.commit()
     return {"success": True}
+
+
+@router.get("/files/{file_id}/media-info", response_model=MediaInfoDTO)
+async def get_file_media_info(
+    file_id: int,
+    refresh: bool = False,
+    repo: Repo = Depends(get_repo),
+):
+    """获取视频/音频的时长、分辨率与比特率（惰性探测 + 落库缓存）。
+
+    扫描阶段不做媒体探测（逐文件解封装在万级文件量下开销过大），首次查看文件详情时
+    才实际探测并把结果写回 files 表；后续命中缓存直接返回。探测失败也会打标记，
+    避免对损坏或不受支持的文件反复重试。
+
+    Args:
+        file_id: 文件 ID。
+        refresh: 为 true 时忽略缓存强制重新探测。
+
+    Returns:
+        MediaInfoDTO；非媒体文件或探测不到时各字段为 None。
+
+    Raises:
+        HTTPException: 文件记录不存在（404）。
+    """
+    from app.utils.media_info import extract_media_info, is_media_file
+
+    file_row = repo.get_file_by_id(file_id)
+    if not file_row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # 命中缓存：已探测过且非强制刷新
+    if file_row.media_probed and not refresh:
+        return MediaInfoDTO(
+            file_id=file_id,
+            duration=file_row.duration,
+            width=file_row.width,
+            height=file_row.height,
+            bitrate=file_row.bitrate,
+        )
+
+    file_path = Path(file_row.path)
+    # 非媒体文件或文件已不在磁盘上：直接返回空结果，不落库（避免掩盖后续文件恢复）
+    if not is_media_file(file_path) or not file_path.exists():
+        return MediaInfoDTO(file_id=file_id)
+
+    # PyAV 解封装是阻塞 IO/CPU 操作，放线程池避免卡住事件循环
+    from starlette.concurrency import run_in_threadpool
+
+    info = await run_in_threadpool(extract_media_info, file_path)
+
+    repo.update_media_info(
+        file_id,
+        duration=info.duration,
+        width=info.width,
+        height=info.height,
+        bitrate=info.bitrate,
+    )
+    repo.session.commit()
+
+    return MediaInfoDTO(
+        file_id=file_id,
+        duration=info.duration,
+        width=info.width,
+        height=info.height,
+        bitrate=info.bitrate,
+    )
 
 
 @router.get("/files/{file_id}/preview")
@@ -539,16 +608,7 @@ async def rename_file(
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
 
-    return FileSummaryDTO(
-        id=file_row.id,
-        name=file_row.name,
-        path=file_row.path,
-        type=file_row.type,
-        size=file_row.size,
-        modified_at=file_row.modified_at,
-        duration=file_row.duration,
-        tag_ids=[t.id for t in file_row.tags],
-    )
+    return _to_file_summary(file_row)
 
 
 @router.post("/files/move", response_model=FileBatchResultDTO)
@@ -601,16 +661,7 @@ async def move_files(
             if len(kept_tags) != len(file_row.tags):
                 file_row.tags = kept_tags
 
-        moved_files.append(FileSummaryDTO(
-            id=file_row.id,
-            name=file_row.name,
-            path=file_row.path,
-            type=file_row.type,
-            size=file_row.size,
-            modified_at=file_row.modified_at,
-            duration=file_row.duration,
-            tag_ids=[t.id for t in file_row.tags],
-        ))
+        moved_files.append(_to_file_summary(file_row))
 
     repo.session.commit()
     # 文件结构/数量变化，失效 folder_tree 缓存
@@ -651,16 +702,7 @@ async def copy_files(
         meta = build_file_meta(dest_path)
         # 副本作为全新记录入库（不传 existing_id）
         file_row = repo.upsert_file(meta)
-        copied_files.append(FileSummaryDTO(
-            id=file_row.id,
-            name=file_row.name,
-            path=file_row.path,
-            type=file_row.type,
-            size=file_row.size,
-            modified_at=file_row.modified_at,
-            duration=file_row.duration,
-            tag_ids=[],
-        ))
+        copied_files.append(_to_file_summary(file_row, tag_ids=[]))
 
     repo.session.commit()
     # 文件结构/数量变化，失效 folder_tree 缓存
@@ -1012,16 +1054,7 @@ async def get_folder_contents(
     page_files = list(repo.session.execute(data_stmt).scalars())
 
     file_dtos = [
-        FileSummaryDTO(
-            id=f.id,
-            name=f.name,
-            path=f.path,
-            type=f.type,
-            size=f.size,
-            modified_at=f.modified_at,
-            duration=f.duration,
-            tag_ids=[t.id for t in f.tags],
-        )
+        _to_file_summary(f)
         for f in page_files
     ]
 
@@ -1322,16 +1355,7 @@ async def move_folder(
             if len(kept_tags) != len(file_row.tags):
                 file_row.tags = kept_tags
 
-        moved_files.append(FileSummaryDTO(
-            id=file_row.id,
-            name=file_row.name,
-            path=file_row.path,
-            type=file_row.type,
-            size=file_row.size,
-            modified_at=file_row.modified_at,
-            duration=file_row.duration,
-            tag_ids=[t.id for t in file_row.tags],
-        ))
+        moved_files.append(_to_file_summary(file_row))
 
     repo.session.commit()
     from ..core.query_cache import get_query_cache
@@ -1376,16 +1400,7 @@ async def copy_folder(
             except Exception:
                 continue
             file_row = repo.upsert_file(meta)
-            copied_files.append(FileSummaryDTO(
-                id=file_row.id,
-                name=file_row.name,
-                path=file_row.path,
-                type=file_row.type,
-                size=file_row.size,
-                modified_at=file_row.modified_at,
-                duration=file_row.duration,
-                tag_ids=[],
-            ))
+            copied_files.append(_to_file_summary(file_row, tag_ids=[]))
 
     repo.session.commit()
     from ..core.query_cache import get_query_cache

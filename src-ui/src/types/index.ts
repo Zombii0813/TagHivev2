@@ -83,8 +83,21 @@ export interface FileSummary {
   type: string
   size: number
   modified_at?: number
-  duration?: number
+  // 媒体元数据随列表下发；未探测过的文件为 null，由详情栏惰性补齐
+  duration?: number | null
+  width?: number | null
+  height?: number | null
+  bitrate?: number | null
   tag_ids: number[]
+}
+
+// 媒体元数据（视频/音频）：由后端惰性探测，字段可能为空
+export interface MediaInfo {
+  file_id: number
+  duration?: number | null   // 时长（秒）
+  width?: number | null      // 宽度（像素）
+  height?: number | null     // 高度（像素）
+  bitrate?: number | null    // 比特率（bps）
 }
 
 // 工作区类型

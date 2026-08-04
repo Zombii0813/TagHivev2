@@ -155,6 +155,17 @@ def _ensure_schema() -> None:
             connection.execute(text("CREATE INDEX idx_files_duration ON files(duration)"))
         except Exception:
             pass
+        # 添加视频元数据列（如果缺失）- 分辨率/比特率/探测标记
+        for _column_ddl in (
+            "ALTER TABLE files ADD COLUMN width INTEGER",
+            "ALTER TABLE files ADD COLUMN height INTEGER",
+            "ALTER TABLE files ADD COLUMN bitrate INTEGER",
+            "ALTER TABLE files ADD COLUMN media_probed INTEGER DEFAULT 0",
+        ):
+            try:
+                connection.execute(text(_column_ddl))
+            except Exception:
+                pass
         # 添加 file_tags 复合索引（如果不存在）
         try:
             connection.execute(text("CREATE INDEX idx_file_tags_file_tag ON file_tags(file_id, tag_id)"))

@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate, ResolveFilesResult, ImportFilesResult, FileSummary, FileBatchResult } from '../types'
+import type { FileDetail, SearchQuery, SearchResult, FileTagsUpdate, ResolveFilesResult, ImportFilesResult, FileSummary, FileBatchResult, MediaInfo } from '../types'
 
 export const fileApi = {
   // 搜索文件
@@ -10,6 +10,12 @@ export const fileApi = {
   // 获取文件详情
   async getById(id: number): Promise<FileDetail> {
     return apiClient.get<FileDetail>(`/api/files/${id}`)
+  },
+
+  // 获取视频/音频的时长、分辨率、比特率（后端惰性探测并缓存）
+  async getMediaInfo(id: number, refresh = false): Promise<MediaInfo> {
+    const suffix = refresh ? '?refresh=true' : ''
+    return apiClient.get<MediaInfo>(`/api/files/${id}/media-info${suffix}`)
   },
 
   // 按路径解析已扫描文件

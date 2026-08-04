@@ -23,6 +23,12 @@ class File(Base):
     hash = Column(Text, nullable=True)
     modified_at = Column(Float, nullable=True)
     duration = Column(Float, nullable=True)  # 视频/音频时长（秒）
+    # 视频专属元数据：扫描时不提取（逐文件解封装代价高），首次查看详情时惰性探测并回写缓存
+    width = Column(Integer, nullable=True)  # 视频宽度（像素）
+    height = Column(Integer, nullable=True)  # 视频高度（像素）
+    bitrate = Column(Integer, nullable=True)  # 整体比特率（bps）
+    # 媒体信息探测状态：0/NULL 未探测，1 已探测（含探测失败，避免每次打开都重试）
+    media_probed = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 

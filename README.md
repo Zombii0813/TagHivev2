@@ -267,6 +267,7 @@ TagHive/
 - `GET /api/health` - 健康检查
 - `GET /api/files` - 搜索文件
 - `GET /api/files/{id}` - 获取文件详情
+- `GET /api/files/{id}/media-info` - 获取视频/音频的时长、分辨率、比特率（首次访问惰性探测并落库缓存，`?refresh=true` 强制重探）
 - `PUT /api/files/{id}/tags` - 更新文件标签
 - `GET /api/tags` - 获取所有标签
 - `POST /api/tags` - 创建标签
