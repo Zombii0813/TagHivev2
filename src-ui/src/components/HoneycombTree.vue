@@ -205,6 +205,14 @@ const props = defineProps<{
   rootPath?: string | null
   workspaces?: string[]
   boundary?: HTMLElement | null   // 拖拽边界容器（文件列表区域）
+  /**
+   * 外部当前浏览目录（来自当前标签页）。
+   *
+   * 本组件 teleport 到 body 且不随标签页切换重新挂载，navStack 只在 loadAll
+   * 里初始化一次，因此必须由外部驱动同步：切换标签页时目录变了但组件不会
+   * 自行感知，蜂巢会一直停在上一个标签页的层级。
+   */
+  currentPath?: string
 }>()
 
 const emit = defineEmits<{
@@ -759,6 +767,41 @@ function buildPathChain(root: FolderNode, targetPath: string): FolderNode[] | nu
   return dfs(root) ? chain : null
 }
 
+/**
+ * 把蜂巢导航同步到外部指定的目录，不触发 select。
+ *
+ * 只调整本组件的展开链与高亮：调用方（切换标签页/新建标签页）自己已经
+ * 加载好文件列表，这里再 emit 会重复加载一次并可能与之竞争。
+ *
+ * @param targetPath 目标目录路径；空串表示不同步
+ */
+function syncToPath(targetPath: string) {
+  if (!targetPath) return
+  const norm = (p: string) => p.replace(/\\/g, '/')
+  // 已经停在该目录，无需重建（点击节点后外部回写路径也会走到这里）
+  if (norm(selectedPath.value) === norm(targetPath)) return
+
+  // 找到拥有该路径的工作区子树；全局视图下有多棵树，取最长匹配前缀
+  let ownerWs = ''
+  for (const ws of wsTreeMap.value.keys()) {
+    const w = norm(ws)
+    const t = norm(targetPath)
+    if (t === w || t.startsWith(w + '/')) {
+      if (!ownerWs || w.length > norm(ownerWs).length) ownerWs = ws
+    }
+  }
+  if (!ownerWs) return
+
+  const root = wsTreeMap.value.get(ownerWs)
+  if (!root) return
+
+  const chain = buildPathChain(root, targetPath)
+  if (!chain || chain.length === 0) return
+
+  navStack.value = chain.map(node => ({ node, wsPath: ownerWs }))
+  selectedPath.value = chain[chain.length - 1].path
+}
+
 // ─── 数据 ─────────────────────────────────────────────────────
 async function loadWs(ws:string) {
   try {
@@ -783,8 +826,9 @@ async function loadAll() {
     const ws = list[0]
     const root = wsTreeMap.value.get(ws)
     if (root) {
-      // 优先恢复该工作区上次浏览到的层级；没有记忆或路径已失效则停在根目录
-      const remembered = fileStore.getRememberedFolder(ws)
+      // 优先当前标签页已在的层级（切换工作区/重新挂载时它就是权威值），
+      // 其次退回该标签页的层级记忆，都没有则停在根目录
+      const remembered = props.currentPath || fileStore.getTabFolder(ws)
       const chain = remembered ? buildPathChain(root, remembered) : null
       if (chain && chain.length > 0) {
         navStack.value = chain.map(node => ({ node, wsPath: ws }))
@@ -1013,6 +1057,11 @@ watch(()=>[props.rootPath,...(props.workspaces??[])], ()=>loadAll(), { immediate
 
 // navStack 变化时重置分页（但翻页操作本身不触发，因为 navStack 不变）
 watch(()=>navStack.value.length, () => { pageOffset.value = 0 })
+
+// 外部目录变化（切换标签页、新建标签页、程序化跳转）时同步展开链。
+// 不能靠 loadAll 兜住：它只在 workspaces/rootPath 变化时重跑，而切换标签页
+// 两者都没变，蜂巢会一直停在上一个标签页的层级。
+watch(() => props.currentPath, (p) => { if (p) syncToPath(p) })
 
 // boundary 可能在 onMounted 之后才赋值（父组件 ref 在模板解析后才就绪），延迟补位
 watch(()=>props.boundary, async (el)=>{ if (el && !posInitialized.value) { await nextTick(); initPosition() } })

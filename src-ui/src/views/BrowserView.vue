@@ -26,6 +26,7 @@
         <HoneycombTree
           :workspaces="appStore.workspaces"
           :boundary="scrollerRef"
+          :current-path="fileStore.currentFolderPath"
           @select="handleFolderSelect"
           @switch-workspace="handleSwitchWorkspaceFromTree"
           @folder-op="handleFolderOp"
@@ -37,6 +38,7 @@
           <!-- 框选遮罩 -->
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <FileScrollerArea
+            ref="scrollerAreaRef"
             :view-mode="fileStore.viewMode"
             :files="fileStore.files"
             :grid-rows="gridRows"
@@ -76,6 +78,7 @@
         <HoneycombTree
           :root-path="appStore.currentWorkspace"
           :boundary="scrollerRef"
+          :current-path="fileStore.currentFolderPath"
           @select="handleFolderSelect"
           @folder-op="handleFolderOp"
           @item-drop="handleTreeItemDrop"
@@ -86,6 +89,7 @@
           <!-- 框选遮罩 -->
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <FileScrollerArea
+            ref="scrollerAreaRef"
             :view-mode="fileStore.viewMode"
             :files="fileStore.files"
             :grid-rows="gridRows"
@@ -131,6 +135,7 @@
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <FileScrollerArea
+            ref="scrollerAreaRef"
             :view-mode="fileStore.viewMode"
             :files="fileStore.files"
             :grid-rows="gridRows"
@@ -174,6 +179,7 @@
         <div ref="scrollerRef" class="scroller-container" @mousedown="handleGridMouseDown">
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
           <FileScrollerArea
+            ref="scrollerAreaRef"
             :view-mode="fileStore.viewMode"
             :files="fileStore.files"
             :grid-rows="gridRows"
@@ -223,8 +229,18 @@
           </span>
         </div>
 
-        <!-- 滚动内容区：目录卡片网格 + 文件区 -->
-        <div ref="scrollerRef" class="explorer-scroll" @mousedown="handleGridMouseDown">
+        <!-- 滚动内容区：目录卡片网格 + 文件区。
+             整块同时作为「放入当前目录」的落点，目录卡片会 stopPropagation 抢先接管 -->
+        <div
+          ref="scrollerRef"
+          class="explorer-scroll"
+          :class="{ 'drop-active': explorerDropActive }"
+          @mousedown="handleGridMouseDown"
+          @dragenter="handleExplorerDragOver"
+      @dragover="handleExplorerDragOver"
+          @dragleave="handleExplorerDragLeave"
+          @drop="handleExplorerDrop"
+        >
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
 
           <!-- 子目录网格 -->
@@ -239,6 +255,7 @@
                 :size="gridItemWidth"
                 @open="handleExplorerOpenDir"
                 @contextmenu="handleDirContextMenu"
+                @item-drop="handleExplorerDirDrop"
               />
             </div>
           </div>
@@ -250,11 +267,16 @@
 
           <!-- 当前目录的文件（非虚拟化，随外层滚动） -->
           <div v-if="fileStore.files.length" class="explorer-grid" :style="explorerGridStyle">
+            <!-- draggable 接在单元格外壳上，与 FileScrollerArea 的 grid/list 一致；
+                 缺了它 explorer 模式的文件拖不出去，跨标签页移动在该模式下失效 -->
             <div
               v-for="file in fileStore.files"
               :key="file.id"
               class="explorer-file-cell"
               :data-file-id="file.id"
+              draggable="true"
+              @dragstart="handleFileDragStart(file, $event)"
+              @dragend="handleItemDragEnd"
             >
               <FileCard
                 :file="file"
@@ -295,6 +317,7 @@
         <!-- 框选遮罩 -->
         <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
         <FileScrollerArea
+          ref="scrollerAreaRef"
           :view-mode="fileStore.viewMode"
           :files="fileStore.files"
           :grid-rows="gridRows"
@@ -708,7 +731,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Edit, Delete, FolderOpened, CopyDocument, Search, ArrowRight, Picture } from '@element-plus/icons-vue'
 import type { ElTree } from 'element-plus'
 import { getDraggedTagId, getDroppedFilePaths, hasExternalFiles, hasTagDrag, isTagDragInProgress, clearTagDragState, getDragMeta } from '../utils/drag'
-import { setItemDragData, clearItemDragState, getItemDrag } from '../utils/dragItems'
+import { setItemDragData, clearItemDragState, getItemDrag, hasItemDrag } from '../utils/dragItems'
+import { transferItems } from '../utils/itemTransfer'
 import type { TagDragMeta } from '../utils/drag'
 
 
@@ -717,6 +741,12 @@ const fileStore = useFileStore()
 const tagStore = useTagStore()
 
 const scrollerRef = ref<HTMLElement | null>(null)
+// 虚拟滚动区（all/folder/tree 模式）实例，用于存取其内部滚动位置。
+// 五处模板分支互斥挂载，同时只有一个存活，故共用同名 ref。
+const scrollerAreaRef = ref<{
+  getScrollTop: () => number
+  setScrollTop: (top: number) => void
+} | null>(null)
 // explorer 模式触底加载哨兵元素（普通滚动容器，无虚拟滚动的 scroll-end 事件）
 const explorerSentinel = ref<HTMLElement | null>(null)
 let explorerObserver: IntersectionObserver | null = null
@@ -962,31 +992,13 @@ function updateContainerWidth() {
   }
 }
 
-// 触底加载更多。真正滚动的是 RecycleScroller 自身（内部 overflow:auto），
-// 其 @scroll-end 在最后一个 item 进入渲染范围时就 emit——框选自动滚动贴底时
-// 会几乎每帧触发，若不节流会连续串行翻页几十次，把后端 COUNT+全表重排与
-// 缩略图请求打满，导致文件加载不出、扫描也排不上。故加一个短冷却窗口，
-// 两次加载至少间隔 LOAD_MORE_COOLDOWN，杜绝洪水式翻页。
-// 按当前浏览上下文分发：文件夹/树窗模式走目录内分页，其余走搜索分页。
-const LOAD_MORE_COOLDOWN = 400 // ms
-let lastLoadMoreAt = 0
-
+// 触底加载更多。节流与上下文分发都在 store 的 tryLoadMore 内完成——
+// 冷却时间戳必须按标签页存，模块级变量会让 A 标签页的冷却挡住 B 标签页的加载。
+// 恢复滚动期间不加载：restoreScroll 把容器滚到底部会立刻触发 scroll-end，
+// 而此时列表尚未渲染完整，误判为用户触底就会连续翻页。
 function handleLoadMore() {
-  if (!fileStore.hasMore || fileStore.isLoading) return
-  const now = performance.now()
-  if (now - lastLoadMoreAt < LOAD_MORE_COOLDOWN) return
-  lastLoadMoreAt = now
-
-  const inFolderContext =
-    (fileStore.browseMode === 'folder' || fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') &&
-    !tagStore.hasSelection &&
-    !!fileStore.currentFolderPath
-
-  if (inFolderContext) {
-    fileStore.loadMoreFolderContents()
-  } else {
-    fileStore.loadMore()
-  }
+  if (restoringScroll) return
+  fileStore.tryLoadMore()
 }
 
 function normalizeDroppedPaths(paths: string[]): string[] {
@@ -1182,12 +1194,37 @@ async function confirmImportToSelectedDirectory() {
   }
 }
 
+// 拖拽结束后补上期间被跳过的过期重载（见 store 的 ensureTabLoaded 注释）。
+// 冒泡阶段监听：window 捕获阶段的兜底清理已先清掉拖拽状态，此时重载不会再被跳过。
+function handleGlobalDragEnd() {
+  fileStore.refreshDirtyActiveTab()
+}
+
 onMounted(() => {
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
   window.addEventListener('close-context-menus', closeFileContextMenu)
   window.addEventListener('keydown', handleGlobalKeyDown)
-  
+  window.addEventListener('dragend', handleGlobalDragEnd)
+  window.addEventListener('drop', handleGlobalDragEnd)
+
+  // 首个标签页建于 store 初始化时，那时工作区尚未恢复，此处补齐归属。
+  // 但跨会话恢复出的标签页已带着自己的工作区，不能覆盖——否则重启后
+  // 所有标签页都被拽到同一个工作区，标题与数据全变成活动工作区的。
+  if (!fileStore.activeTab.workspace && !fileStore.activeTab.isGlobalView) {
+    fileStore.setTabWorkspace(
+      appStore.currentWorkspace || appStore.activeWorkspace || '',
+      appStore.isGlobalView
+    )
+  }
+
+  // 把滚动读写交给 store 调度：存旧位置要在 activeTabId 改变前，
+  // 恢复新位置要在数据落地后，这个时序只有 switchTab 内部知道
+  unregisterScrollHooks = fileStore.registerScrollHooks({
+    capture: captureScroll,
+    restore: restoreScroll,
+  })
+
   // 使用 ResizeObserver 监听容器大小变化
   if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => {
@@ -1196,15 +1233,17 @@ onMounted(() => {
     resizeObserver.observe(scrollerRef.value)
   }
   
+  // 注：appStore.initialize() 在 App.vue 的 onMounted 中执行，而父组件的
+  // onMounted 晚于子组件，故冷启动走到这里时工作区通常还没恢复，本块不会执行；
+  // 真正的启动恢复由下方 currentWorkspace watcher 承担。此处只覆盖
+  // 「BrowserView 被重新挂载而工作区已就绪」的情形。
   if (appStore.currentWorkspace) {
     if (fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') {
       // 树窗/资源管理器模式：无侧栏自动 emit，初始挂载时按记忆层级加载文件列表
-      const ws = appStore.currentWorkspace
-      const remembered = fileStore.getRememberedFolder(ws)
-      const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
-      fileStore.loadFolderContents(target)
+      fileStore.loadFolderContents(resolveTabFolder(appStore.currentWorkspace))
     } else {
-      fileStore.search({ root: appStore.currentWorkspace })
+      // 走 reloadCurrentView 而非裸 search：它会带上本标签页的搜索词与类型筛选
+      fileStore.reloadCurrentView()
     }
     // 当前工作区不可达（如外部移动硬盘未连接）时提示用户，
     // 仍展示数据库中的缓存数据，避免误以为数据丢失。
@@ -1218,6 +1257,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateContainerWidth)
   window.removeEventListener('close-context-menus', closeFileContextMenu)
   window.removeEventListener('keydown', handleGlobalKeyDown)
+  window.removeEventListener('dragend', handleGlobalDragEnd)
+  window.removeEventListener('drop', handleGlobalDragEnd)
   
   // 移除 ResizeObserver
   if (resizeObserver) {
@@ -1230,7 +1271,16 @@ onUnmounted(() => {
     explorerObserver.disconnect()
     explorerObserver = null
   }
-  
+
+  if (unregisterScrollHooks) {
+    unregisterScrollHooks()
+    unregisterScrollHooks = null
+  }
+  if (restoreTimer !== null) {
+    clearTimeout(restoreTimer)
+    restoreTimer = null
+  }
+
   if (unlistenNativeDragDrop) {
     unlistenNativeDragDrop()
     unlistenNativeDragDrop = null
@@ -1248,19 +1298,35 @@ onUnmounted(() => {
 })
 
 // 监听工作区变化
+// 同步当前标签页的工作区归属（决定标签标题与新建标签页的默认位置）。
+// 单独一个 watcher 并同时监听 isGlobalView：currentWorkspace 在全局视图下
+// 恒为 null，仅监听它会漏掉「全局视图内切换活动工作区」这一情形。
+//
+// 切换标签页时不能回写：此时 appStore 正被同步为目标标签页的工作区，
+// 反向写回属于同值覆盖，但若时序上早于 switchTab 赋值就会污染标签页归属。
+watch(
+  () => [appStore.currentWorkspace, appStore.isGlobalView] as const,
+  ([ws, global]) => {
+    if (fileStore.isSwitchingTab) return
+    fileStore.setTabWorkspace(ws || appStore.activeWorkspace || '', global)
+  }
+)
+
 watch(() => appStore.currentWorkspace, (newPath) => {
+  // 切换标签页会把 appStore 同步到目标标签页的工作区，数据由 switchTab
+  // 按该标签页自身位置恢复；这里若继续执行会覆盖成记忆层级或根目录
+  if (fileStore.isSwitchingTab) return
   if (newPath) {
     if (fileStore.browseMode === 'folder') {
       // 文件夹浏览模式：由 HoneycombTree 加载完目录树后 emit 记忆层级，
       // 经 handleFolderSelect 恢复文件列表，这里不重复加载，避免闪烁与竞争。
     } else if (fileStore.browseMode === 'tree' || fileStore.browseMode === 'explorer') {
       // 树窗/资源管理器模式：无侧栏自动 emit，这里恢复该工作区上次浏览的层级
-      const remembered = fileStore.getRememberedFolder(newPath)
-      const target = remembered && findOwnerWorkspace(remembered) === newPath ? remembered : newPath
-      fileStore.loadFolderContents(target)
+      fileStore.loadFolderContents(resolveTabFolder(newPath))
     } else {
-      // 全部文件模式：搜索所有文件
-      fileStore.search({ root: newPath })
+      // 全部文件模式：交给 reloadCurrentView 带上本标签页的搜索词与类型筛选，
+      // 冷启动时这条路径负责恢复上次会话活动标签页的数据
+      fileStore.reloadCurrentView()
     }
   }
 })
@@ -1268,12 +1334,13 @@ watch(() => appStore.currentWorkspace, (newPath) => {
 // 监听浏览模式变化
 watch(() => fileStore.browseMode, async (newMode) => {
   if (!appStore.currentWorkspace) return
+  // 切换标签页也会让 browseMode 代理值变化，但此时数据由 switchTab 按目标
+  // 标签页自身位置恢复；这里若继续执行会用「上次记忆的层级」覆盖掉它
+  if (fileStore.isSwitchingTab) return
 
   if (newMode === 'folder' || newMode === 'tree' || newMode === 'explorer') {
-    // 切换到文件夹浏览/树窗/资源管理器模式：恢复该工作区上次浏览的层级
-    const ws = appStore.currentWorkspace
-    const remembered = fileStore.getRememberedFolder(ws)
-    const target = remembered && findOwnerWorkspace(remembered) === ws ? remembered : ws
+    // 切换到文件夹浏览/树窗/资源管理器模式：恢复本标签页上次浏览的层级
+    const target = resolveTabFolder(appStore.currentWorkspace)
     if (tagStore.hasSelection) {
       // 标签过滤态：保留过滤，将范围同步为该层级（仅显示当前层级下该标签的文件）
       await fileStore.filterByTags(Array.from(tagStore.effectiveTagIds), target)
@@ -1325,28 +1392,10 @@ async function selectWorkspace() {
       // 连接 WebSocket
       wsClient.connect()
       
-      // 订阅扫描完成事件
-      const unsubscribeCompleted = wsClient.on<{ path: string; total: number }>('scan_completed', (data) => {
-        ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-        // 扫描完成后刷新文件列表：保持当前浏览模式
-        if (
-          fileStore.browseMode === 'folder' ||
-          fileStore.browseMode === 'tree' ||
-          fileStore.browseMode === 'explorer'
-        ) {
-          const targetPath = fileStore.currentFolderPath || path
-          fileStore.loadFolderContents(targetPath)
-        } else {
-          fileStore.search({ root: path })
-        }
-        unsubscribeCompleted()
-      })
-      
-      const unsubscribeError = wsClient.on<{ message: string }>('scan_error', (error) => {
-        ElMessage.error(`扫描失败: ${error.message}`)
-        unsubscribeError()
-      })
-      
+      // 扫描完成/失败的提示与列表刷新由 MainLayout 的常驻订阅统一处理，
+      // 这里不再重复订阅：两处都会刷新一次，且本处的刷新不带标签页脏标记，
+      // 会把 MainLayout 刚标脏的其它标签页状态搅乱。
+
       // 开始扫描
       wsClient.startScan(path)
     }
@@ -1659,22 +1708,64 @@ function handleExplorerOpenDir(dir: ChildDir) {
   explorerNavigate(dir.path)
 }
 
-// explorer 各层级的滚动位置记忆（路径 → scrollTop）
-const explorerScrollMemory = new Map<string, number>()
+// 读取当前视图的滚动位置。
+// explorer 模式滚动发生在外层 .explorer-scroll（scrollerRef）自身；
+// 其余模式滚动发生在 FileScrollerArea 内部的虚拟滚动容器。
+function captureScroll(): number {
+  if (fileStore.browseMode === 'explorer') {
+    return scrollerRef.value?.scrollTop ?? 0
+  }
+  return scrollerAreaRef.value?.getScrollTop() ?? 0
+}
+
+// 是否正在程序化恢复滚动位置。
+// 置位期间 handleLoadMore 直接返回：把容器滚到底部会立即触发 scroll-end 与
+// explorer 的哨兵可见，被误判为用户触底而连续翻页。
+let restoringScroll = false
+let restoreTimer: number | null = null
+
+// store 侧滚动钩子的注销函数
+let unregisterScrollHooks: (() => void) | null = null
+
+// 恢复滚动位置。
+// 虚拟滚动容器的高度由 items.length × itemSize 撑起，数据未就位时直接赋值会被夹到 0，
+// 故等 nextTick 后再进一帧 rAF——RecycleScroller 在 watcher 中更新 totalSize，
+// 撑高 DOM 的落地晚于 patch。
+function restoreScroll(top: number) {
+  restoringScroll = true
+  if (restoreTimer !== null) clearTimeout(restoreTimer)
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      if (fileStore.browseMode === 'explorer') {
+        if (scrollerRef.value) scrollerRef.value.scrollTop = top
+      } else {
+        scrollerAreaRef.value?.setScrollTop(top)
+      }
+      // 赋值后 scroll 事件异步派发，需再多留一小段窗口才解除抑制
+      restoreTimer = window.setTimeout(() => {
+        restoringScroll = false
+        restoreTimer = null
+      }, 120)
+    })
+  })
+}
+
+// explorer 各层级的滚动位置记忆改存到标签页上（路径 → scrollTop）：
+// 模块级 Map 被所有标签页共用，两个标签页浏览同一目录时会互相覆盖位置。
+function explorerScrollMap(): Record<string, number> {
+  return fileStore.activeTab.explorerScrollByPath
+}
 
 // 记录当前 explorer 层级的滚动位置
 function saveExplorerScroll() {
-  const el = scrollerRef.value
   const cur = fileStore.currentFolderPath
-  if (el && cur) explorerScrollMemory.set(cur, el.scrollTop)
+  if (cur) explorerScrollMap()[cur] = captureScroll()
 }
 
 // explorer 导航到目标层级：加载完成后恢复该层级上次的滚动位置（无记忆则置顶）
 async function explorerNavigate(folderPath: string) {
   await handleFolderSelect(folderPath)
-  await nextTick()
-  const el = scrollerRef.value
-  if (el) el.scrollTop = explorerScrollMemory.get(folderPath) ?? 0
+  restoreScroll(explorerScrollMap()[folderPath] ?? 0)
 }
 
 // explorer 面包屑点击：返回上级层级，恢复其上次浏览位置
@@ -1743,6 +1834,24 @@ function findOwnerWorkspace(folderPath: string): string | undefined {
   return best
 }
 
+/**
+ * 解析「本标签页」在某工作区应恢复到的目录层级。
+ *
+ * 取本标签页自己的层级记忆（跨标签页共享的 folderMemory 会取到别的标签页
+ * 刚写入的路径，导致切换浏览模式时跳到别处）；无记忆或路径已不属于该
+ * 工作区时退回工作区根——新建的标签页正是这条路径，因此落在根目录。
+ *
+ * @param workspace 工作区根路径
+ * @returns 应加载的目录路径
+ */
+function resolveTabFolder(workspace: string): string {
+  const remembered = fileStore.getTabFolder(workspace)
+  if (remembered && findOwnerWorkspace(remembered) === workspace) {
+    return remembered
+  }
+  return workspace
+}
+
 function handleSwitchWorkspaceFromTree(wsPath: string) {
   // 全局视图中点击工作区节点 → 切换到该工作区标签页
   appStore.switchWorkspace(wsPath)
@@ -1780,36 +1889,81 @@ async function handleTreeItemDrop(payload: { targetPath: string; targetWs: strin
   const drag = getItemDrag()
   clearItemDragState()
   if (!drag) return
-  const { targetPath, targetWs, copy } = payload
-  try {
-    if (drag.kind === 'file' && drag.fileIds?.length) {
-      if (copy) {
-        const r = await fileApi.copy(drag.fileIds, targetPath, targetWs)
-        ElMessage.success(`已复制 ${r.files.length} 个文件`)
-      } else {
-        const r = await fileApi.move(drag.fileIds, targetPath, targetWs)
-        ElMessage.success(`已移动 ${r.files.length} 个文件`)
-      }
-    } else if (drag.kind === 'folder' && drag.folderPath) {
-      // 防止把文件夹拖到自身或子目录
-      const src = drag.folderPath.replace(/\\/g, '/')
-      const dst = targetPath.replace(/\\/g, '/')
-      if (dst === src || dst.startsWith(src + '/')) {
-        ElMessage.warning('不能移动到文件夹自身或其子目录')
-        return
-      }
-      if (copy) {
-        await folderApi.copyFolder(drag.folderPath, targetPath)
-        ElMessage.success('已复制文件夹')
-      } else {
-        await folderApi.moveFolder(drag.folderPath, targetPath, targetWs)
-        ElMessage.success('已移动文件夹')
-      }
-    }
-    await refreshFileList()
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || (copy ? '复制失败' : '移动失败'))
+  const ok = await transferItems(drag, payload)
+  if (ok) await refreshFileList()
+}
+
+// ===== explorer 模式的拖放落点 =====
+
+// 目录卡片落点：目标工作区取当前标签页所属工作区（explorer 不跨工作区显示）
+function handleExplorerDirDrop(payload: { targetPath: string; copy: boolean }) {
+  handleTreeItemDrop({
+    targetPath: payload.targetPath,
+    targetWs: findOwnerWorkspace(payload.targetPath) || appStore.currentWorkspace || '',
+    copy: payload.copy,
+  })
+}
+
+// 空白区高亮标记
+const explorerDropActive = ref(false)
+
+/**
+ * explorer 空白区作为「放入当前目录」的落点。
+ *
+ * 绑在 .explorer-scroll 整块上而非单独的空白元素：空白区的形状随目录/文件
+ * 数量变化，用元素框不住。目录卡片与文件卡片在自己的 dragover 里
+ * stopPropagation 抢先接管，剩下冒泡到这里的就是真正的空白位置。
+ */
+/*
+ * dragenter 与 dragover 共用此处理器：dragover 每约 350ms 才派发一次，
+ * 只监听它的话刚移入的这段时间内 preventDefault 未执行，光标会先闪一下
+ * 禁止图标；补上 dragenter 可在移入的第一帧就确立落点。
+ */
+function handleExplorerDragOver(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  const drag = getItemDrag()
+  const cur = fileStore.currentFolderPath
+  if (!cur) return
+  // 拖的就是当前目录自身、或其直接子目录（已在此处）时无意义
+  if (drag?.kind === 'folder' && drag.folderPath) {
+    const src = drag.folderPath.replace(/\\/g, '/')
+    const dst = cur.replace(/\\/g, '/')
+    if (src === dst || src.slice(0, src.lastIndexOf('/')) === dst) return
   }
+  event.preventDefault()
+  explorerDropActive.value = true
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+/**
+ * 离开空白区时撤销高亮。
+ *
+ * 必须判 relatedTarget 是否仍在容器内：dragover/dragleave 在子元素间移动时
+ * 也会成对触发，不判会在网格内每移过一个卡片就闪一次高亮。
+ */
+function handleExplorerDragLeave(event: DragEvent) {
+  const to = event.relatedTarget as Node | null
+  const el = event.currentTarget as HTMLElement
+  if (to && el.contains(to)) return
+  explorerDropActive.value = false
+}
+
+function handleExplorerDrop(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  explorerDropActive.value = false
+  const cur = fileStore.currentFolderPath
+  if (!cur) {
+    clearItemDragState()
+    return
+  }
+  handleTreeItemDrop({
+    targetPath: cur,
+    targetWs: findOwnerWorkspace(cur) || appStore.currentWorkspace || '',
+    copy: event.ctrlKey || event.metaKey,
+  })
 }
 
 // ===== 文件右键菜单 =====
@@ -1991,6 +2145,8 @@ async function openFolderOpDialog(mode: 'move' | 'copy', folderPath: string, sou
 }
 
 // 计算某工作区在对话框中的默认目标目录：优先上次浏览层级，否则工作区根
+// 注：这里用全局记忆（跨标签页共享）是刻意的——拖到侧栏工作区时，
+// 用户期望的目标是「最近一次在该工作区浏览到的位置」，与哪个标签页无关。
 function resolveDefaultTargetDir(workspace: string): string {
   if (!workspace) return ''
   const remembered = fileStore.getRememberedFolder(workspace)
@@ -2344,6 +2500,13 @@ async function handleExternalDrop(event: DragEvent) {
   overflow-x: hidden;
   position: relative;
   padding: 16px;
+}
+
+/* 拖拽悬停在空白处：整块提示「放入当前目录」 */
+.explorer-scroll.drop-active {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -4px;
+  background: var(--color-accent-soft, rgba(99, 102, 241, 0.06));
 }
 
 .explorer-divider {

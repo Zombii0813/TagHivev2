@@ -5,6 +5,7 @@
       placeholder="搜索文件..."
       clearable
       @input="handleInput"
+      @clear="handleClear"
     >
       <template #prefix>
         <el-icon><Search /></el-icon>
@@ -30,54 +31,71 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed } from 'vue'
 import { Search, ArrowDown } from '@element-plus/icons-vue'
 import { useFileStore } from '../stores/files'
 import { useAppStore } from '../stores/app'
 
 const fileStore = useFileStore()
 const appStore = useAppStore()
-const searchText = ref('')
-const selectedType = ref('')
+
+// 搜索条件存在标签页里而非本组件：搜索是「浏览位置」的一部分，
+// 切换标签页要能看回该页自己的搜索词。组件为受控，不持有本地副本。
+const searchText = computed<string>({
+  get: () => fileStore.activeTab.searchText,
+  set: (v) => { fileStore.activeTab.searchText = v },
+})
+const selectedType = computed<string>({
+  get: () => fileStore.activeTab.searchType,
+  set: (v) => { fileStore.activeTab.searchType = v },
+})
 
 // 防抖定时器
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 const DEBOUNCE_DELAY = 300 // 防抖延迟 300ms
 
-function handleSearch() {
+/**
+ * 对指定标签页执行搜索，条件取自该标签页自身。
+ *
+ * @param tabId 目标标签页 id
+ */
+function handleSearch(tabId: string) {
+  const tab = fileStore.getTab(tabId)
   fileStore.search({
-    text: searchText.value || undefined,
-    types: selectedType.value ? [selectedType.value] : undefined,
+    text: tab.searchText || undefined,
+    types: tab.searchType ? [tab.searchType] : undefined,
     root: appStore.currentWorkspace || undefined,
-  })
+  }, tabId)
 }
 
 function handleInput() {
-  // 清除之前的定时器
+  // 在输入时就捕获标签页：防抖等待的 300ms 内用户可能切走，
+  // 届时再取 activeTabId 会把 A 的搜索结果写进 B
+  const tabId = fileStore.activeTabId
   if (debounceTimer) {
     clearTimeout(debounceTimer)
   }
-  // 设置新的定时器，延迟执行搜索
   debounceTimer = setTimeout(() => {
-    handleSearch()
+    handleSearch(tabId)
   }, DEBOUNCE_DELAY)
+}
+
+// 点击清空按钮：立即搜索（显示所有文件）。
+// 这里用显式事件而非 watch(searchText)——搜索词现在属于标签页，
+// 从「有搜索词」的标签页切到「无搜索词」的标签页同样会让值变空，
+// watch 会误判为用户清空而发起一次搜索，覆盖目标标签页刚恢复的数据。
+function handleClear() {
+  const tabId = fileStore.activeTabId
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+  }
+  handleSearch(tabId)
 }
 
 function handleTypeFilter(type: string) {
   selectedType.value = type
-  handleSearch()
+  handleSearch(fileStore.activeTabId)
 }
-
-// 监听清空事件
-watch(searchText, (newValue) => {
-  if (newValue === '') {
-    // 清空时立即搜索（显示所有文件）
-    if (debounceTimer) {
-      clearTimeout(debounceTimer)
-    }
-    handleSearch()
-  }
-})
 </script>
 
 <style scoped>

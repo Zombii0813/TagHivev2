@@ -1,10 +1,18 @@
 <template>
   <div
     class="folder-card"
+    :class="{ 'drop-active': isDropActive }"
     :title="dir.name"
     :style="cardStyle"
+    draggable="true"
     @dblclick="emit('open', dir)"
     @contextmenu.prevent="emit('contextmenu', dir, $event)"
+    @dragstart="handleDragStart"
+    @dragend="handleDragEnd"
+    @dragenter="handleDragOver"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
   >
     <div class="cover" :style="coverStyle">
       <!-- 自定义封面：单张铺满，优先于九宫格 -->
@@ -48,10 +56,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Folder, FolderOpened } from '@element-plus/icons-vue'
 import { thumbnailApi } from '../api/thumbnails'
 import type { ChildDir } from '../types'
+import {
+  setItemDragData,
+  clearItemDragState,
+  hasItemDrag,
+  getItemDrag,
+} from '../utils/dragItems'
 
 const props = defineProps<{
   dir: ChildDir
@@ -62,7 +76,59 @@ const emit = defineEmits<{
   // 双击进入目录
   open: [dir: ChildDir]
   contextmenu: [dir: ChildDir, evt: MouseEvent]
+  // 有文件/文件夹拖放到本目录卡片上；copy 由 Ctrl/Cmd 决定
+  'item-drop': [payload: { targetPath: string; copy: boolean }]
 }>()
+
+// 拖拽悬停高亮
+const isDropActive = ref(false)
+
+// ─── 拖拽：本卡片作为「文件夹」拖拽源 ──────────────────────────
+function handleDragStart(event: DragEvent) {
+  setItemDragData(event, {
+    kind: 'folder',
+    folderPath: props.dir.path,
+    label: props.dir.name,
+  })
+}
+
+function handleDragEnd() {
+  clearItemDragState()
+  isDropActive.value = false
+}
+
+// ─── 拖拽：本卡片作为放置目标 ─────────────────────────────────
+// 与 FolderTreeNode 同构：hasItemDrag 读 dataTransfer.types（drop 前唯一可靠的
+// 来源判定），getItemDrag 读模块级兜底（部分场景 types 取不到）。
+function handleDragOver(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  const drag = getItemDrag()
+  // 文件夹拖到自身上不允许
+  if (drag?.kind === 'folder' && drag.folderPath === props.dir.path) return
+  event.preventDefault()
+  // 阻止冒泡到 .explorer-scroll 的空白区落点，否则会同时高亮两处
+  event.stopPropagation()
+  isDropActive.value = true
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move'
+  }
+}
+
+function handleDragLeave(event: DragEvent) {
+  // 在卡片内部子元素之间移动也会触发 dragleave，此时不应撤掉高亮
+  const to = event.relatedTarget as Node | null
+  const el = event.currentTarget as HTMLElement
+  if (to && el.contains(to)) return
+  isDropActive.value = false
+}
+
+function handleDrop(event: DragEvent) {
+  if (!hasItemDrag(event) && !getItemDrag()) return
+  event.preventDefault()
+  event.stopPropagation()
+  isDropActive.value = false
+  emit('item-drop', { targetPath: props.dir.path, copy: event.ctrlKey || event.metaKey })
+}
 
 // 最多取 4 张拼 2x2 封面
 const coverIds = computed(() => props.dir.cover_file_ids.slice(0, 4))
@@ -119,6 +185,13 @@ const coverStyle = computed(() => {
 .folder-card:hover {
   transform: translateY(-4px) scale(1.02);
   border-color: var(--color-accent);
+  box-shadow: var(--shadow-xl), var(--shadow-glow);
+}
+
+/* 拖拽悬停：作为放置目标时的高亮 */
+.folder-card.drop-active {
+  border-color: var(--color-accent);
+  border-style: dashed;
   box-shadow: var(--shadow-xl), var(--shadow-glow);
 }
 

@@ -2,6 +2,7 @@
   <!-- Grid 模式 -->
   <RecycleScroller
     v-if="viewMode === 'grid'"
+    ref="scrollerInst"
     class="scroller grid-view"
     :items="gridRows"
     :item-size="gridItemHeight"
@@ -50,6 +51,7 @@
   <!-- List 模式 -->
   <RecycleScroller
     v-else
+    ref="scrollerInst"
     class="scroller list-view"
     :items="files"
     :item-size="60"
@@ -89,6 +91,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import FileCard from './FileCard.vue'
 import FileListItem from './FileListItem.vue'
@@ -129,6 +132,24 @@ defineEmits<{
   (e: 'checkbox-click', fileId: number): void
   (e: 'load-more'): void
 }>()
+
+// grid/list 两个 RecycleScroller 由 v-if/v-else 互斥，同时只挂载一个，故共用同名 ref。
+// RecycleScroller 非 pageMode 时其根元素即滚动容器，直接存取 $el.scrollTop 即可，
+// 无需绕 scrollToPosition（内部实现等价）。
+const scrollerInst = ref<{ $el?: HTMLElement } | null>(null)
+
+/** 读取当前滚动位置（像素）；容器未挂载时返回 0 */
+function getScrollTop(): number {
+  return scrollerInst.value?.$el?.scrollTop ?? 0
+}
+
+/** 设置滚动位置（像素）。注意：需在列表数据就位、容器已撑高后调用，否则会被夹到 0 */
+function setScrollTop(top: number) {
+  const el = scrollerInst.value?.$el
+  if (el) el.scrollTop = top
+}
+
+defineExpose({ getScrollTop, setScrollTop })
 
 // 把拖拽中的标签颜色作为 CSS 变量注入到当前作为 drop 目标的单元格上，
 // 让 drop 高亮（外发光、轮廓、徽章背景）都用该标签颜色，便于一眼识别正在添加的是哪个标签。

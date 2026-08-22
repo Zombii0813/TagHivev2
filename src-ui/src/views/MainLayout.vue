@@ -39,6 +39,8 @@
         >
           <el-icon class="workspace-icon"><Folder /></el-icon>
           <span class="workspace-name">{{ getWorkspaceName(ws) }}</span>
+          <!-- 与该工作区标签页同色的圆点，便于在标签栏中对应 -->
+          <span class="workspace-dot" :style="{ background: workspaceDot(ws) }" />
           <el-button
             class="workspace-remove-btn"
             :icon="Close"
@@ -259,6 +261,9 @@
         </div>
       </header>
 
+      <!-- 浏览标签页栏 -->
+      <BrowserTabsBar />
+
       <!-- 文件浏览器 -->
       <div class="content-area">
         <BrowserView />
@@ -298,7 +303,7 @@
                 <el-icon><Delete /></el-icon>
                 批量删除
               </el-button>
-              <el-button size="small" @click="fileStore.clearSelection">取消选择</el-button>
+              <el-button size="small" @click="fileStore.clearSelection()">取消选择</el-button>
             </div>
           </template>
           <span v-else class="status-text">共 {{ fileStore.totalCount }} 个文件</span>
@@ -366,6 +371,9 @@ import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import TagPanel from './TagPanel.vue'
 import SearchBar from '../components/SearchBar.vue'
+import BrowserTabsBar from '../components/BrowserTabsBar.vue'
+import { MAX_TABS } from '../stores/browserTabs'
+import { workspacePalette } from '../utils/workspaceColor'
 import BrowserView from './BrowserView.vue'
 import DetailPanel from './DetailPanel.vue'
 import BatchOperations from '../components/BatchOperations.vue'
@@ -593,13 +601,18 @@ function getWorkspaceName(ws: string): string {
   return ws.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ws
 }
 
+/** 工作区圆点记号颜色，与该工作区标签页底色同色相 */
+function workspaceDot(ws: string): string {
+  return workspacePalette(ws, appStore.isDark).dot
+}
+
 async function handleAddWorkspace() {
   // 记录调用前的工作区列表，用于判断本次是否新增
   const existingBefore = new Set(appStore.workspaces)
   const selected = await appStore.selectFolder()
   if (selected) {
-    // 切换到新工作区并刷新视图
-    refreshForWorkspace()
+    // 与点击已有工作区一致：为新工作区开一个标签页，不动其它标签页
+    await handleSwitchWorkspace(selected)
     // 仅对“新添加的工作区”自动扫描；已存在的工作区只切换不重复扫描
     if (!existingBefore.has(selected)) {
       wsClient.connect()
@@ -610,9 +623,40 @@ async function handleAddWorkspace() {
   }
 }
 
-function handleSwitchWorkspace(ws: string) {
-  appStore.switchWorkspace(ws)
-  refreshForWorkspace()
+/**
+ * 点击侧栏工作区：新建一个该工作区的标签页，已有标签页不受影响。
+ *
+ * 标签页与工作区解绑后，工作区不再是全局状态，而是标签页的属性；
+ * 若已存在该工作区的标签页则直接切过去，避免重复点击堆积标签页。
+ */
+async function handleSwitchWorkspace(ws: string) {
+  const existing = fileStore.tabList.find(
+    t => !t.isGlobalView && t.workspace === ws
+  )
+  if (existing) {
+    await fileStore.switchTab(existing.id)
+    return
+  }
+  await openWorkspaceTab(ws, false)
+}
+
+/**
+ * 新建指定工作区的标签页并切换过去。
+ *
+ * @param ws 工作区根路径；全局视图时传空串
+ * @param isGlobalView 是否为跨工作区全局视图
+ */
+async function openWorkspaceTab(ws: string, isGlobalView: boolean) {
+  // appStore 同步、标签树重载与数据加载都由 addTab → switchTab 统一完成，
+  // 这里只负责建标签页，避免两处各做一遍引发重复加载
+  const created = await fileStore.addTab({
+    workspace: ws,
+    isGlobalView,
+    currentFolderPath: isGlobalView ? '' : ws,
+  })
+  if (!created) {
+    ElMessage.warning(`标签页数量已达上限（${MAX_TABS} 个），请先关闭部分标签页`)
+  }
 }
 
 // ─── 拖拽文件/文件夹到侧栏工作区：移动/复制到该工作区的记忆层级 ───
@@ -685,14 +729,24 @@ async function onWorkspaceDrop(ws: string, event: DragEvent) {
   }
 }
 
-function handleSetGlobalView() {
-  appStore.setGlobalView(true)
-  refreshForWorkspace()
+// 点击「全部工作区」：同样新建标签页，已有标签页不受影响
+async function handleSetGlobalView() {
+  if (appStore.workspaces.length === 0) return
+  const existing = fileStore.tabList.find(t => t.isGlobalView)
+  if (existing) {
+    await fileStore.switchTab(existing.id)
+    return
+  }
+  await openWorkspaceTab('', true)
 }
 
 async function handleRemoveWorkspace(ws: string) {
   appStore.removeWorkspace(ws)
   fileStore.forgetWorkspaceFolder(ws)
+  // 关闭该工作区的标签页：其内容已随工作区移除而失效。
+  // closeTab 恒保留最后一个标签页，若全部标签页都属于该工作区，
+  // 留下的那个由 refreshForWorkspace 重置到新的活动工作区。
+  await fileStore.closeWorkspaceTabs(ws)
   refreshForWorkspace()
 }
 
@@ -747,15 +801,12 @@ onMounted(() => {
 
       fileStore.completeScanning()
       ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-      // 刷新文件列表：保持当前浏览模式
-      const root = appStore.currentWorkspace || undefined
-      if (fileStore.browseMode !== 'all' && root) {
-        // 文件夹浏览/树窗模式：重新加载当前所在目录（若无则回到工作区根目录）
-        const targetPath = fileStore.currentFolderPath || root
-        fileStore.loadFolderContents(targetPath)
-      } else {
-        fileStore.search({ root })
-      }
+
+      // 扫描会改动全库数据，所有标签页的快照都可能过期。
+      // 但只重载当前标签页——其余标记为脏，等切过去时惰性重载：
+      // 此刻重载用户看不到，且 N 个标签页并发请求会把刚扫完的后端再打满。
+      fileStore.markTabsDirty(fileStore.activeTabId)
+      fileStore.reloadCurrentView()
 
       // 重置标志，允许下次扫描显示提示
       setTimeout(() => {
@@ -915,6 +966,28 @@ function handleCollapsedTagClick(tagId: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * 工作区配色记号：与标签页底色同色相，用于在标签栏里对应工作区。
+ *
+ * 绝对定位叠在删除按钮的位置上（该按钮常驻文档流、仅靠 opacity 显隐），
+ * 这样圆点不额外占宽，悬停时两者交替淡入淡出且不发生布局跳动。
+ */
+.workspace-dot {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.workspace-item:hover .workspace-dot {
+  opacity: 0;
 }
 
 .workspace-remove-btn {

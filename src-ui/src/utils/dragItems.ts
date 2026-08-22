@@ -48,6 +48,30 @@ export function clearItemDragState() {
   _itemDrag = null
 }
 
+/**
+ * 安装全局拖拽状态兜底清理，应在应用启动时调用一次。
+ *
+ * dragend 原本绑在被拖拽的源卡片上，若拖拽过程中源卡片被卸载（例如列表刷新、
+ * 切换浏览标签页导致 files 换掉），dragend 永不触发，_itemDrag 会一直残留，
+ * 使后续所有 dragover 都误以为仍在拖拽中，故需在 window 上兜底。
+ *
+ * 两个事件的清理时机必须区别对待：
+ *
+ * - dragend 在 drop 处理完之后才派发，此时同步清理是安全的。
+ * - drop 则不能同步清理。各落点处理器（文件夹树、文件夹卡片、explorer 空白区、
+ *   工作区切换器）都在冒泡阶段读 getItemDrag() 取拖拽内容，而 window 捕获阶段
+ *   永远先于后代元素的冒泡阶段执行；在此同步清理会让它们全部读到 null 而直接
+ *   return，表现为「拖得动但不发生移动/复制」。因此延到本轮事件派发结束后再清。
+ */
+export function installGlobalDragCleanup() {
+  window.addEventListener('dragend', clearItemDragState, true)
+  window.addEventListener('drop', () => {
+    // setTimeout 而非 microtask：落点处理器多为 async，其首个 await 之前的同步段
+    // （读取 getItemDrag 的部分）需要先跑完
+    setTimeout(clearItemDragState, 0)
+  }, true)
+}
+
 function _createGhost(state: ItemDragState): HTMLElement {
   const el = document.createElement('div')
   const text = state.label

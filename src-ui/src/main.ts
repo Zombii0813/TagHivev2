@@ -8,6 +8,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/index.css'
 import { resolveApiBaseUrl } from './api/baseUrl'
+import { installGlobalDragCleanup } from './utils/dragItems'
 
 async function bootstrap() {
   // 在挂载 UI 前向 Tauri 查询真实 sidecar 端口；
@@ -24,6 +25,9 @@ async function bootstrap() {
   app.use(createPinia())
   app.use(router)
   app.use(ElementPlus)
+
+  // 兜底清理拖拽状态：源卡片在拖拽中被卸载时 dragend 不会触发
+  installGlobalDragCleanup()
 
   app.mount('#app')
 }
