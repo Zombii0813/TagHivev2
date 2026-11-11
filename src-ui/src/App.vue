@@ -5,12 +5,38 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
+import { wsClient } from './api/websocket'
+import { useTagStore } from './stores/tags'
 import { useAppStore } from './stores/app'
 import { useFileStore } from './stores/files'
 
 const appStore = useAppStore()
 const fileStore = useFileStore()
+const tagStore = useTagStore()
+let refreshTimer: ReturnType<typeof setTimeout> | undefined
+const refresh = () => {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    fileStore.markTabsDirty(fileStore.activeTabId)
+    void fileStore.reloadCurrentView()
+    void tagStore.loadTags(appStore.currentWorkspace || undefined)
+  }, 250)
+}
+const unsubscribe = [
+  wsClient.on('file_changed', refresh), wsClient.on('file_deleted', refresh),
+  wsClient.on('connected', refresh),
+]
+watch(() => [...appStore.workspaces], paths => {
+  wsClient.subscribeWorkspaces(paths)
+  fileStore.markTabsDirty()
+  refresh()
+}, { immediate: true })
+onUnmounted(() => {
+  unsubscribe.forEach(off => off())
+  if (refreshTimer) clearTimeout(refreshTimer)
+  wsClient.disconnect()
+})
 
 onMounted(async () => {
   await appStore.initialize()

@@ -132,12 +132,15 @@ export const useTagStore = defineStore('tags', () => {
   function getDescendantIds(tagId: number): number[] {
     const result: number[] = []
     const idx = childrenIndex.value
+    const visited = new Set([tagId])
     const stack = [tagId]
     while (stack.length) {
       const cur = stack.pop()!
       const children = idx.get(cur)
       if (!children) continue
       for (const cid of children) {
+        if (visited.has(cid)) continue
+        visited.add(cid)
         result.push(cid)
         stack.push(cid)
       }
@@ -210,19 +213,25 @@ export const useTagStore = defineStore('tags', () => {
   }
 
   // Actions
+  let loadVersion = 0
   async function loadTags(root?: string) {
+    const version = ++loadVersion
     isLoading.value = true
     lastLoadedRoot.value = root
     loadTagFilterMode(root)
     try {
-      tags.value = await tagApi.getAll(root)
+      const loaded = await tagApi.getAll(root)
+      if (version !== loadVersion) return
+      tags.value = loaded
+      const saved = useFileStore().activeTab.searchQuery.tags ?? []
+      selectedTagIds.value = new Set(saved.filter(id => loaded.some(tag => tag.id === id)))
       syncTagOrder(root)
       // 默认展开所有有子标签的父标签 - 走 childrenIndex 避免 O(n²)
       expandedTagIds.value = new Set(childrenIndex.value.keys())
     } catch (error) {
-      console.error('Failed to load tags:', error)
+      if (version === loadVersion) console.error('Failed to load tags:', error)
     } finally {
-      isLoading.value = false
+      if (version === loadVersion) isLoading.value = false
     }
   }
 
@@ -254,6 +263,16 @@ export const useTagStore = defineStore('tags', () => {
       console.error('Failed to update tag:', error)
       throw error
     }
+  }
+
+  async function deleteMany(ids: number[], mode: 'promote' | 'descendants') {
+    const result = await tagApi.deleteMany(ids, mode)
+    const files = useFileStore()
+    for (const id of result.deleted_ids) {
+      files.removeTagFromAllFiles(id)
+      selectedTagIds.value.delete(id)
+    }
+    await reloadTags()
   }
 
   async function deleteTag(id: number) {
@@ -313,6 +332,7 @@ export const useTagStore = defineStore('tags', () => {
   }
 
   function clearSelection() {
+    useFileStore().activeTab.searchQuery.tags = []
     selectedTagIds.value.clear()
   }
 
@@ -413,6 +433,7 @@ export const useTagStore = defineStore('tags', () => {
     createTag,
     updateTag,
     deleteTag,
+    deleteMany,
     selectTag,
     clearSelection,
     selectAll,

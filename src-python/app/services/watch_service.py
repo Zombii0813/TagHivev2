@@ -29,7 +29,7 @@ def should_ignore(path: Path) -> bool:
     """检查路径是否应该被忽略"""
     path_str = str(path)
     name = path.name
-    
+
     for pattern in IGNORED_PATTERNS:
         # 检查是否是目录名
         if pattern in path_str:
@@ -40,7 +40,7 @@ def should_ignore(path: Path) -> bool:
         # 使用通配符匹配
         if pattern.startswith("*") and name.endswith(pattern[1:]):
             return True
-    
+
     return False
 
 
@@ -54,15 +54,18 @@ class WatchService:
         root: Path,
         on_change: Callable[[Path], None] | None = None,
         on_delete: Callable[[Path], None] | None = None,
+        on_move: Callable[[Path, Path], None] | None = None,
+        on_directory: Callable[[Path], None] | None = None,
     ) -> None:
         if self.observer is None:
             self.observer = Observer()
-        self.handler = _WatchHandler(on_change=on_change, on_delete=on_delete)
+        self.handler = _WatchHandler(on_change=on_change, on_delete=on_delete, on_move=on_move, on_directory=on_directory)
         observer = self.observer
         if observer is None:
             return
         observer.schedule(self.handler, str(root), recursive=True)
-        observer.start()
+        if not observer.is_alive():
+            observer.start()
 
     def stop(self) -> None:
         if self.observer is None:
@@ -73,13 +76,17 @@ class WatchService:
 
 
 class _WatchHandler(FileSystemEventHandler):
-    def __init__(self, on_change=None, on_delete=None) -> None:
+    def __init__(self, on_change=None, on_delete=None, on_move=None, on_directory=None) -> None:
         super().__init__()
         self.on_change = on_change
         self.on_delete = on_delete
+        self.on_move = on_move
+        self.on_directory = on_directory
 
     def on_created(self, event) -> None:
         if event.is_directory:
+            if self.on_directory and not should_ignore(Path(event.src_path)):
+                self.on_directory(Path(event.src_path))
             return
         path = Path(event.src_path)
         if should_ignore(path):
@@ -97,16 +104,23 @@ class _WatchHandler(FileSystemEventHandler):
             self.on_change(path)
 
     def on_moved(self, event) -> None:
-        if event.is_directory:
-            return
-        path = Path(event.dest_path)
-        if should_ignore(path):
-            return
-        if self.on_change:
-            self.on_change(path)
+        """保留源和目标路径，目录移动也必须同步索引。"""
+        source, target = Path(event.src_path), Path(event.dest_path)
+        if should_ignore(target):
+            if self.on_delete:
+                self.on_delete(source)
+        elif should_ignore(source):
+            if event.is_directory and self.on_directory:
+                self.on_directory(target)
+            elif self.on_change:
+                self.on_change(target)
+        elif self.on_move:
+            self.on_move(source, target)
 
     def on_deleted(self, event) -> None:
         if event.is_directory:
+            if self.on_directory and not should_ignore(Path(event.src_path)):
+                self.on_directory(Path(event.src_path))
             return
         path = Path(event.src_path)
         if should_ignore(path):

@@ -7,7 +7,7 @@ from typing import Iterable
 @dataclass(frozen=True)
 class SearchQuery:
     """搜索查询对象 - 支持多种搜索条件组合
-    
+
     Attributes:
         text: 搜索文本，支持通配符和 FTS5 语法
         root: 限制搜索路径前缀
@@ -20,6 +20,7 @@ class SearchQuery:
     """
     text: str | None = None
     root: str | None = None
+    roots: tuple[str, ...] | None = None
     types: tuple[str, ...] = ()
     tags: tuple[int, ...] = ()
     match_all_tags: bool = False

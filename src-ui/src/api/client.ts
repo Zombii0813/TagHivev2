@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
-import { getApiBaseUrl } from './baseUrl'
+import { getApiBaseUrl, resolveApiBaseUrl, getSessionToken } from './baseUrl'
 
 class ApiClient {
   private client: AxiosInstance
@@ -16,7 +16,9 @@ class ApiClient {
     // 请求拦截器：每次请求都从 baseUrl 模块取最新值，
     // 避免 ApiClient 在 baseURL 解析完成前实例化导致使用空串/旧值
     this.client.interceptors.request.use(
-      (config) => {
+      async (config) => {
+        await resolveApiBaseUrl()
+        config.headers.Authorization = `Bearer ${getSessionToken()}`
         config.baseURL = getApiBaseUrl()
         return config
       },
@@ -28,7 +30,12 @@ class ApiClient {
     // 响应拦截器
     this.client.interceptors.response.use(
       (response) => response.data,
-      (error) => {
+      async (error) => {
+        if (error.config && !error.config._retried && (!error.response || error.response.status === 401)) {
+          error.config._retried = true
+          await resolveApiBaseUrl(true)
+          return this.client.request(error.config)
+        }
         console.error('API Error:', error)
         return Promise.reject(error)
       }

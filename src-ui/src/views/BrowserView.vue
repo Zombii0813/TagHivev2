@@ -948,14 +948,14 @@ const gridRows = computed<GridRow[]>(() => {
   const rows: GridRow[] = []
   const files = fileStore.files
   const columns = gridColumns.value
-  
+
   for (let i = 0; i < files.length; i += columns) {
     rows.push({
       rowIndex: Math.floor(i / columns),
       files: files.slice(i, i + columns)
     })
   }
-  
+
   return rows
 })
 
@@ -1232,7 +1232,7 @@ onMounted(() => {
     })
     resizeObserver.observe(scrollerRef.value)
   }
-  
+
   // 注：appStore.initialize() 在 App.vue 的 onMounted 中执行，而父组件的
   // onMounted 晚于子组件，故冷启动走到这里时工作区通常还没恢复，本块不会执行；
   // 真正的启动恢复由下方 currentWorkspace watcher 承担。此处只覆盖
@@ -1259,7 +1259,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeyDown)
   window.removeEventListener('dragend', handleGlobalDragEnd)
   window.removeEventListener('drop', handleGlobalDragEnd)
-  
+
   // 移除 ResizeObserver
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -1356,19 +1356,19 @@ watch(() => fileStore.browseMode, async (newMode) => {
       await fileStore.search({ root: appStore.currentWorkspace })
     }
   }
-  
+
   // 等待 DOM 更新后重新设置 ResizeObserver
   await nextTick()
-  
+
   // 清理旧的 ResizeObserver
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
   }
-  
+
   // 更新容器宽度
   updateContainerWidth()
-  
+
   // 重新设置 ResizeObserver
   if (scrollerRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => {
@@ -1391,7 +1391,7 @@ async function selectWorkspace() {
     if (path) {
       // 连接 WebSocket
       wsClient.connect()
-      
+
       // 扫描完成/失败的提示与列表刷新由 MainLayout 的常驻订阅统一处理，
       // 这里不再重复订阅：两处都会刷新一次，且本处的刷新不带标签页脏标记，
       // 会把 MainLayout 刚标脏的其它标签页状态搅乱。
@@ -1696,8 +1696,7 @@ async function handleFolderSelect(folderPath: string, _wsPath?: string) {
   // 记住该工作区当前浏览到的层级，供切换工作区后恢复
   const ownerWs = _wsPath || findOwnerWorkspace(folderPath)
   if (ownerWs) fileStore.rememberFolder(ownerWs, folderPath)
-  // 切换目录时清除标签过滤，避免状态不一致
-  tagStore.clearSelection()
+  // 目录导航沿用本标签页的关键词、类型和标签组合。
   await fileStore.loadFolderContents(folderPath)
 }
 

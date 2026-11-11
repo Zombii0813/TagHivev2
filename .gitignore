@@ -75,3 +75,7 @@ docs/
 
 # Claude Code
 .claude/
+# Isolated review and regression runtime data
+.audit-tmp/
+
+reports/

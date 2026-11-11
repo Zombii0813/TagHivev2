@@ -96,7 +96,7 @@ const hasThumbnail = computed(() =>
 )
 
 const thumbnailUrl = computed(() => {
-  const base = thumbnailApi.getThumbnailUrl(props.file.id, 'medium')
+  const base = thumbnailApi.getThumbnailUrl(props.file.id, 'medium') + `&v=${props.file.modified_at}-${props.file.size}`
   return cacheBust.value > 0 ? `${base}&_t=${cacheBust.value}` : base
 })
 

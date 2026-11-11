@@ -77,6 +77,7 @@ export interface PersistedTab {
   currentFolderPath: string
   searchText: string
   searchType: string
+  tagIds?: number[]
 }
 
 export const TABS_KEY = 'taghive:browser-tabs'
@@ -171,6 +172,7 @@ export function toPersisted(tab: TabState): PersistedTab {
     currentFolderPath: tab.currentFolderPath,
     searchText: tab.searchText,
     searchType: tab.searchType,
+    tagIds: tab.searchQuery.tags,
   }
 }
 
@@ -189,6 +191,7 @@ export function fromPersisted(p: PersistedTab): TabState {
     currentFolderPath: p.currentFolderPath,
     searchText: p.searchText,
     searchType: p.searchType,
+    searchQuery: { tags: p.tagIds },
     // 把落盘的层级回填进层级记忆：树窗/资源管理器模式恢复数据时走的是
     // getTabFolder(工作区)，记忆为空会退回工作区根，currentFolderPath
     // 虽然恢复了也会立刻被覆盖掉。folderByWorkspace 本身不落盘
@@ -233,6 +236,7 @@ export function loadPersistedTabs(): {
           typeof t.currentFolderPath === 'string' ? t.currentFolderPath : '',
         searchText: typeof t.searchText === 'string' ? t.searchText : '',
         searchType: typeof t.searchType === 'string' ? t.searchType : '',
+        tagIds: Array.isArray(t.tagIds) ? t.tagIds.filter((id): id is number => typeof id === 'number' && Number.isInteger(id)) : [],
       })
       if (tabs.length >= MAX_TABS) break
     }

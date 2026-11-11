@@ -374,14 +374,14 @@ import SearchBar from '../components/SearchBar.vue'
 import BrowserTabsBar from '../components/BrowserTabsBar.vue'
 import { MAX_TABS } from '../stores/browserTabs'
 import { workspacePalette } from '../utils/workspaceColor'
-import BrowserView from './BrowserView.vue'
-import DetailPanel from './DetailPanel.vue'
+const BrowserView = defineAsyncComponent(() => import('./BrowserView.vue'))
+const DetailPanel = defineAsyncComponent(() => import('./DetailPanel.vue'))
 import BatchOperations from '../components/BatchOperations.vue'
 import AppMenuBar from '../components/AppMenuBar.vue'
 import LogViewer from '../components/LogViewer.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import TagTransferDialog from './TagTransferDialog.vue'
-import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
+import { defineAsyncComponent, ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
 import { wsClient } from '../api/websocket'
 import { ElMessage } from 'element-plus'
 import type { ScanProgressEvent, ScanCompletedEvent } from '../types'
@@ -507,13 +507,13 @@ const getSortIcon = () => {
 const getSortLabel = () => {
   const currentField = fileStore.sortBy
   const currentDesc = fileStore.sortDesc
-  
+
   for (const [, option] of Object.entries(sortOptions)) {
     if (option.field === currentField && option.desc === currentDesc) {
       return option.label
     }
   }
-  
+
   // 默认显示
   const fieldLabels: Record<string, string> = {
     name: '名称',

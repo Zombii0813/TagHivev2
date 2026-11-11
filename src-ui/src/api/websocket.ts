@@ -6,19 +6,22 @@ import type {
   ScanCompletedEvent,
   ThumbnailReadyEvent,
 } from '../types'
-import { getApiBaseUrl } from './baseUrl'
+import { getApiBaseUrl, getSessionToken, resolveApiBaseUrl } from './baseUrl'
 
 class WebSocketClient {
+  private workspacePaths: string[] = []
+  private recovering = false
   private socket: Socket | null = null
   private eventHandlers: Map<string, Set<(data: unknown) => void>> = new Map()
 
   connect(): void {
-    if (this.socket?.connected) return
+    if (this.socket) return
 
     // 每次 connect 时取最新 baseUrl；启动竞速时若仍未解析，
     // socket.io-client 接受空串（连相对路径，走 vite 代理）。
     const wsUrl = getApiBaseUrl() || window.location.origin
     this.socket = io(wsUrl, {
+      auth: (callback) => callback({ token: getSessionToken() }),
       transports: ['websocket', 'polling'],  // 允许降级到 polling
       reconnection: true,
       reconnectionAttempts: 10,
@@ -28,8 +31,20 @@ class WebSocketClient {
     })
 
     this.socket.on('connect', () => {
+      this.socket?.emit('subscribe_workspace', { paths: this.workspacePaths })
       console.log('WebSocket connected')
       this.emit('connected', {})
+    })
+
+    this.socket.on('connect_error', async () => {
+      if (this.recovering) return
+      this.recovering = true
+      try {
+        await resolveApiBaseUrl(true)
+        this.disconnect()
+        this.connect()
+      } catch (error) { this.emit('error', { message: String(error) }) }
+      finally { this.recovering = false }
     })
 
     this.socket.on('disconnect', () => {
@@ -84,11 +99,15 @@ class WebSocketClient {
     this.socket = null
   }
 
-  subscribeWorkspace(path: string): void {
-    this.socket?.emit('subscribe_workspace', { path })
+  subscribeWorkspace(path: string): void { this.subscribeWorkspaces([path]) }
+
+  subscribeWorkspaces(paths: string[]): void {
+    this.workspacePaths = [...paths]
+    if (this.socket?.connected) this.socket.emit('subscribe_workspace', { paths })
   }
 
   unsubscribeWorkspace(): void {
+    this.workspacePaths = []
     this.socket?.emit('unsubscribe_workspace', {})
   }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..utils.paths import path_prefix
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
@@ -7,7 +9,7 @@ from pathlib import Path
 
 from sqlalchemy import case, delete, func, select, text, update, insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..core.indexer import FileMeta
 from ..core.search import SearchQuery, SearchResult
@@ -61,16 +63,16 @@ def natural_order_column(sort_column):
 @dataclass
 class Repo:
     """数据访问层 - 提供数据库操作的统一接口
-    
+
     包含文件、标签的增删改查，以及批量操作和全文搜索功能。
     """
-    
+
     session: Session
-    
+
     def __post_init__(self):
         """初始化后设置搜索缓存"""
         self._search_cache = SearchCache()
-    
+
     def clear_search_cache(self):
         """清除搜索缓存"""
         self._search_cache.clear()
@@ -150,10 +152,10 @@ class Repo:
             index_elements=['path'],
             set_=update_dict
         )
-        
+
         self.session.execute(stmt)
         self.clear_search_cache()
-        
+
         # 返回更新后的记录
         return self.session.execute(
             select(File).where(File.path == path_str)
@@ -162,32 +164,32 @@ class Repo:
     def bulk_upsert_files_fast(self, metas: list, existing_ids: dict[str, int]) -> int:
         """
         超高速批量插入或更新文件
-        
+
         针对大文件量优化，使用原生 SQL 批量操作
-        
+
         Args:
             metas: FileMeta 列表
             existing_ids: 路径到 ID 的映射字典
-        
+
         Returns:
             处理的文件数量
         """
         if not metas:
             return 0
-        
+
         # 分离插入和更新
         to_insert = []
         to_update = []
-        
+
         for meta in metas:
             path_str = meta.path.as_posix()
             if path_str in existing_ids:
                 to_update.append(meta)
             else:
                 to_insert.append(meta)
-        
+
         now = datetime.utcnow()
-        
+
         # 批量插入 - 使用 INSERT ... ON CONFLICT DO UPDATE
         if to_insert:
             insert_values = []
@@ -270,7 +272,7 @@ class Repo:
                         updated_at=now,
                     )
                 )
-        
+
         self.clear_search_cache()
         return len(metas)
 
@@ -280,18 +282,18 @@ class Repo:
         """批量插入或更新文件"""
         results: list[File] = []
         batch: list[FileMeta] = []
-        
+
         for meta in metas:
             batch.append(meta)
             if len(batch) >= batch_size:
                 results.extend(self._process_batch(batch))
                 batch.clear()
                 self.session.commit()
-        
+
         if batch:
             results.extend(self._process_batch(batch))
             self.session.commit()
-        
+
         # 清除缓存
         self.clear_search_cache()
         return results
@@ -301,14 +303,14 @@ class Repo:
         results: list[File] = []
         # 统一使用 POSIX 路径格式
         paths = [m.path.as_posix() for m in batch]
-        
+
         existing_files = {
             f.path: f
             for f in self.session.execute(
                 select(File).where(File.path.in_(paths))
             ).scalars()
         }
-        
+
         for meta in batch:
             path_str = meta.path.as_posix()
             idx = path_str.rfind("/")
@@ -336,7 +338,7 @@ class Repo:
                 )
                 self.session.add(file_row)
             results.append(file_row)
-        
+
         return results
 
     def list_file_paths(self) -> list[tuple[int, str]]:
@@ -413,7 +415,7 @@ class Repo:
 
     def list_tags(self, root: str | None = None) -> list[Tag]:
         """获取所有标签列表
-        
+
         Args:
             root: 可选的工作目录路径，用于过滤标签的工作空间
                  如果提供，只返回该工作空间的标签（包括未关联文件的）
@@ -421,40 +423,39 @@ class Repo:
         if root:
             # 如果提供了工作目录，获取该工作空间的所有标签
             root_posix = Path(root).as_posix()
-            
+
             # 获取该工作空间的标签（包括 workspace 匹配或为空的）
             stmt = select(Tag).where(
                 (Tag.workspace == root_posix) | (Tag.workspace.is_(None))
             )
             tags = list(self.session.execute(stmt).scalars())
-            
+
             # 计算每个标签在该工作目录下的文件数量
             if tags:
-                root_pattern = root_posix.rstrip("/") + "/%"
                 tag_ids = [tag.id for tag in tags]
-                
+
                 # 获取该工作目录下的文件关联计数
                 count_stmt = (
                     select(FileTag.tag_id, func.count(FileTag.file_id).label('file_count'))
                     .join(File, File.id == FileTag.file_id)
                     .where(
                         FileTag.tag_id.in_(tag_ids),
-                        File.path.like(root_pattern)
+                        path_prefix(File.path, root_posix)
                     )
                     .group_by(FileTag.tag_id)
                 )
                 count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
-                
+
                 # 将文件数量设置到标签对象上
                 for tag in tags:
                     tag._file_count = count_results.get(tag.id, 0)
-            
+
             return tags
         else:
             # 获取所有标签
             stmt = select(Tag)
             tags = list(self.session.execute(stmt).scalars())
-            
+
             # 批量获取每个标签的文件数量
             if tags:
                 tag_ids = [tag.id for tag in tags]
@@ -464,13 +465,13 @@ class Repo:
                     .group_by(FileTag.tag_id)
                 )
                 count_results = {row.tag_id: row.file_count for row in self.session.execute(count_stmt)}
-                
+
                 # 将文件数量设置到标签对象上（用于序列化）
                 for tag in tags:
                     tag._file_count = count_results.get(tag.id, 0)
-            
+
             return tags
-    
+
     def get_tag_file_count(self, tag_id: int) -> int:
         """获取标签关联的文件数量"""
         stmt = select(func.count(FileTag.file_id)).where(FileTag.tag_id == tag_id)
@@ -482,13 +483,13 @@ class Repo:
 
     def get_tag_by_name_and_workspace(self, name: str, workspace: str | None = None) -> Tag | None:
         """通过名称和工作目录获取标签
-        
+
         支持按工作目录隔离，不同工作目录可以有相同名称的标签。
-        
+
         Args:
             name: 标签名称
             workspace: 工作目录路径，None 表示全局标签
-            
+
         Returns:
             标签对象或 None
         """
@@ -509,6 +510,18 @@ class Repo:
                 )
             ).scalar_one_or_none()
 
+    def validate_tag_parent(self, parent_id: int | None, workspace: str | None, tag_id: int | None = None) -> None:
+        """验证父标签存在、工作区相同且层级无环。"""
+        visited = {tag_id} if tag_id is not None else set()
+        while parent_id is not None:
+            if parent_id in visited:
+                raise ValueError("标签不能以自身或后代作为父标签")
+            visited.add(parent_id)
+            parent = self.session.get(Tag, parent_id)
+            if parent is None or parent.workspace != workspace:
+                raise ValueError("父标签不存在或不属于同一工作区")
+            parent_id = parent.parent_id
+
     def create_tag(self, spec: TagSpec, workspace: str | None = None, parent_id: int | None = None) -> Tag:
         """创建新标签
 
@@ -521,6 +534,7 @@ class Repo:
             创建的标签对象
         """
         from pathlib import Path
+        self.validate_tag_parent(parent_id, Path(workspace).as_posix() if workspace else None)
         tag = Tag(
             name=spec.name,
             color=spec.color,
@@ -576,10 +590,10 @@ class Repo:
         """批量为多个文件添加标签"""
         file_ids = list(file_ids)
         tag_ids = list(tag_ids)
-        
+
         if not file_ids or not tag_ids:
             return
-        
+
         existing = {
             (ft.file_id, ft.tag_id)
             for ft in self.session.execute(
@@ -589,7 +603,7 @@ class Repo:
                 )
             ).scalars()
         }
-        
+
         new_associations: list[dict] = []
         for file_id in file_ids:
             for tag_id in tag_ids:
@@ -598,7 +612,7 @@ class Repo:
                     if len(new_associations) >= batch_size:
                         self.session.execute(FileTag.__table__.insert(), new_associations)
                         new_associations.clear()
-        
+
         if new_associations:
             self.session.execute(FileTag.__table__.insert(), new_associations)
             # 清除缓存
@@ -648,19 +662,14 @@ class Repo:
 
     # ========== 搜索功能 ==========
 
-    def search(self, query: SearchQuery, limit: int | None = None) -> list[SearchResult]:
-        """文件搜索 - 支持多种搜索条件"""
-        # 检查缓存
-        cached_results = self._search_cache.get(query)
-        if cached_results:
-            return cached_results
-
+    def _search_statement(self, query: SearchQuery):
+        """统一构造完整搜索条件，确保计数与分页范围一致。"""
         stmt = select(File)
 
         # 文本搜索
         if query.text:
             if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
-                fts_ids = self._fts_search(query.text, limit)
+                fts_ids = self._fts_search(query.text)
                 if fts_ids:
                     stmt = stmt.where(File.id.in_(fts_ids))
                 else:
@@ -672,16 +681,18 @@ class Repo:
 
         # 路径前缀过滤
         if query.root:
-            # 统一使用 POSIX 路径格式进行匹配
             root_posix = Path(query.root).as_posix()
-            root_pattern = root_posix.rstrip("/") + "/%"
-            stmt = stmt.where(File.path.like(root_pattern))
+            stmt = stmt.where(path_prefix(File.path, root_posix))
+
+        if query.roots is not None:
+            from sqlalchemy import or_
+            stmt = stmt.where(or_(*(path_prefix(File.path, root) for root in query.roots)) if query.roots else False)
 
         # 文件类型过滤
         if query.types:
             stmt = stmt.where(File.type.in_(query.types))
 
-        # 标签过滤（使用标签 ID）
+        # 标签过滤
         if query.tags:
             stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
                 Tag, Tag.id == FileTag.tag_id
@@ -693,6 +704,17 @@ class Repo:
                 )
             else:
                 stmt = stmt.distinct()
+
+        return stmt
+
+    def search(self, query: SearchQuery, limit: int | None = None) -> list[SearchResult]:
+        """文件搜索 - 支持多种搜索条件"""
+        # 检查缓存
+        cached_results = self._search_cache.get(query)
+        if cached_results:
+            return cached_results
+
+        stmt = self._search_statement(query)
 
         # 排序
         if query.sort_by:
@@ -781,7 +803,7 @@ class Repo:
         file_ids = [int(file_id) for file_id in file_ids]
         if not file_ids:
             return []
-        stmt = select(File).where(File.id.in_(file_ids))
+        stmt = select(File).options(selectinload(File.tags)).where(File.id.in_(file_ids))
         return list(self.session.execute(stmt).scalars())
 
     def get_files_by_paths(self, paths: Iterable[str]) -> list[File]:
@@ -796,25 +818,25 @@ class Repo:
 
     def list_tags_cached(self, root: str | None = None, ttl: int = 300) -> list[Tag]:
         """获取标签列表（带缓存）
-        
+
         Args:
             root: 可选的工作目录路径
             ttl: 缓存过期时间（秒），默认5分钟
-            
+
         Returns:
             标签列表
         """
         cache = get_query_cache()
         cache_key = f"tags:list:{root or 'all'}"
-        
+
         # 尝试从缓存获取
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        
+
         # 从数据库获取
         tags = self.list_tags(root)
-        
+
         # 缓存结果
         cache.set(cache_key, tags, ttl)
         return tags
@@ -879,40 +901,40 @@ class Repo:
 
     def get_folder_tree_cached(self, root: str, ttl: int = 300) -> dict:
         """获取文件夹树（带缓存）
-        
+
         Args:
             root: 根目录路径
             ttl: 缓存过期时间（秒），默认5分钟
-            
+
         Returns:
             文件夹树数据字典
         """
         cache = get_query_cache()
         cache_key = f"folder:tree:{root}"
-        
+
         # 尝试从缓存获取
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        
+
         # 构建文件夹树
         from ..api.routes import _build_folder_tree
         folders, root_file_count = _build_folder_tree(root, self)
-        
+
         # 计算总文件夹数
         def count_folders(nodes) -> int:
             count = len(nodes)
             for node in nodes:
                 count += count_folders(node.children)
             return count
-        
+
         result = {
             "root_path": root,
             "folders": folders,
             "total_folders": count_folders(folders),
             "root_file_count": root_file_count,
         }
-        
+
         # 缓存结果
         cache.set(cache_key, result, ttl)
         return result
@@ -947,55 +969,18 @@ class Repo:
         page_size: int = 50,
     ) -> CursorPage[SearchResult]:
         """使用游标分页搜索文件
-        
+
         适用于大数据量场景，避免 OFFSET 分页的性能问题。
-        
+
         Args:
             query: 搜索查询
             cursor: 游标字符串，None表示第一页
             page_size: 每页大小
-            
+
         Returns:
             CursorPage 分页结果
         """
-        # 构建基础查询
-        stmt = select(File)
-
-        # 文本搜索
-        if query.text:
-            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
-                fts_ids = self._fts_search(query.text)
-                if fts_ids:
-                    stmt = stmt.where(File.id.in_(fts_ids))
-                else:
-                    term = f"%{query.text}%"
-                    stmt = stmt.where(File.name.ilike(term))
-            else:
-                term = f"%{query.text}%"
-                stmt = stmt.where(File.name.ilike(term))
-
-        # 路径前缀过滤
-        if query.root:
-            root_posix = Path(query.root).as_posix()
-            root_pattern = root_posix.rstrip("/") + "/%"
-            stmt = stmt.where(File.path.like(root_pattern))
-
-        # 文件类型过滤
-        if query.types:
-            stmt = stmt.where(File.type.in_(query.types))
-
-        # 标签过滤
-        if query.tags:
-            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
-                Tag, Tag.id == FileTag.tag_id
-            )
-            stmt = stmt.where(Tag.id.in_(query.tags))
-            if query.match_all_tags:
-                stmt = stmt.group_by(File.id).having(
-                    func.count(func.distinct(Tag.id)) == len(query.tags)
-                )
-            else:
-                stmt = stmt.distinct()
+        stmt = self._search_statement(query)
 
         # 确定排序字段
         sort_column = getattr(File, query.sort_by, File.name) if query.sort_by else File.name
@@ -1023,41 +1008,7 @@ class Repo:
 
     def count_search(self, query: SearchQuery) -> int:
         """计算搜索结果总数（纯 COUNT SQL，不加载任何行数据）"""
-        stmt = select(func.count()).select_from(File)
-
-        if query.text:
-            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
-                fts_ids = self._fts_search(query.text)
-                if fts_ids:
-                    stmt = stmt.where(File.id.in_(fts_ids))
-                else:
-                    stmt = stmt.where(File.name.ilike(f"%{query.text}%"))
-            else:
-                stmt = stmt.where(File.name.ilike(f"%{query.text}%"))
-
-        if query.root:
-            root_posix = Path(query.root).as_posix()
-            stmt = stmt.where(File.path.like(root_posix.rstrip("/") + "/%"))
-
-        if query.types:
-            stmt = stmt.where(File.type.in_(query.types))
-
-        if query.tags:
-            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
-                Tag, Tag.id == FileTag.tag_id
-            )
-            stmt = stmt.where(Tag.id.in_(query.tags))
-            if query.match_all_tags:
-                stmt = select(func.count()).select_from(
-                    select(File.id)
-                    .join(FileTag, FileTag.file_id == File.id)
-                    .join(Tag, Tag.id == FileTag.tag_id)
-                    .where(Tag.id.in_(query.tags))
-                    .group_by(File.id)
-                    .having(func.count(func.distinct(Tag.id)) == len(query.tags))
-                    .subquery()
-                )
-
+        stmt = select(func.count()).select_from(self._search_statement(query).subquery())
         return self.session.execute(stmt).scalar() or 0
 
     def search_with_offset(
@@ -1067,55 +1018,18 @@ class Repo:
         limit: int = 50,
     ) -> OffsetPage[SearchResult]:
         """使用 OFFSET 分页搜索文件
-        
+
         适用于小数据量场景（< 10000条记录）。
-        
+
         Args:
             query: 搜索查询
             offset: 偏移量
             limit: 每页大小
-            
+
         Returns:
             OffsetPage 分页结果
         """
-        # 构建基础查询
-        stmt = select(File)
-
-        # 文本搜索
-        if query.text:
-            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
-                fts_ids = self._fts_search(query.text)
-                if fts_ids:
-                    stmt = stmt.where(File.id.in_(fts_ids))
-                else:
-                    term = f"%{query.text}%"
-                    stmt = stmt.where(File.name.ilike(term))
-            else:
-                term = f"%{query.text}%"
-                stmt = stmt.where(File.name.ilike(term))
-
-        # 路径前缀过滤
-        if query.root:
-            root_posix = Path(query.root).as_posix()
-            root_pattern = root_posix.rstrip("/") + "/%"
-            stmt = stmt.where(File.path.like(root_pattern))
-
-        # 文件类型过滤
-        if query.types:
-            stmt = stmt.where(File.type.in_(query.types))
-
-        # 标签过滤
-        if query.tags:
-            stmt = stmt.join(FileTag, FileTag.file_id == File.id).join(
-                Tag, Tag.id == FileTag.tag_id
-            )
-            stmt = stmt.where(Tag.id.in_(query.tags))
-            if query.match_all_tags:
-                stmt = stmt.group_by(File.id).having(
-                    func.count(func.distinct(Tag.id)) == len(query.tags)
-                )
-            else:
-                stmt = stmt.distinct()
+        stmt = self._search_statement(query)
 
         # 排序
         if query.sort_by:
@@ -1150,30 +1064,30 @@ class Repo:
         cursor: str | None = None,
     ) -> CursorPage[SearchResult] | OffsetPage[SearchResult]:
         """优化的搜索方法 - 自动选择分页策略
-        
+
         根据预估数据量自动选择游标分页或 OFFSET 分页。
-        
+
         Args:
             query: 搜索查询
             offset: 偏移量（OFFSET分页使用）
             limit: 每页大小
             cursor: 游标字符串（游标分页使用）
-            
+
         Returns:
             分页结果（CursorPage 或 OffsetPage）
         """
         # 如果提供了游标，使用游标分页
         if cursor is not None:
             return self.search_with_cursor(query, cursor, limit)
-        
+
         # 预估数据量
         estimated_count = self._estimate_search_count(query)
-        
+
         # 大数据量使用游标分页
         if estimated_count > CURSOR_PAGINATION_THRESHOLD or offset > 1000:
             # OFFSET 较大时也使用游标分页
             return self.search_with_cursor(query, None, limit)
-        
+
         # 小数据量使用 OFFSET 分页
         return self.search_with_offset(query, offset, limit)
 
@@ -1188,8 +1102,7 @@ class Repo:
 
         if query.root:
             root_posix = Path(query.root).as_posix()
-            root_pattern = root_posix.rstrip("/") + "/%"
-            stmt = stmt.where(File.path.like(root_pattern))
+            stmt = stmt.where(path_prefix(File.path, root_posix))
 
         if query.types:
             stmt = stmt.where(File.type.in_(query.types))

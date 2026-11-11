@@ -1,12 +1,16 @@
 import { apiClient } from './client'
-import { getApiBaseUrl } from './baseUrl'
+import { getApiBaseUrl, sessionHeaders } from './baseUrl'
+import { useAppStore } from '../stores/app'
 import type { Tag, CreateTagRequest, UpdateTagRequest } from '../types'
 
 export const tagApi = {
   // 获取所有标签
   // root: 可选的工作目录路径，如果提供则只返回该目录下有关联文件的标签
   async getAll(root?: string): Promise<Tag[]> {
-    const config = root ? { params: { root } } : undefined
+    const params = new URLSearchParams()
+    if (root) params.set("root", root)
+    else params.set("roots", JSON.stringify(useAppStore().workspaces))
+    const config = { params }
     return apiClient.get<Tag[]>('/api/tags', config)
   },
 
@@ -30,6 +34,10 @@ export const tagApi = {
     return apiClient.delete<{ success: boolean }>(`/api/tags/${id}`)
   },
 
+  async deleteMany(ids: number[], mode: 'promote' | 'descendants') {
+    return apiClient.post<{ success: boolean; deleted_ids: number[] }>('/api/tags/delete', { ids, mode })
+  },
+
   // 批量分配标签
   async batchAssign(fileIds: number[], tagIds: number[]): Promise<{ success: boolean; files: number; tags: number }> {
     return apiClient.post<{ success: boolean; files: number; tags: number }>('/api/tags/batch-assign', {
@@ -50,7 +58,7 @@ export const tagApi = {
   async exportPack(workspace: string, tagIds?: number[], includeThumbnails: boolean = false): Promise<Uint8Array> {
     const resp = await fetch(`${getApiBaseUrl()}/api/tags/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...sessionHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspace,
         tag_ids: tagIds ?? null,
@@ -72,7 +80,7 @@ export const tagApi = {
       `${getApiBaseUrl()}/api/tags/import/preview?workspace=${encodeURIComponent(workspace)}`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: { ...sessionHeaders(), 'Content-Type': 'application/octet-stream' },
         body: blob,
       },
     )

@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from ..utils.thumbnail_cache import thumbnail_identity, atomic_image_save
+
 import asyncio
 import hashlib
 import logging
@@ -60,12 +62,12 @@ class ThumbnailResult:
 
 class WebPConverter:
     """WebP 格式转换器
-    
+
     将缩略图转换为 WebP 格式，减少文件体积 25-35%
     """
-    
+
     DEFAULT_QUALITY = 85
-    
+
     @staticmethod
     def convert_to_webp(
         source: Path,
@@ -85,15 +87,15 @@ class WebPConverter:
                     img = background
                 elif img.mode != "RGB":
                     img = img.convert("RGB")
-                
+
                 # 保存为 WebP
                 img.save(target, "WEBP", quality=quality, method=6)
                 return True
-                
+
         except Exception as e:
             logger.error(f"Failed to convert to WebP: {e}")
             return False
-    
+
     @staticmethod
     def is_webp_supported() -> bool:
         """检查是否支持 WebP"""
@@ -109,10 +111,10 @@ class WebPConverter:
 
 class MultiSizeThumbnailGenerator:
     """多尺寸缩略图生成器
-    
+
     根据显示区域大小生成多尺寸缩略图，实现响应式加载
     """
-    
+
     SIZES = {
         "xs": (80, 80),      # 极小图标
         "small": (120, 120),  # 小图标
@@ -120,18 +122,18 @@ class MultiSizeThumbnailGenerator:
         "large": (480, 480),  # 大图预览
         "xl": (800, 800),     # 超大图
     }
-    
+
     def __init__(self, thumbs_dir: Path):
         self.thumbs_dir = thumbs_dir
         self.thumbs_dir.mkdir(parents=True, exist_ok=True)
         self.webp_supported = WebPConverter.is_webp_supported()
-    
+
     def get_thumbnail_path(self, file_path: str, size: str) -> Path:
         """获取缩略图路径"""
-        file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+        file_hash = thumbnail_identity(file_path)
         ext = "webp" if self.webp_supported else "jpg"
         return self.thumbs_dir / f"{file_hash}_{size}.{ext}"
-    
+
     def generate_all_sizes(
         self,
         file_path: str,
@@ -139,12 +141,12 @@ class MultiSizeThumbnailGenerator:
     ) -> Dict[str, Optional[str]]:
         """生成所有尺寸的缩略图"""
         results = {}
-        
+
         for size_name in self.SIZES.keys():
             results[size_name] = self.generate_thumbnail(file_path, size_name, force)
-        
+
         return results
-    
+
     def generate_thumbnail(
         self,
         file_path: str,
@@ -153,18 +155,18 @@ class MultiSizeThumbnailGenerator:
     ) -> Optional[str]:
         """生成单尺寸缩略图"""
         thumb_path = self.get_thumbnail_path(file_path, size)
-        
+
         # 检查是否已存在
         if not force and thumb_path.exists():
             return f"file://{thumb_path}"
-        
+
         try:
             path = Path(file_path)
             if not path.exists():
                 return None
-            
+
             ext = path.suffix.lower()
-            
+
             # 统一复用 file_types 的权威扩展名集合（其元素不含前导点，故去点比较）
             bare_ext = ext.lstrip(".")
             if bare_ext in IMAGE_EXTENSIONS:
@@ -173,11 +175,11 @@ class MultiSizeThumbnailGenerator:
                 return self._generate_video_thumbnail(path, thumb_path, size)
             else:
                 return None
-                
+
         except Exception as e:
             logger.error(f"Failed to generate thumbnail for {file_path}: {e}")
             return None
-    
+
     def _generate_image_thumbnail(
         self,
         source: Path,
@@ -248,9 +250,9 @@ class MultiSizeThumbnailGenerator:
 
             # 保存为 WebP 或 JPEG
             if self.webp_supported:
-                final_img.save(target, "WEBP", quality=WebPConverter.DEFAULT_QUALITY, method=6)
+                atomic_image_save(final_img, target, "WEBP", quality=WebPConverter.DEFAULT_QUALITY, method=6)
             else:
-                final_img.save(target, "JPEG", quality=WebPConverter.DEFAULT_QUALITY)
+                atomic_image_save(final_img, target, "JPEG", quality=WebPConverter.DEFAULT_QUALITY)
 
             return f"file://{target}"
 
@@ -261,13 +263,13 @@ class MultiSizeThumbnailGenerator:
 
 class AsyncThumbnailGenerator:
     """异步缩略图生成器
-    
+
     使用优先级队列和线程池实现异步缩略图生成：
     1. 高优先级：可见区域缩略图，立即生成
     2. 普通优先级：普通缩略图
     3. 低优先级：后台预生成
     """
-    
+
     def __init__(
         self,
         thumbs_dir: Path,
@@ -276,20 +278,20 @@ class AsyncThumbnailGenerator:
     ):
         self.thumbs_dir = thumbs_dir
         self.thumbs_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.max_workers = max_workers
         self.task_queue: PriorityQueue[ThumbnailTask] = PriorityQueue(maxsize=queue_size)
         self.result_queue: Queue[ThumbnailResult] = Queue()
-        
+
         self._generator = MultiSizeThumbnailGenerator(thumbs_dir)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
-        
+
         # 可见区域文件集合
         self._visible_files: Set[str] = set()
         self._lock = threading.Lock()
-        
+
         # 生成统计
         self._stats = {
             "queued": 0,
@@ -303,17 +305,17 @@ class AsyncThumbnailGenerator:
     def register_on_complete(self, cb: Callable[["ThumbnailResult", "ThumbnailTask"], None]) -> None:
         """注册全局完成回调（线程上下文中调用，回调内部需自行处理跨线程）。"""
         self._on_complete_callbacks.append(cb)
-    
+
     def start(self):
         """启动生成器"""
         if self._running:
             return
-        
+
         self._running = True
         self._worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self._worker_thread.start()
         logger.info("[AsyncThumbnail] Generator started")
-    
+
     def stop(self):
         """停止生成器"""
         self._running = False
@@ -321,25 +323,25 @@ class AsyncThumbnailGenerator:
             self._worker_thread.join(timeout=5)
         self._executor.shutdown(wait=False)
         logger.info("[AsyncThumbnail] Generator stopped")
-    
+
     def set_visible_files(self, file_paths: List[str]):
         """设置当前可见区域的文件列表"""
         with self._lock:
             self._visible_files = set(file_paths)
-    
+
     def add_visible_file(self, file_path: str):
         """添加可见文件（高优先级）"""
         with self._lock:
             self._visible_files.add(file_path)
-        
+
         # 立即生成高优先级缩略图
         self.generate_async(file_path, "medium", Priority.HIGH)
-    
+
     def remove_visible_file(self, file_path: str):
         """移除可见文件"""
         with self._lock:
             self._visible_files.discard(file_path)
-    
+
     def generate_async(
         self,
         file_path: str,
@@ -363,7 +365,7 @@ class AsyncThumbnailGenerator:
         except Exception:
             logger.warning(f"[AsyncThumbnail] Queue full, dropping task for {file_path}")
             return False
-    
+
     def generate_batch(
         self,
         file_paths: List[str],
@@ -373,39 +375,39 @@ class AsyncThumbnailGenerator:
         """批量添加生成任务"""
         for file_path in file_paths:
             self.generate_async(file_path, size, priority)
-    
+
     def _process_queue(self):
         """处理任务队列"""
         while self._running:
             try:
                 # 获取任务（阻塞，带超时）
                 task = self.task_queue.get(timeout=1)
-                
+
                 # 提交到线程池执行
                 future = self._executor.submit(
                     self._generate_thumbnail,
                     task.file_path,
                     task.size
                 )
-                
+
                 # 添加回调
                 future.add_done_callback(
                     lambda f, t=task: self._on_task_complete(f, t)
                 )
-                
+
             except Exception:
                 # 队列为空或超时，继续循环
                 continue
-    
+
     def _generate_thumbnail(self, file_path: str, size: str) -> Optional[str]:
         """实际生成缩略图"""
         return self._generator.generate_thumbnail(file_path, size)
-    
+
     def _on_task_complete(self, future, task: ThumbnailTask):
         """任务完成回调"""
         try:
             thumb_path = future.result()
-            
+
             if thumb_path:
                 self._stats["completed"] += 1
                 result = ThumbnailResult(
@@ -423,7 +425,7 @@ class AsyncThumbnailGenerator:
                     success=False,
                     error="Generation failed"
                 )
-            
+
             self.result_queue.put(result)
 
             # 调用用户回调
@@ -443,7 +445,7 @@ class AsyncThumbnailGenerator:
         except Exception as e:
             logger.error(f"[AsyncThumbnail] Task failed: {e}")
             self._stats["failed"] += 1
-    
+
     def get_results(self) -> List[ThumbnailResult]:
         """获取已完成的生成结果"""
         results = []
@@ -453,7 +455,7 @@ class AsyncThumbnailGenerator:
             except Exception:
                 break
         return results
-    
+
     def get_stats(self) -> dict:
         """获取生成统计"""
         return {
@@ -461,7 +463,7 @@ class AsyncThumbnailGenerator:
             "queue_size": self.task_queue.qsize(),
             "visible_files": len(self._visible_files),
         }
-    
+
     def clear_queue(self):
         """清空任务队列"""
         while not self.task_queue.empty():
@@ -474,18 +476,18 @@ class AsyncThumbnailGenerator:
 
 class ThumbnailPrefetcher:
     """缩略图预取器
-    
+
     智能预取策略：
     1. 预加载可见区域附近的缩略图
     2. 根据滚动方向预加载
     3. 限制并发预取数量
     """
-    
+
     def __init__(self, generator: AsyncThumbnailGenerator, prefetch_distance: int = 5):
         self.generator = generator
         self.prefetch_distance = prefetch_distance
         self._last_visible_indices: Set[int] = set()
-    
+
     def on_scroll(
         self,
         all_files: List[str],
@@ -495,7 +497,7 @@ class ThumbnailPrefetcher:
     ):
         """滚动事件处理，触发预加载"""
         current_visible = set(range(visible_start, visible_end))
-        
+
         # 计算需要预加载的范围
         if scroll_direction == "down":
             # 向下滚动，预加载下方
@@ -505,13 +507,13 @@ class ThumbnailPrefetcher:
             # 向上滚动，预加载上方
             prefetch_start = max(0, visible_start - self.prefetch_distance)
             prefetch_end = visible_start
-        
+
         # 添加预加载任务
         for i in range(prefetch_start, prefetch_end):
             if i not in self._last_visible_indices:
                 file_path = all_files[i]
                 self.generator.generate_async(file_path, "medium", Priority.LOW)
-        
+
         self._last_visible_indices = current_visible
 
 

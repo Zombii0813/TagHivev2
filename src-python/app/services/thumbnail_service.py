@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..utils.thumbnail_cache import thumbnail_identity, atomic_image_save
+
 from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
@@ -39,48 +41,48 @@ THUMBNAIL_SIZES = {
 @dataclass
 class ThumbnailService:
     """缩略图服务"""
-    
+
     thumbs_dir: Path = field(default_factory=lambda: Path(settings.thumbs_dir))
-    
+
     def __post_init__(self):
         self.thumbs_dir.mkdir(parents=True, exist_ok=True)
-    
+
     def get_thumbnail_path(self, file_path: str, size: str = "medium") -> Path:
         """获取缩略图路径"""
-        file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+        file_hash = thumbnail_identity(file_path)
         ext = "webp" if self._is_webp_supported() else "jpg"
         return self.thumbs_dir / f"{file_hash}_{size}.{ext}"
-    
+
     def generate_thumbnail(
-        self, 
-        file_path: str, 
+        self,
+        file_path: str,
         size: str = "medium",
         force: bool = False
     ) -> Optional[str]:
         """生成缩略图
-        
+
         Args:
             file_path: 原始文件路径
             size: 尺寸 (small, medium, large)
             force: 强制重新生成
-            
+
         Returns:
             缩略图 URL，失败返回 None
         """
         thumb_path = self.get_thumbnail_path(file_path, size)
-        
+
         # 检查是否已存在
         if not force and thumb_path.exists():
             return f"file://{thumb_path}"
-        
+
         try:
             path = Path(file_path)
             if not path.exists():
                 return None
-            
+
             # 检查文件类型
             ext = path.suffix.lower()
-            
+
             # 统一复用 file_types 的权威扩展名集合（其元素不含前导点，故去点比较）
             bare_ext = ext.lstrip(".")
             if bare_ext in IMAGE_EXTENSIONS:
@@ -90,11 +92,11 @@ class ThumbnailService:
             else:
                 # 不支持生成缩略图的类型
                 return None
-                
+
         except Exception as e:
             logger.error(f"Failed to generate thumbnail for {file_path}: {e}")
             return None
-    
+
     def _generate_image_thumbnail(
         self,
         source: Path,
@@ -176,16 +178,16 @@ class ThumbnailService:
 
             # 保存
             if self._is_webp_supported():
-                final_img.save(target, "WEBP", quality=DEFAULT_QUALITY)
+                atomic_image_save(final_img, target, "WEBP", quality=DEFAULT_QUALITY)
             else:
-                final_img.save(target, "JPEG", quality=DEFAULT_QUALITY)
+                atomic_image_save(final_img, target, "JPEG", quality=DEFAULT_QUALITY)
 
             return f"file://{target}"
 
         except Exception as e:
             logger.error(f"Failed to fit and save thumbnail: {e}")
             return None
-    
+
     def _is_webp_supported(self) -> bool:
         """检查是否支持 WebP"""
         try:
@@ -196,22 +198,22 @@ class ThumbnailService:
             return True
         except Exception:
             return False
-    
+
     def cleanup_cache(self, max_age_days: int = 30) -> int:
         """清理过期缓存
-        
+
         Args:
             max_age_days: 最大保留天数
-            
+
         Returns:
             清理的文件数量
         """
         import time
-        
+
         count = 0
         max_age_seconds = max_age_days * 24 * 60 * 60
         current_time = time.time()
-        
+
         try:
             for file_path in self.thumbs_dir.iterdir():
                 if file_path.is_file():
@@ -219,32 +221,32 @@ class ThumbnailService:
                     if file_age > max_age_seconds:
                         file_path.unlink()
                         count += 1
-                        
+
             logger.info(f"Cleaned up {count} old thumbnails")
             return count
-            
+
         except Exception as e:
             logger.error(f"Failed to cleanup cache: {e}")
             return 0
-    
+
     def get_cache_size(self) -> tuple[int, int]:
         """获取缓存大小
-        
+
         Returns:
             (文件数量, 总字节数)
         """
         count = 0
         total_size = 0
-        
+
         try:
             for file_path in self.thumbs_dir.iterdir():
                 if file_path.is_file():
                     count += 1
                     total_size += file_path.stat().st_size
-                    
+
         except Exception as e:
             logger.error(f"Failed to get cache size: {e}")
-            
+
         return count, total_size
 
 

@@ -13,6 +13,8 @@ JSON 主体结构示例参考模块 ``EXPORT_SCHEMA_VERSION``。
 
 from __future__ import annotations
 
+from ..utils.paths import path_prefix
+
 import gzip
 import json
 import logging
@@ -154,7 +156,6 @@ def export_workspace(
     exported_files: list[dict[str, Any]] = []
     if all_tags:
         tag_ids_list = [int(t.id) for t in all_tags]
-        root_pattern = workspace_posix.rstrip("/") + "/%"
 
         # 一次拉取所有关联，按 file_id 聚合 tag_id
         rel_stmt = (
@@ -162,7 +163,7 @@ def export_workspace(
             .join(File, File.id == FileTag.file_id)
             .where(
                 FileTag.tag_id.in_(tag_ids_list),
-                File.path.like(root_pattern),
+                path_prefix(File.path, workspace_posix),
             )
         )
         file_to_tags: dict[int, list[int]] = {}
@@ -348,7 +349,6 @@ def match_files(
         分类后的匹配结果（unique / multiple / unmatched）
     """
     workspace_posix = Path(workspace).as_posix()
-    root_pattern = workspace_posix.rstrip("/") + "/%"
 
     result = MatchResult()
     if not payload.files:
@@ -365,7 +365,7 @@ def match_files(
         select(File.id, File.name, File.size, File.modified_at)
         .where(
             File.name.in_(names),
-            File.path.like(root_pattern),
+            path_prefix(File.path, workspace_posix),
         )
     )
     rows = repo.session.execute(stmt).all()
@@ -454,13 +454,19 @@ def commit_import(
     by_id = {t.export_id: t for t in payload.tags}
     ordered: list[ExportedTag] = []
     visited: set[str] = set()
+    visiting: set[str] = set()
 
     def visit(eid: str) -> None:
+        """拓扑遍历并拒绝循环层级。"""
+        if eid in visiting:
+            raise ThpackFormatError("标签父子关系包含循环")
         if eid in visited or eid not in by_id:
             return
+        visiting.add(eid)
         node = by_id[eid]
         if node.parent_export_id:
             visit(node.parent_export_id)
+        visiting.remove(eid)
         visited.add(eid)
         ordered.append(node)
 

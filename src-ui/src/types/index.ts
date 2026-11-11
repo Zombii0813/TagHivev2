@@ -50,6 +50,7 @@ export interface UpdateTagRequest {
 export interface SearchQuery {
   text?: string
   root?: string
+  roots?: string[]
   types?: string[]
   tags?: number[]
   match_all_tags?: boolean

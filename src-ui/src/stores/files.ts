@@ -152,6 +152,32 @@ export const useFileStore = defineStore('files', () => {
     return activeTab.value
   }
 
+  const requestVersions = new Map<string, number>()
+  function invalidateRequests(tabId: string) {
+    requestVersions.set(tabId, (requestVersions.get(tabId) ?? 0) + 1)
+    return requestVersions.get(tabId)!
+  }
+  function isCurrent(tab: TabState, version: number) {
+    return tabs.value.has(tab.id) && requestVersions.get(tab.id) === version
+  }
+  function composeQuery(tab: TabState): SearchQuery {
+    const app = useAppStore()
+    return {
+      ...tab.searchQuery,
+      root: isFolderScoped(tab.browseMode) && tab.currentFolderPath
+        ? tab.currentFolderPath : (tab.isGlobalView ? undefined : tab.workspace || app.activeWorkspace || undefined),
+      roots: tab.isGlobalView ? [...app.workspaces] : undefined,
+      text: tab.searchText || undefined,
+      types: tab.searchType ? [tab.searchType] : undefined,
+      offset: 0,
+      sort_by: sortBy.value,
+      sort_desc: sortDesc.value,
+    }
+  }
+  function hasFilters(tab: TabState) {
+    return !!(tab.searchText || tab.searchType || tab.searchQuery.tags?.length)
+  }
+
   /** 有序的标签页列表，供标签栏渲染 */
   const tabList = computed<TabState[]>(() =>
     tabOrder.value.map(id => tabs.value.get(id)!).filter(Boolean)
@@ -308,7 +334,11 @@ export const useFileStore = defineStore('files', () => {
    * @param tabId 目标标签页；不传则为当前激活标签页
    */
   async function loadFolderContents(folderPath: string, append: boolean = false, tabId?: string) {
+    if (tabId && !tabs.value.has(tabId)) return
     const tab = getTab(tabId)
+
+    tab.currentFolderPath = folderPath
+    if (hasFilters(tab)) return search(undefined, tab.id)
 
     if (!append) {
       tab.folderContentsOffset = 0
@@ -320,6 +350,7 @@ export const useFileStore = defineStore('files', () => {
     }
 
     tab.currentFolderPath = folderPath
+    const version = invalidateRequests(tab.id)
     tab.isLoading = true
 
     // 仅 explorer 模式请求子目录，且只在首页请求（分页加载更多文件时无需重复）
@@ -335,6 +366,7 @@ export const useFileStore = defineStore('files', () => {
         wantDirs
       )
 
+      if (!isCurrent(tab, version)) return
       if (append) {
         tab.files.push(...result.files)
       } else {
@@ -350,9 +382,10 @@ export const useFileStore = defineStore('files', () => {
       tab.loaded = true
       tab.dirty = false
     } catch (error) {
+      if (!isCurrent(tab, version)) return
       console.error('Failed to load folder contents:', error)
     } finally {
-      tab.isLoading = false
+      if (isCurrent(tab, version)) tab.isLoading = false
     }
   }
 
@@ -385,9 +418,8 @@ export const useFileStore = defineStore('files', () => {
     if (now - tab.lastLoadMoreAt < LOAD_MORE_COOLDOWN) return
     tab.lastLoadMoreAt = now
 
-    const tagStore = useTagStore()
     const inFolderContext =
-      isFolderScoped(tab.browseMode) && !tagStore.hasSelection && !!tab.currentFolderPath
+      isFolderScoped(tab.browseMode) && !hasFilters(tab) && !!tab.currentFolderPath
 
     if (inFolderContext) {
       await loadMoreFolderContents(tab.id)
@@ -451,10 +483,11 @@ export const useFileStore = defineStore('files', () => {
 
   // Actions
   async function search(query?: SearchQuery, tabId?: string) {
+    if (tabId && !tabs.value.has(tabId)) return
     const tab = getTab(tabId)
 
     if (query) {
-      tab.searchQuery = query
+      tab.searchQuery = { ...tab.searchQuery, ...query }
     }
 
     // search 语义为跨层级文件检索（含标签过滤），不属于目录层级浏览，
@@ -464,13 +497,12 @@ export const useFileStore = defineStore('files', () => {
     // 结果集整体更换，旧滚动位置无意义
     tab.scrollTop = 0
 
+    const version = invalidateRequests(tab.id)
     tab.isLoading = true
     try {
-      const result = await fileApi.search({
-        ...tab.searchQuery,
-        sort_by: sortBy.value,
-        sort_desc: sortDesc.value,
-      })
+      tab.searchQuery = composeQuery(tab)
+      const result = await fileApi.search(tab.searchQuery)
+      if (!isCurrent(tab, version)) return
 
       tab.files = result.files
       tab.totalCount = result.total
@@ -478,32 +510,37 @@ export const useFileStore = defineStore('files', () => {
       tab.loaded = true
       tab.dirty = false
     } catch (error) {
+      if (!isCurrent(tab, version)) return
       console.error('Search failed:', error)
     } finally {
-      tab.isLoading = false
+      if (isCurrent(tab, version)) tab.isLoading = false
     }
   }
 
   async function loadMore(tabId?: string) {
+    if (tabId && !tabs.value.has(tabId)) return
     const tab = getTab(tabId)
     if (!tab.hasMore || tab.isLoading) return
 
+    const version = invalidateRequests(tab.id)
     tab.isLoading = true
     try {
       const offset = tab.files.length
       const result = await fileApi.search({
-        ...tab.searchQuery,
+        ...composeQuery(tab),
         offset,
         sort_by: sortBy.value,
         sort_desc: sortDesc.value,
       })
 
+      if (!isCurrent(tab, version)) return
       tab.files.push(...result.files)
       tab.hasMore = result.has_more
     } catch (error) {
+      if (!isCurrent(tab, version)) return
       console.error('Load more failed:', error)
     } finally {
-      tab.isLoading = false
+      if (isCurrent(tab, version)) tab.isLoading = false
     }
   }
 
@@ -597,7 +634,7 @@ export const useFileStore = defineStore('files', () => {
     if (isFolderScoped(tab.browseMode) && tab.currentFolderPath) {
       return tab.currentFolderPath
     }
-    return appStore.currentWorkspace || undefined
+    return tab.isGlobalView ? undefined : tab.workspace || appStore.currentWorkspace || undefined
   }
 
   // 按当前浏览上下文对选中标签执行过滤搜索。
@@ -611,6 +648,7 @@ export const useFileStore = defineStore('files', () => {
       tab.currentFolderPath = folderContext
     }
     await search({
+      ...tab.searchQuery,
       root: resolveTagFilterRoot(tab),
       tags: tagIds,
       match_all_tags: false,
@@ -618,42 +656,13 @@ export const useFileStore = defineStore('files', () => {
   }
 
   async function reloadCurrentView(tabId?: string) {
-    // useTagStore/useAppStore 仅在函数内调用（非模块顶层），
-    // 故与 tags/app store 的循环静态引用不会在模块求值期触发问题
-    const tagStore = useTagStore()
-    const appStore = useAppStore()
+    if (tabId && !tabs.value.has(tabId)) return
     const tab = getTab(tabId)
-
-    if (tagStore.hasSelection) {
-      // 标签过滤态：root 按当前浏览层级重算（排序变更不改层级，行为等价，但更稳健），
-      // 保留 searchQuery 中的文本/类型等其它过滤条件。
-      await search({
-        ...tab.searchQuery,
-        root: resolveTagFilterRoot(tab),
-        tags: Array.from(tagStore.effectiveTagIds),
-        match_all_tags: false,
-      }, tab.id)
-      return
-    }
-
-    if (isFolderScoped(tab.browseMode) && tab.currentFolderPath) {
+    if (!hasFilters(tab) && isFolderScoped(tab.browseMode) && tab.currentFolderPath) {
       await loadFolderContents(tab.currentFolderPath, false, tab.id)
-      return
+    } else {
+      await search(undefined, tab.id)
     }
-
-    // 带上该标签页自己的搜索条件：跨会话恢复出的标签页 searchQuery 为空
-    // （不落盘），只落了 searchText/searchType，若此处不重建条件，搜索框
-    // 有词而列表是全量，看起来像搜索失效。
-    // root 取标签页自身工作区而非 appStore：重载非活动标签页时 appStore
-    // 未必已同步到它的工作区。
-    await search({
-      // workspace 尚未补齐时（启动早期）退回 appStore，与改造前一致
-      root: tab.isGlobalView
-        ? undefined
-        : (tab.workspace || appStore.currentWorkspace || undefined),
-      text: tab.searchText || undefined,
-      types: tab.searchType ? [tab.searchType] : undefined,
-    }, tab.id)
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -768,9 +777,10 @@ export const useFileStore = defineStore('files', () => {
           appStore.switchWorkspace(tab.workspace)
         }
         // 标签按工作区隔离，跨工作区切换需重载标签树并清除过滤
-        tagStore.clearSelection()
         await tagStore.loadTags(tab.workspace || undefined)
       }
+
+      tagStore.selectedTagIds = new Set(tab.searchQuery.tags ?? [])
 
       // 先取出目标位置：脏标签页会走重载，而重载（loadFolderContents/search）
       // 会把 scrollTop 归零，等它跑完再读就只剩 0 了
@@ -871,6 +881,7 @@ export const useFileStore = defineStore('files', () => {
       last.activeId = null
       last.totalCount = 0
       last.hasMore = false
+      invalidateRequests(last.id)
       last.searchQuery = {}
       last.searchText = ''
       last.searchType = ''
@@ -906,6 +917,7 @@ export const useFileStore = defineStore('files', () => {
       last.workspace = fallback
       last.currentFolderPath = fallback
       last.folderByWorkspace = {}
+      invalidateRequests(last.id)
       last.searchQuery = {}
       last.searchText = ''
       last.searchType = ''
@@ -923,6 +935,10 @@ export const useFileStore = defineStore('files', () => {
    */
   function setTabWorkspace(workspace: string, isGlobalView: boolean, tabId?: string) {
     const tab = getTab(tabId)
+    if (tab.workspace !== workspace || tab.isGlobalView !== isGlobalView) {
+      invalidateRequests(tab.id)
+      tab.searchQuery = {}
+    }
     tab.workspace = workspace
     tab.isGlobalView = isGlobalView
   }
@@ -1067,6 +1083,7 @@ export const useFileStore = defineStore('files', () => {
 
   return {
     // 标签页
+    invalidateRequests,
     tabs,
     tabOrder,
     activeTabId,

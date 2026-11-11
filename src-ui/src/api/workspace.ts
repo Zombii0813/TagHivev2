@@ -1,3 +1,4 @@
+import { useAppStore } from '../stores/app'
 import { apiClient } from './client'
 import type { Workspace, WorkspaceStats, ScanProgress } from '../types'
 
@@ -9,7 +10,7 @@ export const workspaceApi = {
 
   // 获取工作区统计
   async getStats(): Promise<WorkspaceStats> {
-    return apiClient.get<WorkspaceStats>('/api/workspace/stats')
+    return apiClient.get<WorkspaceStats>('/api/workspace/stats', { params: { roots: JSON.stringify(useAppStore().workspaces) } })
   },
 
   // 健康检查

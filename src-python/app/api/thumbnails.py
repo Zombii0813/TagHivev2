@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .threaded import threaded
+
 from typing import List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -40,7 +42,8 @@ def _placeholder_response(file_id: int, file_path: str, size: str) -> Response:
 
 
 @router.get("/by-path")
-async def get_thumbnail_by_path(path: str, size: str = "medium"):
+@threaded
+def get_thumbnail_by_path(path: str, size: str = "medium"):
     """按任意本地文件路径获取缩略图（用于 explorer 目录自定义封面）。
 
     与按 file_id 的端点不同，此处不要求文件已入库；缓存命中即返，
@@ -64,7 +67,8 @@ async def get_thumbnail_by_path(path: str, size: str = "medium"):
 
 
 @router.get("/{file_id}")
-async def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = False):
+@threaded
+def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = False):
     """获取文件缩略图（缓存命中即返；未命中异步生成 + 占位响应）"""
     from ..db import get_session, Repo
 
@@ -105,30 +109,31 @@ async def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = F
 
 
 @router.post("/async/generate")
-async def generate_thumbnail_async(file_id: int, size: str = "medium", priority: str = "normal"):
+@threaded
+def generate_thumbnail_async(file_id: int, size: str = "medium", priority: str = "normal"):
     """异步生成缩略图
-    
+
     Args:
         file_id: 文件 ID
         size: 缩略图尺寸
         priority: 优先级 (high, normal, low)
     """
     from ..db import get_session, Repo
-    
+
     session = get_session()
     try:
         repo = Repo(session)
         file = repo.get_file_by_id(file_id)
-        
+
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
-        
+
         if file.type not in ("image", "video"):
             raise HTTPException(status_code=400, detail="File type not supported")
-        
+
         # 获取异步生成器
         generator = get_async_thumbnail_generator()
-        
+
         # 映射优先级
         priority_map = {
             "high": Priority.HIGH,
@@ -136,10 +141,10 @@ async def generate_thumbnail_async(file_id: int, size: str = "medium", priority:
             "low": Priority.LOW,
         }
         prio = priority_map.get(priority, Priority.NORMAL)
-        
+
         # 添加到队列
         success = generator.generate_async(file.path, size, prio, file_id)
-        
+
         return {
             "status": "queued" if success else "failed",
             "file_id": file_id,
@@ -147,29 +152,30 @@ async def generate_thumbnail_async(file_id: int, size: str = "medium", priority:
             "size": size,
             "priority": priority,
         }
-        
+
     finally:
         session.close()
 
 
 @router.post("/async/batch")
-async def generate_thumbnails_batch(file_ids: List[int], size: str = "medium"):
+@threaded
+def generate_thumbnails_batch(file_ids: List[int], size: str = "medium"):
     """批量异步生成缩略图
-    
+
     Args:
         file_ids: 文件 ID 列表
         size: 缩略图尺寸
     """
     from ..db import get_session, Repo
-    
+
     session = get_session()
     try:
         repo = Repo(session)
         generator = get_async_thumbnail_generator()
-        
+
         queued = 0
         failed = 0
-        
+
         for file_id in file_ids:
             file = repo.get_file_by_id(file_id)
             if file and file.type in ("image", "video"):
@@ -180,32 +186,33 @@ async def generate_thumbnails_batch(file_ids: List[int], size: str = "medium"):
                     failed += 1
             else:
                 failed += 1
-        
+
         return {
             "status": "queued",
             "queued": queued,
             "failed": failed,
             "total": len(file_ids),
         }
-        
+
     finally:
         session.close()
 
 
 @router.post("/async/visible")
-async def set_visible_files(file_paths: List[str]):
+@threaded
+def set_visible_files(file_paths: List[str]):
     """设置当前可见区域的文件列表（用于优先生成可见缩略图）
-    
+
     Args:
         file_paths: 可见区域的文件路径列表
     """
     generator = get_async_thumbnail_generator()
     generator.set_visible_files(file_paths)
-    
+
     # 高优先级生成可见文件的缩略图
     for file_path in file_paths:
         generator.generate_async(file_path, "medium", Priority.HIGH)
-    
+
     return {
         "status": "ok",
         "visible_count": len(file_paths),
@@ -213,11 +220,12 @@ async def set_visible_files(file_paths: List[str]):
 
 
 @router.get("/async/results")
-async def get_async_results():
+@threaded
+def get_async_results():
     """获取异步生成的结果"""
     generator = get_async_thumbnail_generator()
     results = generator.get_results()
-    
+
     return {
         "results": [
             {
@@ -234,16 +242,18 @@ async def get_async_results():
 
 
 @router.get("/async/stats")
-async def get_async_stats():
+@threaded
+def get_async_stats():
     """获取异步生成统计"""
     generator = get_async_thumbnail_generator()
     stats = generator.get_stats()
-    
+
     return stats
 
 
 @router.post("/cleanup")
-async def cleanup_thumbnails(max_age_days: int = 30):
+@threaded
+def cleanup_thumbnails(max_age_days: int = 30):
     """清理过期缩略图缓存"""
     service = get_thumbnail_service()
     count = service.cleanup_cache(max_age_days)
@@ -251,15 +261,16 @@ async def cleanup_thumbnails(max_age_days: int = 30):
 
 
 @router.get("/stats")
-async def get_thumbnail_stats():
+@threaded
+def get_thumbnail_stats():
     """获取缩略图缓存统计"""
     service = get_thumbnail_service()
     count, size = service.get_cache_size()
-    
+
     # 获取异步生成器统计
     generator = get_async_thumbnail_generator()
     async_stats = generator.get_stats()
-    
+
     return {
         "file_count": count,
         "total_size_bytes": size,

@@ -12,6 +12,7 @@ from .search import SearchQuery, SearchResult
 class CacheKey:
     """缓存键 - 用于唯一标识搜索查询"""
     text: Optional[str]
+    roots: tuple[str, ...] | None
     root: Optional[str]
     types: tuple[str, ...]
     tags: tuple[str, ...]
@@ -25,6 +26,7 @@ class CacheKey:
         parts = [
             self.text or "",
             self.root or "",
+            repr(self.roots),
             ",".join(self.types),
             ",".join(str(self.tags)),
             str(self.match_all_tags),
@@ -56,7 +58,7 @@ class SearchCache:
 
     def __init__(self, max_size: int = 100):
         """初始化缓存
-        
+
         Args:
             max_size: 缓存最大容量
         """
@@ -65,16 +67,17 @@ class SearchCache:
 
     def get(self, query: SearchQuery) -> Optional[List[SearchResult]]:
         """获取缓存的搜索结果
-        
+
         Args:
             query: 搜索查询
-            
+
         Returns:
             缓存的搜索结果，如果没有缓存或缓存过期则返回None
         """
         key = CacheKey(
             text=query.text,
             root=query.root,
+            roots=query.roots,
             types=query.types,
             tags=query.tags,
             match_all_tags=query.match_all_tags,
@@ -83,7 +86,7 @@ class SearchCache:
             use_fts=query.use_fts,
         )
         cache_key = key.to_hash()
-        
+
         if cache_key in self._cache:
             cached = self._cache[cache_key]
             if not cached.is_expired():
@@ -91,12 +94,12 @@ class SearchCache:
             else:
                 # 移除过期缓存
                 del self._cache[cache_key]
-        
+
         return None
 
     def set(self, query: SearchQuery, results: List[SearchResult]) -> None:
         """设置缓存的搜索结果
-        
+
         Args:
             query: 搜索查询
             results: 搜索结果
@@ -104,6 +107,7 @@ class SearchCache:
         key = CacheKey(
             text=query.text,
             root=query.root,
+            roots=query.roots,
             types=query.types,
             tags=query.tags,
             match_all_tags=query.match_all_tags,
@@ -112,12 +116,12 @@ class SearchCache:
             use_fts=query.use_fts,
         )
         cache_key = key.to_hash()
-        
+
         # 如果缓存已满，移除最旧的缓存
         if len(self._cache) >= self._max_size:
             oldest_key = min(self._cache.items(), key=lambda x: x[1].timestamp)[0]
             del self._cache[oldest_key]
-        
+
         # 添加新缓存
         self._cache[cache_key] = CachedResult(
             results=results,

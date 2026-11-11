@@ -1,20 +1,26 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime::Mutex;
 use tauri::{Manager, State};
 
 mod sidecar;
+mod instance;
 use sidecar::PythonSidecar;
 
 /// 应用状态
 pub struct AppState {
     pub sidecar: Arc<Mutex<Option<PythonSidecar>>>,
+    startup: Mutex<()>,
+    closing: AtomicBool,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             sidecar: Arc::new(Mutex::new(None)),
+            startup: Mutex::new(()),
+            closing: AtomicBool::new(false),
         }
     }
 }
@@ -26,17 +32,17 @@ pub struct AppDataDir(pub PathBuf);
 fn get_project_root() -> Option<PathBuf> {
     // 尝试从当前工作目录找到项目根目录
     let current_dir = std::env::current_dir().ok()?;
-    
+
     // 如果在 src-tauri 目录中，向上两级找到项目根目录
     if current_dir.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
         return current_dir.parent().map(|p| p.to_path_buf());
     }
-    
+
     // 如果在项目根目录，直接返回
     if current_dir.join("src-python").exists() {
         return Some(current_dir);
     }
-    
+
     // 尝试向上查找包含 src-python 的目录
     let mut dir = current_dir.clone();
     for _ in 0..5 {
@@ -49,7 +55,7 @@ fn get_project_root() -> Option<PathBuf> {
             break;
         }
     }
-    
+
     Some(current_dir)
 }
 
@@ -90,13 +96,13 @@ pub fn get_app_data_dir(app: &tauri::AppHandle) -> PathBuf {
             println!("System data dir mode, data directory: {:?}", data_dir);
             return data_dir;
         }
-        
+
         // 默认便携模式：数据存储在基础目录下
         let data_dir = base_dir.join(".taghive").join("data");
         println!("Portable mode (default), data directory: {:?}", data_dir);
         return data_dir;
     }
-    
+
     // 回退到标准模式
     let data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
     println!("Fallback to system data dir, data directory: {:?}", data_dir);
@@ -113,11 +119,11 @@ pub fn get_webview_data_dir(app: &tauri::AppHandle) -> PathBuf {
             // 标准模式：使用默认位置
             return app.path().app_local_data_dir().expect("Failed to get local data dir");
         }
-        
+
         // 默认便携模式：WebView 数据也放在基础目录
         return base_dir.join(".taghive").join("webview");
     }
-    
+
     // 回退到标准模式
     app.path().app_local_data_dir().expect("Failed to get local data dir")
 }
@@ -127,17 +133,42 @@ async fn cmd_start_sidecar(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<u16, String> {
-    let mut sidecar_guard = state.sidecar.lock().await;
-    
-    if let Some(ref sidecar) = *sidecar_guard {
-        return Ok(sidecar.port);
+    start_sidecar(&state, &app).await
+}
+
+async fn start_sidecar(state: &AppState, app: &tauri::AppHandle) -> Result<u16, String> {
+    let _startup = state.startup.lock().await;
+    if state.closing.load(Ordering::SeqCst) { return Err("Window is closing".into()); }
+    {
+        let mut guard = state.sidecar.lock().await;
+        if let Some(sidecar) = guard.as_mut() {
+            if sidecar.process.try_wait().map_err(|e| e.to_string())?.is_none() {
+                return Ok(sidecar.port);
+            }
+        }
+        if let Some(dead) = guard.take() { let _ = dead.stop(); }
     }
-    
-    let sidecar = PythonSidecar::start(&app).await.map_err(|e| e.to_string())?;
+    // 不持有关闭窗口所需的 sidecar 锁等待服务启动。
+    let sidecar = PythonSidecar::start(app).await.map_err(|e| e.to_string())?;
     let port = sidecar.port;
-    *sidecar_guard = Some(sidecar);
-    
+    let mut guard = state.sidecar.lock().await;
+    if state.closing.load(Ordering::SeqCst) {
+        let _ = sidecar.stop();
+        return Err("Window is closing".into());
+    }
+    *guard = Some(sidecar);
     Ok(port)
+}
+
+#[derive(serde::Serialize)]
+struct SidecarSession { port: u16, token: String, instance_id: String }
+
+#[tauri::command]
+async fn cmd_get_sidecar_session(state: State<'_, AppState>) -> Result<Option<SidecarSession>, String> {
+    let guard = state.sidecar.lock().await;
+    Ok(guard.as_ref().map(|s| SidecarSession {
+        port: s.port, token: s.token.clone(), instance_id: s.instance_id.clone()
+    }))
 }
 
 #[tauri::command]
@@ -239,9 +270,9 @@ async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 async fn open_file(path: String) -> Result<(), String> {
     use std::process::Command;
-    
+
     log::info!("open_file called: {}", path);
-    
+
     #[cfg(target_os = "windows")]
     {
         Command::new("cmd")
@@ -249,7 +280,7 @@ async fn open_file(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
@@ -257,7 +288,7 @@ async fn open_file(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         Command::new("xdg-open")
@@ -265,16 +296,16 @@ async fn open_file(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
 async fn open_folder(path: String, file_path: Option<String>) -> Result<(), String> {
     use std::process::Command;
-    
+
     log::info!("open_folder called: {}, file: {:?}", path, file_path);
-    
+
     #[cfg(target_os = "windows")]
     {
         // 如果提供了文件路径，使用 /select 参数打开并选中文件
@@ -294,7 +325,7 @@ async fn open_folder(path: String, file_path: Option<String>) -> Result<(), Stri
                 .map_err(|e| format!("Failed to open folder: {}", e))?;
         }
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         // macOS: 使用 -R 参数在 Finder 中显示文件
@@ -310,7 +341,7 @@ async fn open_folder(path: String, file_path: Option<String>) -> Result<(), Stri
                 .map_err(|e| format!("Failed to open folder: {}", e))?;
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         // Linux: 尝试使用 dbus-send 或其他工具显示文件
@@ -333,7 +364,7 @@ async fn open_folder(path: String, file_path: Option<String>) -> Result<(), Stri
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
-    
+
     Ok(())
 }
 
@@ -374,7 +405,7 @@ fn get_log_file_path() -> PathBuf {
             return src_python_dir.join(".taghive").join("logs").join("sidecar.log");
         }
     }
-    
+
     // 回退到当前工作目录
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     working_dir.join(".taghive").join("logs").join("sidecar.log")
@@ -385,22 +416,22 @@ fn get_log_file_path() -> PathBuf {
 async fn get_sidecar_logs(app: tauri::AppHandle, lines: Option<usize>) -> Result<String, String> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
-    
+
     // 获取日志文件路径
     let log_file_path = get_log_file_path();
-    
+
     if !log_file_path.exists() {
         return Ok(format!("日志文件不存在: {:?}", log_file_path));
     }
-    
+
     let file = File::open(&log_file_path)
         .map_err(|e| format!("Failed to open log file: {}", e))?;
     let reader = BufReader::new(file);
-    
+
     let all_lines: Vec<String> = reader.lines()
         .filter_map(|line| line.ok())
         .collect();
-    
+
     // 如果指定了行数，返回最后 N 行
     let result = if let Some(n) = lines {
         let start = all_lines.len().saturating_sub(n);
@@ -408,7 +439,7 @@ async fn get_sidecar_logs(app: tauri::AppHandle, lines: Option<usize>) -> Result
     } else {
         all_lines.join("\n")
     };
-    
+
     Ok(result)
 }
 
@@ -416,27 +447,27 @@ async fn get_sidecar_logs(app: tauri::AppHandle, lines: Option<usize>) -> Result
 #[tauri::command]
 async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     use std::process::Command;
-    
+
     // 获取日志文件路径
     let log_file_path = get_log_file_path();
     let log_dir = log_file_path.parent()
         .ok_or("Failed to get log directory")?;
-    
+
     // 确保日志目录存在
     if !log_dir.exists() {
         std::fs::create_dir_all(log_dir)
             .map_err(|e| format!("Failed to create log directory: {}", e))?;
     }
-    
+
     // 确保日志文件存在
     if !log_file_path.exists() {
         // 创建空日志文件
         std::fs::write(&log_file_path, "")
             .map_err(|e| format!("Failed to create log file: {}", e))?;
     }
-    
+
     let path_str = log_file_path.to_string_lossy().to_string();
-    
+
     #[cfg(target_os = "windows")]
     {
         let file_normalized = path_str.replace('/', "\\");
@@ -445,7 +476,7 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
@@ -453,7 +484,7 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         Command::new("xdg-open")
@@ -461,7 +492,7 @@ async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
-    
+
     Ok(())
 }
 
@@ -473,6 +504,7 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             cmd_start_sidecar,
+            cmd_get_sidecar_session,
             cmd_stop_sidecar,
             cmd_get_sidecar_port,
             select_folder,
@@ -526,20 +558,11 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state: State<'_, AppState> = app_handle.state();
-                let mut sidecar_guard = state.sidecar.lock().await;
-                
-                if sidecar_guard.is_none() {
-                    match PythonSidecar::start(&app_handle).await {
-                        Ok(sidecar) => {
-                            *sidecar_guard = Some(sidecar);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to start sidecar: {}", e);
-                        }
-                    }
+                if let Err(error) = start_sidecar(&state, &app_handle).await {
+                    eprintln!("Failed to start sidecar: {error}");
                 }
             });
-            
+
             Ok(())
         })
         .on_window_event(|app, event| {
@@ -548,6 +571,7 @@ pub fn run() {
                 let app_handle = app.clone();
                 tauri::async_runtime::block_on(async move {
                     let state: State<'_, AppState> = app_handle.state();
+                    state.closing.store(true, Ordering::SeqCst);
                     let mut sidecar_guard = state.sidecar.lock().await;
                     if let Some(sidecar) = sidecar_guard.take() {
                         println!("Stopping Python sidecar...");

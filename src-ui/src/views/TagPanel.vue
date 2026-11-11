@@ -312,7 +312,7 @@
           <el-select v-model="editingTag.parent_id" placeholder="无（顶级标签）" clearable style="width:100%">
             <el-option :value="null" label="无（顶级标签）" />
             <el-option
-              v-for="t in tagStore.tags.filter(t => t.id !== editingTag.id)"
+              v-for="t in tagStore.tags.filter(t => t.id !== editingTag.id && !tagStore.getDescendantIds(editingTag.id).includes(t.id))"
               :key="t.id"
               :value="t.id"
               :label="t.name"
@@ -693,36 +693,9 @@ async function confirmBatchDeleteTags() {
     return
   }
 
-  // 第一步：先把未勾选的子标签 parent_id 升级，避免被外键 SET NULL 时漂移到错误位置
-  for (const [childId, newParentId] of reparentMap) {
-    try {
-      await tagStore.updateTag(childId, { parent_id: newParentId })
-    } catch (e) {
-      console.error('升级 parent_id 失败：', childId, e)
-    }
-  }
-
-  // 第二步：删除勾选项；按拓扑深度倒序（深的先删），避免被删项之间的 SET NULL 漂移
-  const depthOf = (tagId: number): number => {
-    let d = 0
-    let cur = tagStore.tags.find(t => t.id === tagId)
-    while (cur?.parent_id) {
-      d++
-      cur = tagStore.tags.find(t => t.id === cur!.parent_id)
-    }
-    return d
-  }
-  const ordered = ids.slice().sort((a, b) => depthOf(b) - depthOf(a))
-
   let failed = 0
-  for (const id of ordered) {
-    try {
-      await tagStore.deleteTag(id)
-    } catch (e) {
-      failed++
-      console.error('批量删除失败：', id, e)
-    }
-  }
+  try { await tagStore.deleteMany(ids, 'promote') }
+  catch (error) { failed = ids.length; console.error(error) }
 
   // 清理过滤态中残留的引用
   for (const id of ids) {
@@ -731,9 +704,9 @@ async function confirmBatchDeleteTags() {
   manageSelectedIds.value = new Set()
 
   if (failed > 0) {
-    ElMessage.warning(`已删除 ${ordered.length - failed} 个，${failed} 个失败`)
+    ElMessage.warning(`已删除 ${ids.length - failed} 个，${failed} 个失败`)
   } else {
-    ElMessage.success(`已删除 ${ordered.length} 个标签`)
+    ElMessage.success(`已删除 ${ids.length} 个标签`)
   }
 }
 
@@ -1029,6 +1002,7 @@ onUnmounted(() => {
 
 // 监听工作目录变化，重新加载标签
 watch(() => appStore.currentWorkspace, (newWorkspace, oldWorkspace) => {
+  if (fileStore.isSwitchingTab) return
   if (newWorkspace !== oldWorkspace) {
     console.log('[TagPanel] Workspace changed from', oldWorkspace, 'to', newWorkspace)
     // 清除标签选择
@@ -1255,27 +1229,7 @@ async function confirmDeleteTag() {
   }
 
   try {
-    if (action === 'children-up') {
-      // 直接子标签的 parent_id 升级为被删标签的 parent_id（顶级则为 null）；
-      // 孙子标签的 parent 仍指向其直接父，无需调整。
-      const newParentId: number | null = tag.parent_id ?? null
-      for (const child of directChildren) {
-        await tagStore.updateTag(child.id, { parent_id: newParentId })
-      }
-      await tagStore.deleteTag(tag.id)
-    } else {
-      // 全部删除：先删后代（任意顺序均可，后代先于祖先即可避免 SET NULL 漂移）
-      for (const id of descendantIds) {
-        await tagStore.deleteTag(id)
-      }
-      await tagStore.deleteTag(tag.id)
-    }
-
-    // 如果该标签或其后代正在被过滤，清除过滤
-    if (tagStore.selectedTagIds.has(tag.id) || descendantIds.some(id => tagStore.selectedTagIds.has(id))) {
-      tagStore.clearSelection()
-      restoreCurrentView()
-    }
+    await tagStore.deleteMany([tag.id], action === 'children-up' ? 'promote' : 'descendants')
 
     ElMessage.success('标签删除成功')
   } catch (error) {

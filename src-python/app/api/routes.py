@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..utils.paths import path_prefix, is_within
+
 import os
 from pathlib import Path
 import shutil
@@ -11,16 +13,18 @@ from mimetypes import guess_type
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from sqlalchemy import select
 from ..db import get_session, Repo
-from ..db.models import File, Tag
+from ..db.models import File, Tag, FileTag
 from ..db.session import NATURAL_COLLATION, natural_sort_key
 from ..core.search import SearchQuery
 from ..core.indexer import build_file_meta
 from ..services.scan_service import ScanService
-from .websocket import broadcast_folder_tree_changed
+from ..services.file_operations import trash_path, filesystem_transaction, serialized_filesystem
+from .websocket import schedule_folder_tree_changed
+from .threaded import threaded
 from .models import (
     FileDTO,
     FileImportRequestDTO,
@@ -89,6 +93,18 @@ def _ensure_path_within_root(path: Path, root: Path) -> None:
         raise HTTPException(status_code=400, detail="Path is outside workspace root") from exc
 
 
+def _parse_roots(value: str) -> list[str]:
+    """解析显式工作区范围，空数组表示无可见工作区。"""
+    import json
+    try:
+        roots = json.loads(value)
+        if not isinstance(roots, list) or not all(isinstance(root, str) for root in roots):
+            raise ValueError("roots must be an array of paths")
+        return [Path(root).as_posix() for root in roots]
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid workspace roots") from exc
+
+
 # ========== 依赖注入 ==========
 
 def get_db():
@@ -139,6 +155,7 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
     search_query = SearchQuery(
         text=query.text,
         root=query.root,
+        roots=tuple(query.roots) if query.roots is not None else None,
         types=tuple(query.types) if query.types else (),
         tags=tuple(query.tags) if query.tags else (),
         match_all_tags=query.match_all_tags,
@@ -173,7 +190,8 @@ def _build_search_result(query: SearchQueryDTO, repo: Repo) -> SearchResultDTO:
 
 
 @router.get("/files", response_model=SearchResultDTO)
-async def search_files_get(
+@threaded
+def search_files_get(
     query: SearchQueryDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -182,7 +200,8 @@ async def search_files_get(
 
 
 @router.post("/files", response_model=SearchResultDTO)
-async def search_files_post(
+@threaded
+def search_files_post(
     query: SearchQueryDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -191,7 +210,8 @@ async def search_files_post(
 
 
 @router.get("/files/{file_id}", response_model=FileDTO)
-async def get_file(
+@threaded
+def get_file(
     file_id: int,
     repo: Repo = Depends(get_repo),
 ):
@@ -199,9 +219,9 @@ async def get_file(
     file = repo.get_file_by_id(file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     tags = [TagDTO.from_orm(t) for t in file.tags]
-    
+
     return FileDTO(
         id=file.id,
         path=file.path,
@@ -218,7 +238,8 @@ async def get_file(
 
 
 @router.post("/files/resolve", response_model=FileResolveResultDTO)
-async def resolve_files_by_paths(
+@threaded
+def resolve_files_by_paths(
     payload: FileResolveRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -242,7 +263,8 @@ async def resolve_files_by_paths(
 
 
 @router.post("/files/import", response_model=FileImportResultDTO)
-async def import_files_to_directory(
+@threaded
+def import_files_to_directory(
     payload: FileImportRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -251,43 +273,46 @@ async def import_files_to_directory(
     if not target_dir.exists() or not target_dir.is_dir():
         raise HTTPException(status_code=400, detail="Target directory not found")
 
-    imported_files: list[FileSummaryDTO] = []
+    with filesystem_transaction(repo) as changes:
+        imported_files: list[FileSummaryDTO] = []
 
-    for raw_path in payload.paths:
-        if not raw_path:
-            continue
+        for raw_path in payload.paths:
+            if not raw_path:
+                continue
 
-        source_path = Path(raw_path)
-        if not source_path.exists() or not source_path.is_file():
-            raise HTTPException(status_code=400, detail=f"Invalid file path: {raw_path}")
+            source_path = Path(raw_path)
+            if not source_path.exists() or not source_path.is_file():
+                raise HTTPException(status_code=400, detail=f"Invalid file path: {raw_path}")
 
-        source_existing = repo.get_file_by_path(str(source_path))
-        destination_path = _build_unique_target_path(target_dir, source_path.name)
+            source_existing = repo.get_file_by_path(str(source_path))
+            destination_path = _build_unique_target_path(target_dir, source_path.name)
 
-        try:
-            moved_path = Path(shutil.move(str(source_path), str(destination_path)))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to move file: {raw_path} -> {exc}") from exc
+            try:
+                changes.append((source_path, destination_path))
+                moved_path = Path(shutil.move(str(source_path), str(destination_path)))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move file: {raw_path} -> {exc}") from exc
 
-        meta = build_file_meta(moved_path)
-        existing = repo.get_file_by_path(str(moved_path))
-        file_row = repo.upsert_file(
-            meta,
-            existing_id=(source_existing.id if source_existing else (existing.id if existing else None)),
-        )
+            meta = build_file_meta(moved_path)
+            existing = repo.get_file_by_path(str(moved_path))
+            file_row = repo.upsert_file(
+                meta,
+                existing_id=(source_existing.id if source_existing else (existing.id if existing else None)),
+            )
 
-        imported_files.append(_to_file_summary(file_row))
+            imported_files.append(_to_file_summary(file_row))
 
-    repo.session.commit()
+
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return FileImportResultDTO(files=imported_files, target_dir=target_dir.as_posix())
 
 
 @router.put("/files/{file_id}/tags")
-async def update_file_tags(
+@threaded
+def update_file_tags(
     file_id: int,
     update: FileTagsUpdateDTO,
     repo: Repo = Depends(get_repo),
@@ -296,10 +321,10 @@ async def update_file_tags(
     file = repo.get_file_by_id(file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     tags = repo.get_tags_by_ids(update.tag_ids)
     tag_map = {t.id: t for t in tags}
-    
+
     if update.mode == "replace":
         repo.detach_all_tags(file)
         repo.attach_tags(file, [tag_map[tid] for tid in update.tag_ids if tid in tag_map])
@@ -309,7 +334,7 @@ async def update_file_tags(
         for tid in update.tag_ids:
             if tid in tag_map:
                 repo.remove_tag_from_file(file, tag_map[tid])
-    
+
     repo.session.commit()
     return {"success": True}
 
@@ -381,7 +406,8 @@ async def get_file_media_info(
 
 
 @router.get("/files/{file_id}/preview")
-async def get_file_preview(
+@threaded
+def get_file_preview(
     file_id: int,
     repo: Repo = Depends(get_repo),
 ):
@@ -389,14 +415,14 @@ async def get_file_preview(
     file = repo.get_file_by_id(file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     file_path = Path(file.path)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
-    
+
     # 猜测 MIME 类型
     mime_type, _ = guess_type(file.path)
-    
+
     # 根据文件扩展名设置默认 MIME 类型
     if not mime_type:
         ext = file.ext.lower() if file.ext else ''
@@ -423,20 +449,20 @@ async def get_file_preview(
             '.vob': 'video/mpeg',
         }
         mime_type = mime_mapping.get(ext, 'application/octet-stream')
-    
+
     return FileResponse(
         path=str(file_path),
         media_type=mime_type,
         filename=file.name,
         headers={
             "Accept-Ranges": "bytes",
-            "Access-Control-Allow-Origin": "*",
         }
     )
 
 
 @router.get("/files/{file_id}/transcode")
-async def transcode_file(
+@threaded
+def transcode_file(
     file_id: int,
     repo: Repo = Depends(get_repo),
 ):
@@ -469,113 +495,41 @@ async def transcode_file(
             # fMP4 渐进式流不支持任意 Range，显式声明 none 避免浏览器发 Range 请求
             "Accept-Ranges": "none",
             "Cache-Control": "no-store",
-            "Access-Control-Allow-Origin": "*",
         },
     )
 
 
 @router.delete("/files/{file_id}")
-async def delete_file(
+@threaded
+@serialized_filesystem
+def delete_file(
     file_id: int,
     repo: Repo = Depends(get_repo),
 ):
     """删除文件（移至回收站）"""
-    import platform
-    import subprocess
-    from pathlib import Path
-    
     file = repo.get_file_by_id(file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
-    # 将文件移至回收站
     file_path = Path(file.path)
     if file_path.exists():
         try:
-            system = platform.system()
-            if system == "Windows":
-                # Windows: 使用 PowerShell 移至回收站
-                import ctypes
-                from ctypes import wintypes
-                
-                # SHFileOperation constants
-                FO_DELETE = 0x0003
-                FOF_ALLOWUNDO = 0x0040
-                FOF_NOCONFIRMATION = 0x0010
-                FOF_SILENT = 0x0004
-                
-                class SHFILEOPSTRUCT(ctypes.Structure):
-                    _fields_ = [
-                        ("hwnd", wintypes.HWND),
-                        ("wFunc", wintypes.UINT),
-                        ("pFrom", wintypes.LPCWSTR),
-                        ("pTo", wintypes.LPCWSTR),
-                        ("fFlags", wintypes.WORD),
-                        ("fAnyOperationsAborted", wintypes.BOOL),
-                        ("hNameMappings", wintypes.LPVOID),
-                        ("lpszProgressTitle", wintypes.LPCWSTR),
-                    ]
-                
-                shell32 = ctypes.windll.shell32
-                SHFileOperationW = shell32.SHFileOperationW
-                SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCT)]
-                SHFileOperationW.restype = wintypes.INT
-                
-                # 路径需要以双 null 结尾
-                path = str(file_path) + '\x00'
-                
-                op = SHFILEOPSTRUCT()
-                op.hwnd = None
-                op.wFunc = FO_DELETE
-                op.pFrom = path
-                op.pTo = None
-                op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
-                op.fAnyOperationsAborted = False
-                op.hNameMappings = None
-                op.lpszProgressTitle = None
-                
-                result = SHFileOperationW(ctypes.byref(op))
-                if result != 0:
-                    raise Exception(f"SHFileOperation failed with code {result}")
-                    
-            elif system == "Darwin":  # macOS
-                # macOS: 使用 osascript 移至废纸篓
-                script = f'tell application "Finder" to delete POSIX file "{file_path}"'
-                subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
-                
-            else:  # Linux
-                # Linux: 尝试使用 gio trash 或 trash-cli
-                try:
-                    subprocess.run(["gio", "trash", str(file_path)], check=True, capture_output=True)
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    try:
-                        subprocess.run(["trash-put", str(file_path)], check=True, capture_output=True)
-                    except (subprocess.CalledProcessError, FileNotFoundError):
-                        # 如果没有回收站工具，直接删除
-                        file_path.unlink()
-                        
-        except Exception as e:
-            # 如果移至回收站失败，记录错误但仍删除数据库记录
-            print(f"Warning: Failed to move file to recycle bin: {e}")
-            # 尝试直接删除文件
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception as delete_error:
-                print(f"Warning: Failed to delete file: {delete_error}")
-    
+            trash_path(file_path)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=f"移至回收站失败，索引已保留: {exc}") from exc
+
     # 删除数据库记录
     repo.delete_files([file_id])
     repo.session.commit()
     # 文件数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return {"success": True}
 
 
 @router.put("/files/{file_id}/rename", response_model=FileSummaryDTO)
-async def rename_file(
+@threaded
+def rename_file(
     file_id: int,
     payload: FileRenameRequestDTO,
     repo: Repo = Depends(get_repo),
@@ -595,14 +549,16 @@ async def rename_file(
     if new_path.exists():
         raise HTTPException(status_code=400, detail=f"File already exists: {new_name}")
 
-    try:
-        old_path.rename(new_path)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to rename file: {exc}") from exc
+    with filesystem_transaction(repo) as changes:
+        try:
+            changes.append((old_path, new_path))
+            old_path.rename(new_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to rename file: {exc}") from exc
 
-    meta = build_file_meta(new_path)
-    file_row = repo.upsert_file(meta, existing_id=file.id)
-    repo.session.commit()
+        meta = build_file_meta(new_path)
+        file_row = repo.upsert_file(meta, existing_id=file.id)
+
     # 重命名仅改变文件名，不影响目录结构本身，但 folder_tree 节点文件计数无变化；
     # 仍然失效，避免 file_count 缓存与实际不一致（旧文件名/新文件名属同一目录）
     from ..core.query_cache import get_query_cache
@@ -612,7 +568,8 @@ async def rename_file(
 
 
 @router.post("/files/move", response_model=FileBatchResultDTO)
-async def move_files(
+@threaded
+def move_files(
     payload: FileMoveRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -627,52 +584,55 @@ async def move_files(
 
     target_workspace = (payload.target_workspace or "").strip() or None
 
-    moved_files: list[FileSummaryDTO] = []
+    with filesystem_transaction(repo) as changes:
+        moved_files: list[FileSummaryDTO] = []
 
-    for file_id in payload.file_ids:
-        file = repo.get_file_by_id(file_id)
-        if not file:
-            continue
+        for file_id in payload.file_ids:
+            file = repo.get_file_by_id(file_id)
+            if not file:
+                continue
 
-        source_path = Path(file.path)
-        if not source_path.exists():
-            continue
+            source_path = Path(file.path)
+            if not source_path.exists():
+                continue
 
-        # 目标路径与源路径相同时跳过
-        if source_path.parent.resolve() == target_dir.resolve():
-            continue
+            # 目标路径与源路径相同时跳过
+            if source_path.parent.resolve() == target_dir.resolve():
+                continue
 
-        dest_path = _build_unique_target_path(target_dir, source_path.name)
+            dest_path = _build_unique_target_path(target_dir, source_path.name)
 
-        try:
-            shutil.move(str(source_path), str(dest_path))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to move file: {exc}") from exc
+            try:
+                changes.append((source_path, dest_path))
+                shutil.move(str(source_path), str(dest_path))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move file: {exc}") from exc
 
-        meta = build_file_meta(dest_path)
-        file_row = repo.upsert_file(meta, existing_id=file.id)
+            meta = build_file_meta(dest_path)
+            file_row = repo.upsert_file(meta, existing_id=file.id)
 
-        # 跨工作区移动时清理不属于目标工作区的标签关联
-        if target_workspace:
-            kept_tags = [
-                t for t in file_row.tags
-                if t.workspace is None or t.workspace == target_workspace
-            ]
-            if len(kept_tags) != len(file_row.tags):
-                file_row.tags = kept_tags
+            # 跨工作区移动时清理不属于目标工作区的标签关联
+            if target_workspace:
+                kept_tags = [
+                    t for t in file_row.tags
+                    if t.workspace is None or t.workspace == target_workspace
+                ]
+                if len(kept_tags) != len(file_row.tags):
+                    file_row.tags = kept_tags
 
-        moved_files.append(_to_file_summary(file_row))
+            moved_files.append(_to_file_summary(file_row))
 
-    repo.session.commit()
+
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return FileBatchResultDTO(files=moved_files, target_dir=target_dir.as_posix())
 
 
 @router.post("/files/copy", response_model=FileBatchResultDTO)
-async def copy_files(
+@threaded
+def copy_files(
     payload: FileCopyRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -681,50 +641,62 @@ async def copy_files(
     if not target_dir.exists() or not target_dir.is_dir():
         raise HTTPException(status_code=400, detail="Target directory not found")
 
-    copied_files: list[FileSummaryDTO] = []
+    with filesystem_transaction(repo) as changes:
+        copied_files: list[FileSummaryDTO] = []
 
-    for file_id in payload.file_ids:
-        file = repo.get_file_by_id(file_id)
-        if not file:
-            continue
+        for file_id in payload.file_ids:
+            file = repo.get_file_by_id(file_id)
+            if not file:
+                continue
 
-        source_path = Path(file.path)
-        if not source_path.exists():
-            continue
+            source_path = Path(file.path)
+            if not source_path.exists():
+                continue
 
-        dest_path = _build_unique_target_path(target_dir, source_path.name)
+            dest_path = _build_unique_target_path(target_dir, source_path.name)
 
-        try:
-            shutil.copy2(str(source_path), str(dest_path))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to copy file: {exc}") from exc
+            try:
+                changes.append((None, dest_path))
+                shutil.copy2(str(source_path), str(dest_path))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to copy file: {exc}") from exc
 
-        meta = build_file_meta(dest_path)
-        # 副本作为全新记录入库（不传 existing_id）
-        file_row = repo.upsert_file(meta)
-        copied_files.append(_to_file_summary(file_row, tag_ids=[]))
+            meta = build_file_meta(dest_path)
+            # 副本作为全新记录入库（不传 existing_id）
+            file_row = repo.upsert_file(meta)
+            copied_files.append(_to_file_summary(file_row, tag_ids=[]))
 
-    repo.session.commit()
+
     # 文件结构/数量变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return FileBatchResultDTO(files=copied_files, target_dir=target_dir.as_posix())
 
 
 # ========== 标签相关 API ==========
 
 @router.get("/tags", response_model=List[TagDTO])
-async def list_tags(
+@threaded
+def list_tags(
     root: str | None = None,
+    roots: str | None = None,
     repo: Repo = Depends(get_repo),
 ):
     """获取所有标签
-    
+
     Args:
         root: 可选的工作目录路径，用于过滤标签的工作空间
     """
     tags = repo.list_tags(root=root)
+    if roots is not None and not root:
+        from sqlalchemy import or_, func
+        scopes = _parse_roots(roots)
+        tags = [tag for tag in tags if tag.workspace is None or tag.workspace in scopes]
+        condition = or_(*(path_prefix(File.path, scope) for scope in scopes)) if scopes else False
+        counts = dict(repo.session.execute(select(FileTag.tag_id, func.count()).join(File).where(condition).group_by(FileTag.tag_id)).all())
+        for tag in tags:
+            tag._file_count = counts.get(tag.id, 0)
     result = []
     for tag in tags:
         # 使用动态属性 _file_count（由 list_tags 方法设置）
@@ -743,7 +715,8 @@ async def list_tags(
 
 
 @router.post("/tags", response_model=TagDTO)
-async def create_tag(
+@threaded
+def create_tag(
     spec: TagCreateDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -758,6 +731,10 @@ async def create_tag(
     if existing:
         raise HTTPException(status_code=409, detail="Tag already exists in this workspace")
 
+    try:
+        repo.validate_tag_parent(spec.parent_id, Path(spec.workspace).as_posix() if spec.workspace else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     tag = repo.create_tag(TagSpec(
         name=spec.name,
         color=spec.color,
@@ -779,7 +756,8 @@ async def create_tag(
 
 
 @router.get("/tags/{tag_id}", response_model=TagDTO)
-async def get_tag(
+@threaded
+def get_tag(
     tag_id: int,
     repo: Repo = Depends(get_repo),
 ):
@@ -787,7 +765,7 @@ async def get_tag(
     tags = repo.get_tags_by_ids([tag_id])
     if not tags:
         raise HTTPException(status_code=404, detail="Tag not found")
-    
+
     tag = tags[0]
     return TagDTO(
         id=tag.id,
@@ -802,7 +780,8 @@ async def get_tag(
 
 
 @router.put("/tags/{tag_id}", response_model=TagDTO)
-async def update_tag(
+@threaded
+def update_tag(
     tag_id: int,
     update: TagUpdateDTO,
     repo: Repo = Depends(get_repo),
@@ -821,9 +800,13 @@ async def update_tag(
         tag.icon = update.icon
     if update.description is not None:
         tag.description = update.description
-    # parent_id: None 表示不更新；0 表示清除父标签；正整数表示设置父标签
-    if update.parent_id is not None:
-        tag.parent_id = None if update.parent_id == 0 else update.parent_id
+    if "parent_id" in update.model_fields_set:
+        parent_id = update.parent_id or None
+        try:
+            repo.validate_tag_parent(parent_id, tag.workspace, tag.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tag.parent_id = parent_id
 
     repo.session.commit()
 
@@ -839,8 +822,52 @@ async def update_tag(
     )
 
 
+@router.post("/tags/delete")
+@threaded
+def delete_tags_atomic(payload: dict = Body(...), repo: Repo = Depends(get_repo)):
+    """在一个事务内删除标签并提升子层级，或删除全部后代。"""
+    ids = payload.get("ids", [])
+    if not isinstance(ids, list) or not all(isinstance(value, int) for value in ids):
+        raise HTTPException(status_code=400, detail="Invalid tag ids")
+    mode = payload.get("mode", "promote")
+    if mode not in ("promote", "descendants"):
+        raise HTTPException(status_code=400, detail="Invalid deletion mode")
+    tags = list(repo.session.scalars(select(Tag)))
+    by_id = {tag.id: tag for tag in tags}
+    deleted = set(ids) & by_id.keys()
+    if mode == "descendants":
+        while True:
+            expanded = deleted | {tag.id for tag in tags if tag.parent_id in deleted}
+            if expanded == deleted:
+                break
+            deleted = expanded
+    else:
+        for tag in tags:
+            if tag.id in deleted or tag.parent_id not in deleted:
+                continue
+            parent_id = tag.parent_id
+            visited = {tag.id}
+            while parent_id in deleted:
+                if parent_id in visited:
+                    raise HTTPException(status_code=400, detail="Cyclic tag hierarchy")
+                visited.add(parent_id)
+                parent_id = by_id[parent_id].parent_id
+            tag.parent_id = parent_id
+    repo.session.flush()
+    for tag in tags:
+        if tag.id in deleted:
+            tag.parent_id = None
+    repo.session.flush()
+    for tag_id in deleted:
+        repo.delete_tag(tag_id)
+    repo.session.commit()
+    repo.clear_all_caches()
+    return {"success": True, "deleted_ids": sorted(deleted)}
+
+
 @router.delete("/tags/{tag_id}")
-async def delete_tag(
+@threaded
+def delete_tag(
     tag_id: int,
     repo: Repo = Depends(get_repo),
 ):
@@ -851,7 +878,8 @@ async def delete_tag(
 
 
 @router.post("/tags/batch-assign")
-async def batch_assign_tags(
+@threaded
+def batch_assign_tags(
     file_ids: List[int],
     tag_ids: List[int],
     repo: Repo = Depends(get_repo),
@@ -863,7 +891,8 @@ async def batch_assign_tags(
 
 
 @router.post("/tags/batch-unassign")
-async def batch_unassign_tag(
+@threaded
+def batch_unassign_tag(
     file_ids: List[int] = Body(...),
     tag_id: int = Body(...),
     repo: Repo = Depends(get_repo),
@@ -881,7 +910,8 @@ async def batch_unassign_tag(
 # ========== 工作区扫描 API ==========
 
 @router.post("/workspace/scan")
-async def scan_workspace(
+@threaded
+def scan_workspace(
     workspace: WorkspaceDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -889,7 +919,7 @@ async def scan_workspace(
     root = Path(workspace.path)
     if not root.exists():
         raise HTTPException(status_code=400, detail="Path does not exist")
-    
+
     # 立即返回，不等待扫描完成
     # 实际扫描应通过 WebSocket 进行以获得实时进度
     return ScanProgressDTO(
@@ -900,20 +930,22 @@ async def scan_workspace(
 
 
 @router.get("/workspace/stats")
-async def get_workspace_stats(
+@threaded
+def get_workspace_stats(
+    roots: str | None = None,
     repo: Repo = Depends(get_repo),
 ):
     """获取工作区统计"""
     from sqlalchemy import func
-    
-    total_files = repo.session.query(func.count(File.id)).scalar() or 0
-    total_tags = repo.session.query(func.count(Tag.id)).scalar() or 0
-    
-    # 按类型统计
-    type_stats = repo.session.query(
-        File.type, func.count(File.id)
-    ).group_by(File.type).all()
-    
+
+    from sqlalchemy import or_
+    scopes = _parse_roots(roots) if roots is not None else None
+    condition = True if scopes is None else (or_(*(path_prefix(File.path, scope) for scope in scopes)) if scopes else False)
+    total_files = repo.session.scalar(select(func.count()).select_from(File).where(condition)) or 0
+    tag_condition = True if scopes is None else (Tag.workspace.in_(scopes) | Tag.workspace.is_(None))
+    total_tags = repo.session.scalar(select(func.count()).select_from(Tag).where(tag_condition)) or 0
+    type_stats = repo.session.execute(select(File.type, func.count()).where(condition).group_by(File.type)).all()
+
     return {
         "total_files": total_files,
         "total_tags": total_tags,
@@ -978,12 +1010,13 @@ def _build_folder_tree(root_path: str, repo: Repo) -> tuple[List[FolderNodeDTO],
 
     for node in root_children:
         calc_total_files(node)
-    
+
     return root_children, root_direct_file_count
 
 
 @router.get("/folders/tree", response_model=FolderTreeDTO)
-async def get_folder_tree(
+@threaded
+def get_folder_tree(
     root: str,
     repo: Repo = Depends(get_repo),
 ):
@@ -1002,7 +1035,8 @@ async def get_folder_tree(
 
 
 @router.get("/folders/contents", response_model=FolderContentsDTO)
-async def get_folder_contents(
+@threaded
+def get_folder_contents(
     path: str,
     offset: int = 0,
     limit: int = 500,
@@ -1046,6 +1080,7 @@ async def get_folder_contents(
     # 数据查询（LIMIT/OFFSET 在 SQL 层）
     data_stmt = (
         select(File)
+        .options(selectinload(File.tags))
         .where(*base_where)
         .order_by(order_expr)
         .offset(offset)
@@ -1118,7 +1153,7 @@ def _build_child_dirs(
     # 3) 每个子目录（含深层）的封面文件 id：一次查询取回全部候选，Python 侧按目录归类取前 N
     #    深层匹配用 path LIKE "<dir>/%"，命中 idx_files_path。
     cover_map: dict[str, list[int]] = {p: [] for p in child_paths}
-    like_clauses = [File.path.like(f"{p}/%") for p in child_paths]
+    like_clauses = [path_prefix(File.path, p) for p in child_paths]
     if like_clauses:
         from sqlalchemy import or_
 
@@ -1153,7 +1188,8 @@ def _build_child_dirs(
 
 
 @router.post("/folders/cover")
-async def set_folder_cover(
+@threaded
+def set_folder_cover(
     payload: FolderCoverRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1175,7 +1211,8 @@ async def set_folder_cover(
 
 
 @router.post("/folders/cover/clear")
-async def clear_folder_cover(
+@threaded
+def clear_folder_cover(
     payload: FolderCoverClearRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1186,7 +1223,8 @@ async def clear_folder_cover(
 
 
 @router.post("/folders/create", response_model=FolderCreateResultDTO)
-async def create_folder(
+@threaded
+def create_folder(
     payload: FolderCreateRequestDTO,
 ):
     """在工作区内创建新目录。"""
@@ -1222,13 +1260,15 @@ async def create_folder(
     # 文件夹结构变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed(root_path.as_posix())
+    schedule_folder_tree_changed(root_path.as_posix())
 
     return FolderCreateResultDTO(name=target_path.name, path=target_path.as_posix())
 
 
 @router.post("/folders/delete")
-async def delete_folder(
+@threaded
+@serialized_filesystem
+def delete_folder(
     payload: FolderDeleteRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1247,23 +1287,22 @@ async def delete_folder(
     # 收集该目录下所有 DB 文件记录（路径前缀匹配）
     folder_posix = folder_path.as_posix().rstrip("/")
     files_in_folder = repo.session.query(File).filter(
-        File.path.like(folder_posix + "/%") | (File.path == folder_posix)
+        path_prefix(File.path, folder_posix, include_self=True)
     ).all()
+    files_in_folder = [f for f in files_in_folder if is_within(f.path, folder_path)]
     file_ids = [f.id for f in files_in_folder]
+    try:
+        trash_path(folder_path)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=f"移至回收站失败，索引已保留: {exc}") from exc
     if file_ids:
         repo.delete_files(file_ids)
-        repo.session.commit()
-
-    # 物理删除目录
-    try:
-        shutil.rmtree(str(folder_path))
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete folder: {exc}") from exc
+    repo.session.commit()
 
     # 文件夹结构变化，失效 folder_tree 缓存
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed(root_path.as_posix())
+    schedule_folder_tree_changed(root_path.as_posix())
 
     return {"deleted": folder_path.as_posix(), "files_removed": len(file_ids)}
 
@@ -1294,7 +1333,8 @@ def _is_same_or_subpath(target: Path, source: Path) -> bool:
 
 
 @router.post("/folders/move", response_model=FileBatchResultDTO)
-async def move_folder(
+@threaded
+def move_folder(
     payload: FolderMoveRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1322,50 +1362,54 @@ async def move_folder(
 
     # 先收集 DB 中该目录下所有文件记录（路径前缀匹配）
     files_in_folder = repo.session.query(File).filter(
-        File.path.like(source_posix + "/%") | (File.path == source_posix)
+        path_prefix(File.path, source_posix, include_self=True)
     ).all()
+    files_in_folder = [f for f in files_in_folder if is_within(f.path, source_path)]
     old_paths = {f.id: f.path for f in files_in_folder}
 
-    # 物理移动整棵目录
-    try:
-        shutil.move(str(source_path), str(dest_path))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to move folder: {exc}") from exc
+    with filesystem_transaction(repo) as changes:
+        # 物理移动整棵目录
+        try:
+            changes.append((source_path, dest_path))
+            shutil.move(str(source_path), str(dest_path))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to move folder: {exc}") from exc
 
-    dest_posix = dest_path.as_posix().rstrip("/")
-    moved_files: list[FileSummaryDTO] = []
+        dest_posix = dest_path.as_posix().rstrip("/")
+        moved_files: list[FileSummaryDTO] = []
 
-    for file in files_in_folder:
-        old_path = old_paths[file.id]
-        # 把旧路径的 source 前缀替换为 dest 前缀（按 / 边界，避免误伤）
-        if old_path == source_posix:
-            new_path = dest_posix
-        else:
-            new_path = dest_posix + old_path[len(source_posix):]
+        for file in files_in_folder:
+            old_path = old_paths[file.id]
+            # 把旧路径的 source 前缀替换为 dest 前缀（按 / 边界，避免误伤）
+            if old_path == source_posix:
+                new_path = dest_posix
+            else:
+                new_path = dest_posix + old_path[len(source_posix):]
 
-        meta = build_file_meta(Path(new_path))
-        file_row = repo.upsert_file(meta, existing_id=file.id)
+            meta = build_file_meta(Path(new_path))
+            file_row = repo.upsert_file(meta, existing_id=file.id)
 
-        # 跨工作区移动时清理不属于目标工作区的标签关联
-        if target_workspace:
-            kept_tags = [
-                t for t in file_row.tags
-                if t.workspace is None or t.workspace == target_workspace
-            ]
-            if len(kept_tags) != len(file_row.tags):
-                file_row.tags = kept_tags
+            # 跨工作区移动时清理不属于目标工作区的标签关联
+            if target_workspace:
+                kept_tags = [
+                    t for t in file_row.tags
+                    if t.workspace is None or t.workspace == target_workspace
+                ]
+                if len(kept_tags) != len(file_row.tags):
+                    file_row.tags = kept_tags
 
-        moved_files.append(_to_file_summary(file_row))
+            moved_files.append(_to_file_summary(file_row))
 
-    repo.session.commit()
+
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return FileBatchResultDTO(files=moved_files, target_dir=dest_path.as_posix())
 
 
 @router.post("/folders/copy", response_model=FileBatchResultDTO)
-async def copy_folder(
+@threaded
+def copy_folder(
     payload: FolderCopyRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1383,38 +1427,42 @@ async def copy_folder(
 
     dest_path = _build_unique_target_dir(target_parent, source_path.name)
 
-    # 物理复制整棵目录
-    try:
-        shutil.copytree(str(source_path), str(dest_path))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to copy folder: {exc}") from exc
+    with filesystem_transaction(repo) as changes:
+        # 物理复制整棵目录
+        try:
+            changes.append((None, dest_path))
+            shutil.copytree(str(source_path), str(dest_path))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to copy folder: {exc}") from exc
 
-    copied_files: list[FileSummaryDTO] = []
+        copied_files: list[FileSummaryDTO] = []
 
-    # 递归遍历副本目录，把所有文件作为全新记录入库
-    for current_root, _dirs, file_names in os.walk(dest_path):
-        for fname in file_names:
-            fpath = Path(current_root) / fname
-            try:
-                meta = build_file_meta(fpath)
-            except Exception:
-                continue
-            file_row = repo.upsert_file(meta)
-            copied_files.append(_to_file_summary(file_row, tag_ids=[]))
+        # 递归遍历副本目录，把所有文件作为全新记录入库
+        for current_root, _dirs, file_names in os.walk(dest_path):
+            for fname in file_names:
+                fpath = Path(current_root) / fname
+                try:
+                    meta = build_file_meta(fpath)
+                except Exception:
+                    continue
+                file_row = repo.upsert_file(meta)
+                copied_files.append(_to_file_summary(file_row, tag_ids=[]))
 
-    repo.session.commit()
+
     from ..core.query_cache import get_query_cache
     get_query_cache().invalidate_pattern("folder:tree:")
-    await broadcast_folder_tree_changed()
+    schedule_folder_tree_changed()
     return FileBatchResultDTO(files=copied_files, target_dir=dest_path.as_posix())
 
 
 # ========== 健康检查 ==========
 
 @router.get("/health")
-async def health_check():
+@threaded
+def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.0.1"}
+    from ..security import INSTANCE_ID
+    return {"status": "ok", "version": "0.10.0", "instance_id": INSTANCE_ID}
 
 
 # ========== 标签导入导出 ==========
@@ -1481,7 +1529,8 @@ def _build_preview_dto(token: str, payload: ExportPayload, target_workspace: str
 
 
 @router.post("/tags/export")
-async def export_tags(
+@threaded
+def export_tags(
     payload: TagExportRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1525,6 +1574,12 @@ async def import_preview(
     if not raw:
         raise HTTPException(status_code=400, detail="请求体为空")
 
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_import_preview_sync, raw, workspace, repo)
+
+
+def _import_preview_sync(raw: bytes, workspace: str, repo: Repo):
+    """在线程内解析标签包并匹配文件，保持会话顺序访问。"""
     try:
         payload = parse_thpack(raw)
     except ThpackFormatError as exc:
@@ -1536,7 +1591,8 @@ async def import_preview(
 
 
 @router.post("/tags/import/relocate", response_model=ImportPreviewDTO)
-async def import_relocate(
+@threaded
+def import_relocate(
     request: ImportRelocateRequestDTO,
     repo: Repo = Depends(get_repo),
 ):
@@ -1576,7 +1632,8 @@ async def import_relocate(
 
 
 @router.post("/tags/import/commit", response_model=ImportSummaryDTO)
-async def import_commit(
+@threaded
+def import_commit(
     request: ImportCommitRequestDTO,
     repo: Repo = Depends(get_repo),
 ):

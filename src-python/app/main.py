@@ -13,6 +13,8 @@ from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from app.security import ALLOWED_ORIGINS, authorize_request
 import socketio
 
 from app.api import router
@@ -25,7 +27,7 @@ class SafeFormatter(logging.Formatter):
     """安全的日志格式器，不依赖 sys.stdout.isatty()"""
     def __init__(self, fmt=None, datefmt=None, style='%', validate=True):
         super().__init__(fmt, datefmt, style, validate)
-    
+
     def format(self, record):
         return super().format(record)
 
@@ -66,6 +68,11 @@ async def lifespan(app: FastAPI):
     logger.info("TagHive Sidecar started successfully")
     yield
 
+    from app.api.websocket import active_watches
+    for service in list(active_watches.values()):
+        await asyncio.to_thread(service.stop)
+    active_watches.clear()
+
     # 关闭时清理资源
     if hasattr(app.state, 'watch_service'):
         app.state.watch_service.stop()
@@ -85,11 +92,14 @@ app = FastAPI(
 # 配置 CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 在生产环境中应该限制为 Tauri 应用的实际来源
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(authorize_request)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
 
 # 挂载 REST API
 app.include_router(router)
@@ -119,9 +129,9 @@ def main():
 
     port = int(os.environ.get("TAGHIVE_PORT", 8721))
     host = os.environ.get("TAGHIVE_HOST", "127.0.0.1")
-    
+
     logger.info(f"Starting TagHive Sidecar on {host}:{port}")
-    
+
     # 禁用 reload 功能，避免 watchfiles 监控日志文件导致循环
     # sidecar 进程不需要热重载功能
     # 禁用默认日志配置，使用我们自己的配置
@@ -131,6 +141,7 @@ def main():
         port=port,
         reload=False,
         log_level="info",
+        access_log=False,  # 媒体查询参数含会话凭据，禁止写入访问日志。
         log_config=None,  # 禁用 uvicorn 的默认日志配置
     )
 

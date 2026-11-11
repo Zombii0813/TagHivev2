@@ -93,6 +93,7 @@ class SearchQueryDTO(BaseModel):
     """搜索查询 DTO"""
     text: Optional[str] = None
     root: Optional[str] = None
+    roots: Optional[List[str]] = None
     types: Optional[List[str]] = None
     tags: Optional[List[int]] = None
     match_all_tags: bool = False
@@ -282,7 +283,7 @@ class TagUpdateDTO(BaseModel):
     color: Optional[str] = None
     icon: Optional[str] = None
     description: Optional[str] = None
-    parent_id: Optional[int] = None  # 传 None 不更新，传 0 清除父标签（设为顶级）
+    parent_id: Optional[int] = None  # 省略不更新，null 或 0 清除父标签
 
 
 # ========== 工作区相关 DTO ==========
