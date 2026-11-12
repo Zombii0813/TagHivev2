@@ -4,6 +4,7 @@
     v-if="viewMode === 'grid'"
     ref="scrollerInst"
     class="scroller grid-view"
+    role="listbox" aria-label="文件" aria-multiselectable="true"
     :items="gridRows"
     :item-size="gridItemHeight"
     key-field="rowIndex"
@@ -18,6 +19,11 @@
         :class="{ 'file-drop-active': activeDropFileId === file.id }"
         :style="cellDropStyle(file.id)"
         :data-file-id="file.id"
+        role="option"
+        :aria-label="file.name"
+        :aria-selected="selectedIds.has(file.id)"
+        :tabindex="fileTabIndex(file.id)"
+        @keydown="handleFileKey(file, $event)"
         draggable="true"
         @dragstart="$emit('file-dragstart', file, $event)"
         @dragend="$emit('file-dragend')"
@@ -53,14 +59,21 @@
     v-else
     ref="scrollerInst"
     class="scroller list-view"
+    role="listbox" aria-label="文件" aria-multiselectable="true"
     :items="files"
-    :item-size="60"
+    :item-size="appStore.compactDensity ? 48 : 60"
     key-field="id"
     @scroll-end="$emit('load-more')"
     v-slot="{ item }"
   >
     <div
       class="list-drop-target"
+      :data-file-id="item.id"
+      role="option"
+      :aria-label="item.name"
+      :aria-selected="selectedIds.has(item.id)"
+      :tabindex="fileTabIndex(item.id)"
+      @keydown="handleFileKey(item, $event)"
       :class="{ 'file-drop-active': activeDropFileId === item.id }"
       :style="cellDropStyle(item.id)"
       draggable="true"
@@ -92,6 +105,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useFileNavigation } from '../composables/useFileNavigation'
+import { useAppStore } from '../stores/app'
+const appStore = useAppStore()
 import { RecycleScroller } from 'vue-virtual-scroller'
 import FileCard from './FileCard.vue'
 import FileListItem from './FileListItem.vue'
@@ -120,7 +136,7 @@ const props = defineProps<{
   listBadgeModifier?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'file-click', fileId: number, evt: MouseEvent): void
   (e: 'file-dblclick', file: FileSummary): void
   (e: 'file-contextmenu', file: FileSummary, evt: MouseEvent): void
@@ -136,7 +152,13 @@ defineEmits<{
 // grid/list 两个 RecycleScroller 由 v-if/v-else 互斥，同时只挂载一个，故共用同名 ref。
 // RecycleScroller 非 pageMode 时其根元素即滚动容器，直接存取 $el.scrollTop 即可，
 // 无需绕 scrollToPosition（内部实现等价）。
-const scrollerInst = ref<{ $el?: HTMLElement } | null>(null)
+const scrollerInst = ref<{ $el?: HTMLElement; scrollToItem?: (index: number) => void } | null>(null)
+
+const { fileTabIndex, handleFileKey } = useFileNavigation(
+  file => emit('file-dblclick', file),
+  index => scrollerInst.value?.scrollToItem?.(props.viewMode === 'grid' ? Math.floor(index / Math.max(1, props.gridRows[0]?.files.length ?? 1)) : index),
+  () => props.viewMode === 'grid' ? Math.max(1, props.gridRows[0]?.files.length ?? 1) : 1,
+)
 
 /** 读取当前滚动位置（像素）；容器未挂载时返回 0 */
 function getScrollTop(): number {

@@ -3,6 +3,8 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import threading
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Tuple, Set, Iterable
@@ -25,12 +27,27 @@ from ..utils.paths import is_within
 logger = logging.getLogger(__name__)
 
 
+_scan_mutex = threading.RLock()
+
+
+def serialized_scan(method):
+    """串行执行扫描，避免监听与手动扫描同时写入同一数据库。"""
+    @functools.wraps(method)
+    def wrapped(*args, **kwargs):
+        """获得扫描锁后执行，任务取消由扫描循环处理。"""
+        with _scan_mutex:
+            return method(*args, **kwargs)
+    return wrapped
+
+
 @dataclass
 class ScanService:
     session: Session
 
+    @serialized_scan
     def scan_workspace(
-        self, root: Path, on_progress: Callable[[int, int, int, str], None] | None = None
+        self, root: Path, on_progress: Callable[[int, int, int, str], None] | None = None,
+        cancel: threading.Event | None = None
     ) -> int:
         """
         扫描工作区目录 - 超高速版本
@@ -39,16 +56,19 @@ class ScanService:
         1. 流式扫描，边扫描边处理
         2. 批量数据库操作，减少事务开销
         3. 智能缓存，避免重复查询
-        4. 并行处理媒体文件时长提取
+        4. 忽略未变化记录，允许取消且保留部分结果
 
         Args:
             root: 工作区根目录
             on_progress: 进度回调函数，参数为 (当前计数, 总数, 百分比, 当前文件路径)
+            cancel: 可选取消信号，取消后跳过过期索引清理。
 
         Returns:
             处理的文件总数
         """
         import os
+        if cancel and cancel.is_set():
+            return 0
         repo = Repo(self.session)
         root_path = root.resolve()
 
@@ -73,7 +93,9 @@ class ScanService:
 
         # 阶段 1: 快速预扫描获取总数
         scanner = UltraFastFileScanner(max_workers=min(16, os.cpu_count() or 4))
-        estimated_total = scanner.quick_count(root_path)
+        estimated_total = scanner.quick_count(root_path, cancel=cancel)
+        # 主扫描保持流式枚举，避免进程池物化整棵子树并阻塞取消。
+        scanner.parallel_threshold = float("inf")
         logger.info(f"[Scan] Estimated {estimated_total} files to scan")
 
         # 阶段 2: 加载现有文件信息到内存字典
@@ -92,6 +114,9 @@ class ScanService:
 
         # 使用流式扫描
         for entry in scanner.scan_directory_stream(root_path):
+            if cancel and cancel.is_set():
+                self.session.rollback()
+                return count
             path_str = Path(entry.path).as_posix()
             # 元数据失败不等于文件不存在，仍保留其索引和标签。
             paths_seen.add(path_str)
@@ -126,6 +151,9 @@ class ScanService:
 
         logger.info(f"[Scan] Processed {count} files")
 
+        # 取消后的不完整枚举不能用于清理索引。
+        if cancel and cancel.is_set():
+            return count
         # 阶段 4: 清理已删除的文件
         self._cleanup_stale_files(repo, root_path, paths_seen)
 

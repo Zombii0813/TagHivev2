@@ -92,6 +92,9 @@ def _register_natural_collation(engine) -> None:
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn, _connection_record):  # noqa: ANN001
         dbapi_conn.create_collation(NATURAL_COLLATION, _natural_collation)
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+        dbapi_conn.execute("PRAGMA busy_timeout=30000")
+        dbapi_conn.execute("PRAGMA synchronous=NORMAL")
 
 # 连接池配置常量
 POOL_SIZE = 5              # 连接池保持的连接数
@@ -126,174 +129,83 @@ def init_db(db_path: Path) -> None:
         )
         _register_natural_collation(_engine)
         SessionLocal.configure(bind=_engine)
+        with _engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA journal_mode=WAL")
         Base.metadata.create_all(bind=_engine, tables=_schema_tables())
         _ensure_schema()
         _init_fts5()
         _engine_path = db_path
 
 
+SCHEMA_VERSION = 2
+
+
 def _ensure_schema() -> None:
-    """确保数据库 schema 兼容性
-    
-    检查并添加缺失的列和索引，用于数据库升级。
-    """
-    session = SessionLocal()
+    """事务化迁移历史结构；失败回滚并中止启动。"""
+    raw = _engine.raw_connection()
     try:
-        connection = session.connection()
-        # 添加 modified_at 列（如果缺失）
-        try:
-            connection.execute(text("ALTER TABLE files ADD COLUMN modified_at FLOAT"))
-        except Exception:
-            pass
-        # 添加 duration 列（如果缺失）
-        try:
-            connection.execute(text("ALTER TABLE files ADD COLUMN duration FLOAT"))
-        except Exception:
-            pass
-        # 添加 duration 索引（如果不存在）
-        try:
-            connection.execute(text("CREATE INDEX idx_files_duration ON files(duration)"))
-        except Exception:
-            pass
-        # 添加视频元数据列（如果缺失）- 分辨率/比特率/探测标记
-        for _column_ddl in (
-            "ALTER TABLE files ADD COLUMN width INTEGER",
-            "ALTER TABLE files ADD COLUMN height INTEGER",
-            "ALTER TABLE files ADD COLUMN bitrate INTEGER",
-            "ALTER TABLE files ADD COLUMN media_probed INTEGER DEFAULT 0",
-        ):
-            try:
-                connection.execute(text(_column_ddl))
-            except Exception:
-                pass
-        # 添加 file_tags 复合索引（如果不存在）
-        try:
-            connection.execute(text("CREATE INDEX idx_file_tags_file_tag ON file_tags(file_id, tag_id)"))
-        except Exception:
-            pass
-        # 添加 tags.workspace 列（如果缺失）- 用于标签隔离
-        try:
-            connection.execute(text("ALTER TABLE tags ADD COLUMN workspace TEXT"))
-        except Exception:
-            pass
-        # 添加 tags.icon 列（如果缺失）- 用于 emoji 图标
-        try:
-            connection.execute(text("ALTER TABLE tags ADD COLUMN icon TEXT"))
-        except Exception:
-            pass
-        # 添加 tags 表索引（如果不存在）
-        try:
-            connection.execute(text("CREATE INDEX idx_tags_workspace ON tags(workspace)"))
-        except Exception:
-            pass
-        try:
-            connection.execute(text("CREATE INDEX idx_tags_name_workspace ON tags(name, workspace)"))
-        except Exception:
-            pass
-        # 重建 tags 表以移除 name 的唯一约束（SQLite 不支持直接删除约束）
-        _migrate_tags_table(connection)
-        # 再次确保 icon 列存在（migration 可能重建了不含 icon 的表）
-        try:
-            connection.execute(text("ALTER TABLE tags ADD COLUMN icon TEXT"))
-        except Exception:
-            pass
-        # 添加 tags.parent_id 列（如果缺失）- 用于标签层级嵌套
-        try:
-            connection.execute(text("ALTER TABLE tags ADD COLUMN parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL"))
-        except Exception:
-            pass
-        # 添加 parent_id 索引（如果不存在）
-        try:
-            connection.execute(text("CREATE INDEX idx_tags_parent_id ON tags(parent_id)"))
-        except Exception:
-            pass
-        # 添加 files.parent_dir 列（如果缺失）- 用于 O(1) 直接子文件查询
-        try:
-            connection.execute(text("ALTER TABLE files ADD COLUMN parent_dir TEXT"))
-        except Exception:
-            pass
-        # 创建 parent_dir 索引（如果不存在）
-        try:
-            connection.execute(text("CREATE INDEX idx_files_parent_dir ON files(parent_dir)"))
-        except Exception:
-            pass
-        # 回填 parent_dir：仅对值为 NULL 的旧记录执行（应用层一次性处理）
-        try:
-            rows = connection.execute(text(
-                "SELECT id, path FROM files WHERE parent_dir IS NULL"
-            )).all()
-            if rows:
-                for row in rows:
-                    file_id, p = row[0], row[1] or ""
-                    idx = p.rfind("/")
-                    parent = p[:idx] if idx >= 0 else ""
-                    connection.execute(
-                        text("UPDATE files SET parent_dir = :pd WHERE id = :id"),
-                        {"pd": parent, "id": file_id},
-                    )
-        except Exception:
-            pass
-        session.commit()
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute("BEGIN IMMEDIATE")
+        version = raw.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError("数据库版本高于当前应用支持的版本")
+        if version < 1:
+            additions = {
+                "files": {"modified_at": "FLOAT", "duration": "FLOAT", "width": "INTEGER",
+                          "height": "INTEGER", "bitrate": "INTEGER", "media_probed": "INTEGER DEFAULT 0",
+                          "parent_dir": "TEXT"},
+                "tags": {"workspace": "TEXT", "icon": "TEXT",
+                         "parent_id": "INTEGER REFERENCES tags(id) ON DELETE SET NULL"},
+            }
+            for table, columns in additions.items():
+                existing = {row[1] for row in raw.execute(f"PRAGMA table_info({table})")}
+                for name, definition in columns.items():
+                    if name not in existing:
+                        raw.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            # 历史单列名称唯一约束必须移除，同时完整保留层级和关联。
+            unique_name = any(row[2] and [col[2] for col in raw.execute(f'PRAGMA index_info("{row[1]}")')] == ["name"]
+                              for row in raw.execute("PRAGMA index_list(tags)").fetchall())
+            if unique_name:
+                raw.execute("CREATE TABLE tags_new (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT, icon TEXT, description TEXT, workspace TEXT, parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL, created_at DATETIME)")
+                raw.execute("INSERT INTO tags_new SELECT id,name,color,icon,description,workspace,parent_id,created_at FROM tags")
+                raw.execute("DROP TABLE tags")
+                raw.execute("ALTER TABLE tags_new RENAME TO tags")
+            raw.execute("UPDATE tags SET parent_id=NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tags)")
+            raw.execute("CREATE TABLE file_tags_new (file_id INTEGER REFERENCES files(id) ON DELETE CASCADE, tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE, PRIMARY KEY(file_id,tag_id))")
+            raw.execute("INSERT OR IGNORE INTO file_tags_new SELECT ft.file_id,ft.tag_id FROM file_tags ft JOIN files f ON f.id=ft.file_id JOIN tags t ON t.id=ft.tag_id")
+            raw.execute("DROP TABLE file_tags")
+            raw.execute("ALTER TABLE file_tags_new RENAME TO file_tags")
+            for fid, path in raw.execute("SELECT id,path FROM files WHERE parent_dir IS NULL").fetchall():
+                raw.execute("UPDATE files SET parent_dir=? WHERE id=?", (str(path).replace(chr(92), "/").rsplit("/", 1)[0], fid))
+            # 重建后恢复模型声明的全部索引。
+            for table in _schema_tables():
+                for index in table.indexes:
+                    from sqlalchemy.schema import CreateIndex
+                    raw.execute(str(CreateIndex(index, if_not_exists=True).compile(_engine)))
+            raw.execute("PRAGMA user_version=1")
+        if version < 2:
+            raw.execute('CREATE INDEX IF NOT EXISTS idx_files_name_natural ON files(name COLLATE "NATURAL", id)')
+            raw.execute('CREATE INDEX IF NOT EXISTS idx_files_parent_name_natural ON files(parent_dir, name COLLATE "NATURAL", id)')
+            raw.execute("PRAGMA user_version=2")
+        violations = raw.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"数据库外键校验失败: {violations[:5]}")
+        raw.commit()
     except Exception:
-        session.rollback()
+        raw.rollback()
+        raise
     finally:
-        session.close()
-
-
-def _migrate_tags_table(connection) -> None:
-    """迁移 tags 表，移除 name 的唯一约束
-    
-    SQLite 不支持直接修改约束，需要重建表。
-    """
-    try:
-        # 检查当前表结构
-        result = connection.execute(text(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tags'"
-        ))
-        table_sql = result.scalar()
-        
-        if table_sql and 'UNIQUE' in table_sql.upper() and 'NAME' in table_sql.upper():
-            # 需要重建表来移除唯一约束
-            # 1. 创建临时表
-            connection.execute(text("""
-                CREATE TABLE tags_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name VARCHAR NOT NULL,
-                    color VARCHAR,
-                    icon TEXT,
-                    description VARCHAR,
-                    workspace TEXT,
-                    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-
-            # 2. 复制数据
-            connection.execute(text("""
-                INSERT INTO tags_new (id, name, color, icon, description, workspace, created_at)
-                SELECT id, name, color, icon, description, workspace, created_at FROM tags
-            """))
-            
-            # 3. 删除旧表
-            connection.execute(text("DROP TABLE tags"))
-            
-            # 4. 重命名新表
-            connection.execute(text("ALTER TABLE tags_new RENAME TO tags"))
-            
-            # 5. 创建索引
-            connection.execute(text("CREATE INDEX idx_tags_workspace ON tags(workspace)"))
-            connection.execute(text("CREATE INDEX idx_tags_name_workspace ON tags(name, workspace)"))
-            
-            print("[DB Migration] tags 表已重建，移除了 name 的唯一约束")
-    except Exception as e:
-        print(f"[DB Migration] tags 表迁移失败: {e}")
+        raw.execute("PRAGMA foreign_keys=ON")
+        raw.close()
 
 
 def _schema_tables():
+    """获取普通模型表，排除单独管理的虚拟表。"""
     return [table for table in Base.metadata.sorted_tables if table.name != "files_fts"]
 
 
 def _get_table_sql(connection, table_name: str) -> str | None:
+    """读取表定义，用于检测历史结构。"""
     result = connection.execute(
         text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:name"),
         {"name": table_name},
@@ -309,89 +221,27 @@ def _is_fts5_table_sql(sql: str | None) -> bool:
 
 
 def _init_fts5() -> None:
-    """初始化 FTS5 全文搜索虚拟表
-    
-    创建与 files 表同步的虚拟表 files_fts，使用 FTS5 扩展
-    提供高性能全文搜索能力。
-    """
-    session = SessionLocal()
-    try:
-        connection = session.connection()
-        
-        # 检查 FTS5 扩展是否可用
+    """初始化 trigram 子串索引及同步触发器，不支持时保留 LIKE 回退。"""
+    with _engine.begin() as connection:
         try:
-            connection.execute(text("SELECT fts5('test')"))
-        except Exception:
-            # FTS5 不可用，跳过创建
-            return
-        
-        existing_sql = _get_table_sql(connection, "files_fts")
-        if existing_sql and not _is_fts5_table_sql(existing_sql):
-            connection.execute(text("DROP TABLE files_fts"))
-            existing_sql = None
-
-        if existing_sql is None:
-            connection.execute(text("DROP TRIGGER IF EXISTS files_ai"))
-            connection.execute(text("DROP TRIGGER IF EXISTS files_ad"))
-            connection.execute(text("DROP TRIGGER IF EXISTS files_au"))
-            # 创建 FTS5 虚拟表
-            connection.execute(text("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
-                    name,
-                    content='files',
-                    content_rowid='id'
-                )
-            """))
-
-            # 创建触发器保持 FTS 表与 files 表同步
-            # 插入触发器
-            connection.execute(text("""
-                CREATE TRIGGER files_ai AFTER INSERT ON files BEGIN
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            """))
-            
-            # 删除触发器
-            connection.execute(text("""
-                CREATE TRIGGER files_ad AFTER DELETE ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
-                END
-            """))
-            
-            # 更新触发器
-            connection.execute(text("""
-                CREATE TRIGGER files_au AFTER UPDATE ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            """))
-
-            # 构建初始索引
-            connection.execute(text("INSERT INTO files_fts(files_fts) VALUES ('rebuild')"))
-        else:
-            # 确保触发器存在
-            connection.execute(text("""
-                CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            """))
-            connection.execute(text("""
-                CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
-                END
-            """))
-            connection.execute(text("""
-                CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            """))
-        
-        session.commit()
-    except Exception:
-        session.rollback()
-    finally:
-        session.close()
+            connection.exec_driver_sql("CREATE VIRTUAL TABLE temp.trigram_probe USING fts5(name, tokenize='trigram')")
+            connection.exec_driver_sql("DROP TABLE temp.trigram_probe")
+        except Exception as exc:
+            if "no such tokenizer" in str(exc) or "no such module: fts5" in str(exc):
+                return
+            raise
+        existing = _get_table_sql(connection, "files_fts")
+        rebuild = not existing or "trigram" not in existing.lower()
+        for suffix in ("ai", "ad", "au"):
+            connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS files_{suffix}")
+        if rebuild:
+            connection.exec_driver_sql("DROP TABLE IF EXISTS files_fts")
+            connection.exec_driver_sql("CREATE VIRTUAL TABLE files_fts USING fts5(name, content='files', content_rowid='id', tokenize='trigram')")
+        connection.exec_driver_sql("CREATE TRIGGER files_ai AFTER INSERT ON files BEGIN INSERT INTO files_fts(rowid,name) VALUES(new.id,new.name); END")
+        connection.exec_driver_sql("CREATE TRIGGER files_ad AFTER DELETE ON files BEGIN INSERT INTO files_fts(files_fts,rowid,name) VALUES('delete',old.id,old.name); END")
+        connection.exec_driver_sql("CREATE TRIGGER files_au AFTER UPDATE OF name ON files WHEN old.name IS NOT new.name BEGIN INSERT INTO files_fts(files_fts,rowid,name) VALUES('delete',old.id,old.name); INSERT INTO files_fts(rowid,name) VALUES(new.id,new.name); END")
+        if rebuild:
+            connection.exec_driver_sql("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
 
 
 def get_session() -> Session:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..utils.ignore import should_ignore
+
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -66,6 +68,8 @@ def iter_files(root: Path) -> Iterable[Path]:
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
+                    if should_ignore(Path(entry.path), root):
+                        continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
@@ -82,6 +86,8 @@ def iter_file_entries(root: Path) -> Iterable[os.DirEntry]:
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
+                    if should_ignore(Path(entry.path), root):
+                        continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
@@ -115,7 +121,7 @@ class UltraFastFileScanner:
         # 大目录阈值：超过此数量的子目录使用并行扫描
         self.parallel_threshold = 4
         
-    def quick_count(self, root: Path) -> int:
+    def quick_count(self, root: Path, cancel=None) -> int:
         """
         快速统计文件数量（不存储路径）
         
@@ -133,11 +139,17 @@ class UltraFastFileScanner:
         logger.info(f"[QuickCount][DEBUG] Root is_dir: {root.is_dir()}")
         
         while stack:
+            if cancel and cancel.is_set():
+                return count
             current = stack.pop()
             try:
                 with os.scandir(current) as entries:
                     entry_count = 0
                     for entry in entries:
+                        if cancel and cancel.is_set():
+                            return count
+                        if should_ignore(Path(entry.path), root):
+                            continue
                         entry_count += 1
                         if entry.is_dir(follow_symlinks=False):
                             stack.append(entry.path)
@@ -168,6 +180,8 @@ class UltraFastFileScanner:
         try:
             with os.scandir(root_str) as entries:
                 for entry in entries:
+                    if should_ignore(Path(entry.path), root):
+                        continue
                     if entry.is_dir(follow_symlinks=False):
                         top_dirs.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
@@ -198,6 +212,8 @@ class UltraFastFileScanner:
             try:
                 with os.scandir(current) as entries:
                     for entry in entries:
+                        if should_ignore(Path(entry.path), Path(dir_path)):
+                            continue
                         if entry.is_dir(follow_symlinks=False):
                             stack.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):
@@ -274,6 +290,8 @@ class UltraFastFileScanner:
             try:
                 with os.scandir(current) as entries:
                     for entry in entries:
+                        if should_ignore(Path(entry.path), Path(dir_path)):
+                            continue
                         if entry.is_dir(follow_symlinks=False):
                             stack.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):

@@ -10,10 +10,13 @@
 
 from __future__ import annotations
 
+from ..utils.thumbnail_render import fit_and_save
+
 from ..utils.thumbnail_cache import thumbnail_identity, atomic_image_save
 
 import asyncio
 import hashlib
+import heapq
 import logging
 import threading
 import time
@@ -21,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from queue import PriorityQueue, Queue
+from queue import PriorityQueue, Queue, Empty, Full
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from PIL import Image
@@ -47,6 +50,7 @@ class ThumbnailTask:
     size: str = field(compare=False)
     file_id: int = field(compare=False, default=0)
     callback: Optional[Callable[[str], None]] = field(compare=False, default=None)
+    key: str = field(compare=False, default="")
     timestamp: float = field(compare=False, default_factory=time.time)
 
 
@@ -218,47 +222,7 @@ class MultiSizeThumbnailGenerator:
         size: str
     ) -> Optional[str]:
         """将 PIL 图像拟合到正方形黑色画布并保存，图片与视频缩略图共用。"""
-        try:
-            # 转换为 RGB
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-
-            # 获取目标尺寸
-            target_size = self.SIZES.get(size, self.SIZES["medium"])
-            target_width, target_height = target_size
-
-            # 使用高质量缩放
-            img.thumbnail((target_width * 2, target_height * 2), Image.Resampling.LANCZOS)
-
-            # 创建正方形画布
-            final_img = Image.new("RGB", target_size, (32, 32, 32))
-
-            # 计算居中位置
-            img_width, img_height = img.size
-            scale = min(target_width / img_width, target_height / img_height)
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-
-            # 高质量缩放
-            if new_width != img_width or new_height != img_height:
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-            # 粘贴到居中位置
-            offset_x = (target_width - new_width) // 2
-            offset_y = (target_height - new_height) // 2
-            final_img.paste(img, (offset_x, offset_y))
-
-            # 保存为 WebP 或 JPEG
-            if self.webp_supported:
-                atomic_image_save(final_img, target, "WEBP", quality=WebPConverter.DEFAULT_QUALITY, method=6)
-            else:
-                atomic_image_save(final_img, target, "JPEG", quality=WebPConverter.DEFAULT_QUALITY)
-
-            return f"file://{target}"
-
-        except Exception as e:
-            logger.error(f"Failed to fit and save thumbnail: {e}")
-            return None
+        return fit_and_save(img, target, size, self.webp_supported)
 
 
 class AsyncThumbnailGenerator:
@@ -281,7 +245,11 @@ class AsyncThumbnailGenerator:
 
         self.max_workers = max_workers
         self.task_queue: PriorityQueue[ThumbnailTask] = PriorityQueue(maxsize=queue_size)
-        self.result_queue: Queue[ThumbnailResult] = Queue()
+        self.result_queue: Queue[ThumbnailResult] = Queue(maxsize=256)
+        self._slots = threading.Semaphore(max_workers)
+        self._pending = {}
+        self._active = set()
+        self._negative = {}
 
         self._generator = MultiSizeThumbnailGenerator(thumbs_dir)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -321,13 +289,27 @@ class AsyncThumbnailGenerator:
         self._running = False
         if self._worker_thread:
             self._worker_thread.join(timeout=5)
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)
         logger.info("[AsyncThumbnail] Generator stopped")
 
     def set_visible_files(self, file_paths: List[str]):
         """设置当前可见区域的文件列表"""
         with self._lock:
             self._visible_files = set(file_paths)
+            # 只淘汰尚未执行的中等尺寸前台请求，详情大图不受影响。
+            with self.task_queue.mutex:
+                kept = []
+                for task in self.task_queue.queue:
+                    if task.size == "medium" and task.file_path not in self._visible_files:
+                        self._pending.pop(task.key, None)
+                        self.task_queue.unfinished_tasks -= 1
+                    else:
+                        if task.file_path in self._visible_files:
+                            task.priority = Priority.HIGH.value
+                        kept.append(task)
+                self.task_queue.queue[:] = kept
+                heapq.heapify(self.task_queue.queue)
+                self.task_queue.not_full.notify_all()
 
     def add_visible_file(self, file_path: str):
         """添加可见文件（高优先级）"""
@@ -351,20 +333,29 @@ class AsyncThumbnailGenerator:
         callback: Optional[Callable[[str], None]] = None
     ) -> bool:
         """异步生成缩略图"""
-        try:
-            task = ThumbnailTask(
-                priority=priority.value,
-                file_path=file_path,
-                size=size,
-                file_id=file_id,
-                callback=callback
-            )
-            self.task_queue.put(task, block=False)
+        key = f"{thumbnail_identity(file_path)}:{size}"
+        with self._lock:
+            now = time.monotonic()
+            self._negative = {k: expiry for k, expiry in self._negative.items() if expiry > now}
+            if key in self._negative:
+                return False
+            if key in self._active:
+                return True
+            old = self._pending.get(key)
+            if old:
+                if priority.value < old.priority:
+                    with self.task_queue.mutex:
+                        old.priority = priority.value
+                        heapq.heapify(self.task_queue.queue)
+                return True
+            task = ThumbnailTask(priority.value, file_path, size, file_id, callback, key)
+            try:
+                self.task_queue.put_nowait(task)
+            except Full:
+                return False
+            self._pending[key] = task
             self._stats["queued"] += 1
             return True
-        except Exception:
-            logger.warning(f"[AsyncThumbnail] Queue full, dropping task for {file_path}")
-            return False
 
     def generate_batch(
         self,
@@ -377,27 +368,32 @@ class AsyncThumbnailGenerator:
             self.generate_async(file_path, size, priority)
 
     def _process_queue(self):
-        """处理任务队列"""
+        """仅在 worker 空闲时出队，保证优先级在真正执行前生效。"""
         while self._running:
-            try:
-                # 获取任务（阻塞，带超时）
-                task = self.task_queue.get(timeout=1)
-
-                # 提交到线程池执行
-                future = self._executor.submit(
-                    self._generate_thumbnail,
-                    task.file_path,
-                    task.size
-                )
-
-                # 添加回调
-                future.add_done_callback(
-                    lambda f, t=task: self._on_task_complete(f, t)
-                )
-
-            except Exception:
-                # 队列为空或超时，继续循环
+            if not self._slots.acquire(timeout=0.2):
                 continue
+            try:
+                task = self.task_queue.get(timeout=0.2)
+            except Empty:
+                self._slots.release()
+                continue
+            with self._lock:
+                self._pending.pop(task.key, None)
+                stale = task.key != f"{thumbnail_identity(task.file_path)}:{task.size}"
+                stale = stale or (task.priority == Priority.LOW.value and time.time() - task.timestamp > 10 and task.file_path not in self._visible_files)
+                if not stale:
+                    self._active.add(task.key)
+            self.task_queue.task_done()
+            if stale or not self._running:
+                self._slots.release()
+                continue
+            try:
+                future = self._executor.submit(self._generate_thumbnail, task.file_path, task.size)
+                future.add_done_callback(lambda f, t=task: self._on_task_complete(f, t))
+            except RuntimeError:
+                with self._lock:
+                    self._active.discard(task.key)
+                self._slots.release()
 
     def _generate_thumbnail(self, file_path: str, size: str) -> Optional[str]:
         """实际生成缩略图"""
@@ -426,7 +422,18 @@ class AsyncThumbnailGenerator:
                     error="Generation failed"
                 )
 
-            self.result_queue.put(result)
+            if not result.success:
+                with self._lock:
+                    if len(self._negative) >= 1000:
+                        self._negative.pop(next(iter(self._negative)))
+                    self._negative[task.key] = time.monotonic() + 30
+            try:
+                self.result_queue.put_nowait(result)
+            except Full:
+                try: self.result_queue.get_nowait()
+                except Empty: pass
+                try: self.result_queue.put_nowait(result)
+                except Full: pass
 
             # 调用用户回调
             if task.callback and thumb_path:
@@ -445,6 +452,10 @@ class AsyncThumbnailGenerator:
         except Exception as e:
             logger.error(f"[AsyncThumbnail] Task failed: {e}")
             self._stats["failed"] += 1
+        finally:
+            with self._lock:
+                self._active.discard(task.key)
+            self._slots.release()
 
     def get_results(self) -> List[ThumbnailResult]:
         """获取已完成的生成结果"""
@@ -462,6 +473,8 @@ class AsyncThumbnailGenerator:
             **self._stats,
             "queue_size": self.task_queue.qsize(),
             "visible_files": len(self._visible_files),
+            "active": len(self._active),
+            "retained_results": self.result_queue.qsize(),
         }
 
     def clear_queue(self):
@@ -471,6 +484,8 @@ class AsyncThumbnailGenerator:
                 self.task_queue.get(block=False)
             except Exception:
                 break
+        with self._lock:
+            self._pending.clear()
         logger.info("[AsyncThumbnail] Queue cleared")
 
 

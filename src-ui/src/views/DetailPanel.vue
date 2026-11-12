@@ -1,5 +1,6 @@
 <template>
   <aside class="detail-panel">
+    <el-button aria-label="关闭详情" @click="appStore.toggleDetailPanel()">关闭详情</el-button>
     <div v-if="!selectedFile" class="empty">
       <el-empty description="选择一个文件查看详情" />
     </div>
@@ -11,10 +12,13 @@
           v-if="selectedFile.type === 'image'"
           :src="previewUrl"
           :alt="selectedFile.name"
+          @load="thumb.onLoad"
+          @error="thumb.onError"
           class="preview-media"
         />
+        <button v-if="selectedFile.type === 'image' && thumb.status.value === 'error'" @click="thumb.retry">预览失败，重试</button>
         <video
-          v-else-if="selectedFile.type === 'video'"
+          v-if="selectedFile.type === 'video'"
           ref="videoRef"
           :key="previewUrl"
           :src="previewUrl"
@@ -26,7 +30,7 @@
           @loadedmetadata="onVideoLoaded"
           class="preview-media video-element"
         />
-        <div v-else class="icon-preview">
+        <div v-if="!['image', 'video'].includes(selectedFile.type)" class="icon-preview">
           <el-icon :size="64">
             <Document v-if="selectedFile.type === 'doc'" />
             <Headset v-else-if="selectedFile.type === 'audio'" />
@@ -62,6 +66,7 @@
             <span class="label">路径</span>
             <span
               class="value value-link path-value"
+              :class="{ 'path-expanded': pathExpanded }"
               role="button"
               tabindex="0"
               title="打开所在文件夹"
@@ -69,6 +74,10 @@
               @keydown.enter.prevent="openFolder"
               @keydown.space.prevent="openFolder"
             >{{ selectedFile.path }}</span>
+          </div>
+          <div class="path-actions">
+            <el-button size="small" @click="pathExpanded = !pathExpanded">{{ pathExpanded ? '收起路径' : '展开路径' }}</el-button>
+            <el-button size="small" @click="copyPath">复制路径</el-button>
           </div>
           <div class="meta-item">
             <span class="label">修改时间</span>
@@ -115,7 +124,7 @@
             type="primary"
             link
             :icon="Plus"
-            @click="showTagDialog = true"
+            @click="openTagDialog"
             class="add-tag-btn"
           >
             添加
@@ -130,7 +139,10 @@
     <el-dialog
       v-model="showTagDialog"
       title="编辑标签"
-      width="400px"
+      :close-on-click-modal="!submitting"
+      :close-on-press-escape="!submitting"
+      :show-close="!submitting"
+      width="min(400px, 92vw)"
       append-to-body
     >
       <el-checkbox-group v-model="selectedTagIds">
@@ -148,18 +160,20 @@
       </el-checkbox-group>
       <template #footer>
         <el-button @click="showTagDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveTags">保存</el-button>
+        <el-button type="primary"  :loading="submitting" @click="saveTags">保存</el-button>
       </template>
     </el-dialog>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
+import { useThumbnail } from '../composables/useThumbnail'
 import { Document, Headset, Folder, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { open } from '@tauri-apps/plugin-shell'
 import { invoke } from '@tauri-apps/api/core'
+import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import { fileApi } from '../api/files'
@@ -167,7 +181,15 @@ import { thumbnailApi } from '../api/thumbnails'
 import type { FileSummary, MediaInfo } from '../types'
 
 const fileStore = useFileStore()
+const appStore = useAppStore()
 const tagStore = useTagStore()
+const pathExpanded = ref(false)
+async function copyPath() {
+  const path = selectedFile.value?.path
+  if (!path) return
+  try { await navigator.clipboard.writeText(path); ElMessage.success('路径已复制') }
+  catch { ElMessage.error('复制失败，请展开路径后手动复制') }
+}
 
 const showTagDialog = ref(false)
 const selectedTagIds = ref<number[]>([])
@@ -194,6 +216,21 @@ const selectedFile = computed(() => {
   return fileStore.activeFile
 })
 
+const thumb = useThumbnail(selectedFile, 'large')
+onBeforeUnmount(() => {
+  const video = videoRef.value
+  if (video) { video.pause(); video.removeAttribute('src'); video.load() }
+  mediaRequestId = null
+})
+const submitting = ref(false)
+const editFileId = ref<number | null>(null)
+function openTagDialog() {
+  if (!selectedFile.value) return
+  editFileId.value = selectedFile.value.id
+  selectedTagIds.value = [...selectedFile.value.tag_ids]
+  showTagDialog.value = true
+}
+
 // 浏览器 <video> 可原生播放的容器；其余走服务端转码流
 const NATIVE_PLAYABLE = new Set(['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v'])
 
@@ -208,7 +245,7 @@ const previewUrl = computed(() => {
   if (!selectedFile.value) return ''
   // 图片使用缩略图API
   if (selectedFile.value.type === 'image') {
-    return thumbnailApi.getThumbnailUrl(selectedFile.value.id, 'large')
+    return thumb.url.value
   }
   // 视频：原生格式直传原始文件，其余走转码流（ts/rmvb/wmv 等）
   if (selectedFile.value.type === 'video') {
@@ -335,17 +372,16 @@ async function handleVideoError(event: Event) {
 }
 
 watch(() => selectedFile.value, (file) => {
-  if (file) {
+  pathExpanded.value = false
+  if (file && !showTagDialog.value) {
     selectedTagIds.value = [...file.tag_ids]
   }
 })
 
-// 仅在选中文件真正变化时重新探测（标签更新等场景不触发）
+// 详情始终跟随最后点选的活动文件，多选数量变化不影响预览和媒体信息。
 watch(
   () => selectedFile.value?.id ?? null,
-  (fileId) => {
-    loadMediaInfo(fileId)
-  },
+  loadMediaInfo,
   { immediate: true }
 )
 
@@ -394,47 +430,35 @@ async function openFolder() {
 }
 
 async function confirmRemoveTag(tag: { id: number; name: string; color?: string }) {
-  if (!selectedFile.value) return
-  
+  if (!selectedFile.value || submitting.value) return
+  const fileId = selectedFile.value.id
+  const newTagIds = selectedFile.value.tag_ids.filter(id => id !== tag.id)
+  submitting.value = true
   try {
-    await ElMessageBox.confirm(`确定要移除标签 "${tag.name}" 吗？`, '确认移除', {
-      confirmButtonText: '移除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-    
-    // 从当前标签列表中移除
-    const newTagIds = selectedFile.value.tag_ids.filter(id => id !== tag.id)
-    
-    await fileApi.updateTags(selectedFile.value.id, {
-      tag_ids: newTagIds,
-      mode: 'replace',
-    })
-    fileStore.updateFileTags(selectedFile.value.id, newTagIds)
-    // 刷新标签列表以更新 file_count
+    try {
+      await ElMessageBox.confirm(`确定要移除标签 "${tag.name}" 吗？`, '确认移除', { type: 'warning' })
+    } catch { return }
+    await fileApi.updateTags(fileId, { tag_ids: newTagIds, mode: 'replace' })
+    fileStore.updateFileTags(fileId, newTagIds)
     await tagStore.reloadTags()
     ElMessage.success('标签已移除')
-  } catch (error) {
-    // 用户取消
-  }
+  } catch { ElMessage.error('标签移除失败') }
+  finally { submitting.value = false }
 }
 
 async function saveTags() {
-  if (!selectedFile.value) return
-  
+  if (editFileId.value === null || submitting.value) return
+  const fileId = editFileId.value
+  const tagIds = [...selectedTagIds.value]
+  submitting.value = true
   try {
-    await fileApi.updateTags(selectedFile.value.id, {
-      tag_ids: selectedTagIds.value,
-      mode: 'replace',
-    })
-    fileStore.updateFileTags(selectedFile.value.id, selectedTagIds.value)
-    // 刷新标签列表以更新 file_count
+    await fileApi.updateTags(fileId, { tag_ids: tagIds, mode: 'replace' })
+    fileStore.updateFileTags(fileId, tagIds)
     await tagStore.reloadTags()
     showTagDialog.value = false
     ElMessage.success('标签更新成功')
-  } catch (error) {
-    ElMessage.error('标签更新失败')
-  }
+  } catch { ElMessage.error('标签更新失败') }
+  finally { submitting.value = false }
 }
 </script>
 
@@ -482,7 +506,7 @@ async function saveTags() {
 .preview-media {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .preview-media.video-element {
@@ -626,9 +650,12 @@ async function saveTags() {
 }
 
 .path-value {
-  /* 路径完整展示，随宽度换行 */
-  white-space: pre-wrap;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
+.path-value.path-expanded { white-space: pre-wrap; overflow-wrap: anywhere; }
+.path-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 8px; }
 
 .tags-section {
   padding: 16px;

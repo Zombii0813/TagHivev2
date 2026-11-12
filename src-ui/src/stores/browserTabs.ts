@@ -34,10 +34,15 @@ export interface TabState {
 
   // ── 选中态 ──
   selectedIds: Set<number>
+  /** 同范围刷新或排序后移出加载页的选中项，不落盘。 */
+  selectedRecords: Map<number, FileSummary>
   activeId: number | null
   multiSelectMode: boolean
 
   // ── 搜索/过滤 ──
+  queryError: string
+  queryKey: string
+  appliedQuery: string
   searchQuery: SearchQuery
   /** 搜索框文本，由 SearchBar 受控读写 */
   searchText: string
@@ -115,8 +120,12 @@ export function createTab(
     isLoading: init.isLoading ?? false,
     folderContentsOffset: init.folderContentsOffset ?? 0,
     selectedIds: init.selectedIds ?? new Set<number>(),
+    selectedRecords: init.selectedRecords ?? new Map<number, FileSummary>(),
     activeId: init.activeId ?? null,
     multiSelectMode: init.multiSelectMode ?? false,
+    queryError: '',
+    queryKey: '',
+    appliedQuery: '',
     searchQuery: init.searchQuery ?? {},
     searchText: init.searchText ?? '',
     searchType: init.searchType ?? '',

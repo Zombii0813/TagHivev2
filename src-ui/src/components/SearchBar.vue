@@ -2,6 +2,7 @@
   <div class="search-bar">
     <el-input
       v-model="searchText"
+      aria-label="搜索文件名"
       :placeholder="searchPlaceholder"
       clearable
       @input="handleInput"
@@ -70,6 +71,7 @@ function handleInput() {
   // 在输入时就捕获标签页：防抖等待的 300ms 内用户可能切走，
   // 届时再取 activeTabId 会把 A 的搜索结果写进 B
   const tabId = fileStore.activeTabId
+  fileStore.clearSelection(tabId)
   fileStore.invalidateRequests(tabId)
   if (debounceTimer) {
     clearTimeout(debounceTimer)
@@ -87,6 +89,7 @@ onBeforeUnmount(() => { if (debounceTimer) clearTimeout(debounceTimer) })
 // watch 会误判为用户清空而发起一次搜索，覆盖目标标签页刚恢复的数据。
 function handleClear() {
   const tabId = fileStore.activeTabId
+  fileStore.clearSelection(tabId)
   fileStore.invalidateRequests(tabId)
   if (debounceTimer) {
     clearTimeout(debounceTimer)
@@ -105,13 +108,13 @@ function handleTypeFilter(type: string) {
   display: flex;
   gap: 8px;
   flex: 1;
-  min-width: 0;
-  max-width: 400px;
+  min-width: 304px;
+  max-width: 540px;
 }
 
 .search-bar .el-input {
   flex: 1;
-  min-width: 0;
+  min-width: 224px;
 }
 
 /* 响应式：小屏幕时隐藏类型筛选按钮文字 */

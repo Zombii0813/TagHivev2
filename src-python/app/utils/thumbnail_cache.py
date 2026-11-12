@@ -14,7 +14,7 @@ def thumbnail_identity(file_path: str) -> str:
         version = f"{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}"
     except OSError:
         version = "missing"
-    return hashlib.sha256(f"v2:{path.resolve()}:{version}".encode()).hexdigest()[:24]
+    return hashlib.sha256(f"v3:{path.resolve()}:{version}".encode()).hexdigest()[:24]
 
 
 def atomic_image_save(image, target: Path, image_format: str, **options) -> None:

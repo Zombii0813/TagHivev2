@@ -90,8 +90,8 @@ const menus = computed<MenuGroup[]>(() => [
       { label: '查找文件', command: 'edit:focus-search', icon: Search, shortcut: 'Ctrl+F' },
       { label: '管理标签', command: 'edit:manage-tags', icon: CollectionTag },
       { divided: true, label: '选择' },
-      { label: '全选当前列表', command: 'edit:select-all', shortcut: 'Ctrl+A', disabled: true },
-      { label: '清除选择', command: 'edit:clear-selection', disabled: true },
+      { label: '全选已加载文件', command: 'edit:select-all', shortcut: 'Ctrl+A' },
+      { label: '清除选择', command: 'edit:clear-selection' },
     ],
   },
   {

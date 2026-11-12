@@ -66,6 +66,25 @@ def get_thumbnail_by_path(path: str, size: str = "medium"):
     return FileResponse(str(thumb_path))
 
 
+@router.get("/stats")
+@threaded
+def get_thumbnail_stats():
+    """获取缩略图缓存统计"""
+    service = get_thumbnail_service()
+    count, size = service.get_cache_size()
+
+    # 获取异步生成器统计
+    generator = get_async_thumbnail_generator()
+    async_stats = generator.get_stats()
+
+    return {
+        "file_count": count,
+        "total_size_bytes": size,
+        "total_size_mb": round(size / (1024 * 1024), 2),
+        "async_stats": async_stats,
+    }
+
+
 @router.get("/{file_id}")
 @threaded
 def get_thumbnail(file_id: int, size: str = "medium", async_mode: bool = False):
@@ -209,10 +228,6 @@ def set_visible_files(file_paths: List[str]):
     generator = get_async_thumbnail_generator()
     generator.set_visible_files(file_paths)
 
-    # 高优先级生成可见文件的缩略图
-    for file_path in file_paths:
-        generator.generate_async(file_path, "medium", Priority.HIGH)
-
     return {
         "status": "ok",
         "visible_count": len(file_paths),
@@ -258,22 +273,3 @@ def cleanup_thumbnails(max_age_days: int = 30):
     service = get_thumbnail_service()
     count = service.cleanup_cache(max_age_days)
     return {"cleaned": count}
-
-
-@router.get("/stats")
-@threaded
-def get_thumbnail_stats():
-    """获取缩略图缓存统计"""
-    service = get_thumbnail_service()
-    count, size = service.get_cache_size()
-
-    # 获取异步生成器统计
-    generator = get_async_thumbnail_generator()
-    async_stats = generator.get_stats()
-
-    return {
-        "file_count": count,
-        "total_size_bytes": size,
-        "total_size_mb": round(size / (1024 * 1024), 2),
-        "async_stats": async_stats,
-    }

@@ -244,7 +244,7 @@
           <div v-if="lasso.active" class="lasso-rect" :style="lassoStyle" />
 
           <!-- 子目录网格 -->
-          <div v-if="fileStore.childDirs.length" class="explorer-grid" :style="explorerGridStyle">
+          <div v-if="fileStore.childDirs.length" class="explorer-grid" role="listbox" aria-label="文件" aria-multiselectable="true" :style="explorerGridStyle">
             <div
               v-for="dir in fileStore.childDirs"
               :key="dir.path"
@@ -266,7 +266,7 @@
           </div>
 
           <!-- 当前目录的文件（非虚拟化，随外层滚动） -->
-          <div v-if="fileStore.files.length" class="explorer-grid" :style="explorerGridStyle">
+          <div v-if="fileStore.files.length" class="explorer-grid" role="listbox" aria-label="文件" aria-multiselectable="true" :style="explorerGridStyle">
             <!-- draggable 接在单元格外壳上，与 FileScrollerArea 的 grid/list 一致；
                  缺了它 explorer 模式的文件拖不出去，跨标签页移动在该模式下失效 -->
             <div
@@ -274,6 +274,11 @@
               :key="file.id"
               class="explorer-file-cell"
               :data-file-id="file.id"
+              role="option"
+              :aria-label="file.name"
+              :aria-selected="fileStore.selectedIds.has(file.id)"
+              :tabindex="fileTabIndex(file.id)"
+              @keydown="handleFileKey(file, $event)"
               draggable="true"
               @dragstart="handleFileDragStart(file, $event)"
               @dragend="handleItemDragEnd"
@@ -452,17 +457,24 @@
       width="420px"
       append-to-body
       destroy-on-close
+      :close-on-click-modal="!renameSubmitting"
+      :close-on-press-escape="!renameSubmitting"
+      :show-close="!renameSubmitting"
+      @opened="focusRenameInput"
     >
       <el-input
+        ref="renameInput"
         v-model="renameNewName"
         placeholder="输入新文件名（含扩展名）"
         maxlength="255"
         clearable
+        :disabled="renameSubmitting"
         @keyup.enter="confirmRename"
       />
+      <p v-if="renameError" role="alert">{{ renameError }}</p>
       <template #footer>
-        <el-button @click="showRenameDialog = false">取消</el-button>
-        <el-button type="primary" :loading="renameSubmitting" :disabled="!renameNewName.trim()" @click="confirmRename">确定</el-button>
+        <el-button :disabled="renameSubmitting" @click="showRenameDialog = false">取消</el-button>
+        <el-button type="primary" :loading="renameSubmitting" :disabled="!!renameError" @click="confirmRename">确定</el-button>
       </template>
     </el-dialog>
 
@@ -716,6 +728,8 @@ import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import FileScrollerArea from '../components/FileScrollerArea.vue'
+import { useFileNavigation } from '../composables/useFileNavigation'
+import { fileNameError } from '../utils/fileNames'
 import FileCard from '../components/FileCard.vue'
 import FolderCard from '../components/FolderCard.vue'
 import HoneycombTree from '../components/HoneycombTree.vue'
@@ -739,6 +753,7 @@ import type { TagDragMeta } from '../utils/drag'
 const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
+const emit = defineEmits<{ 'delete-selected': [files?: FileSummary[]] }>()
 
 const scrollerRef = ref<HTMLElement | null>(null)
 // 虚拟滚动区（all/folder/tree 模式）实例，用于存取其内部滚动位置。
@@ -794,6 +809,9 @@ const fileContextMenuAnchor = (() => {
 const showRenameDialog = ref(false)
 const renameNewName = ref('')
 const renameSubmitting = ref(false)
+const renameTarget = ref<FileSummary | null>(null)
+const renameInput = ref<{ input?: HTMLInputElement } | null>(null)
+const renameError = computed(() => fileNameError(renameNewName.value))
 
 // 移动/复制对话框状态
 const showFileOpDialog = ref(false)
@@ -935,7 +953,7 @@ const gridItemWidth = computed(() => fileStore.gridItemSize)
 
 // 计算每个 grid item 的高度（含 row 上下 padding，给 hover 上浮预留缓冲）
 const gridItemHeight = computed(() => {
-  return fileStore.gridItemSize + INFO_HEIGHT + ROW_PADDING_Y * 2 - GAP_Y
+  return fileStore.gridItemSize + INFO_HEIGHT + ROW_PADDING_Y * 2 - GAP_Y - (appStore.compactDensity ? 20 : 0)
 })
 
 // 将文件列表按行分组
@@ -1435,12 +1453,25 @@ function handleCheckboxClick(fileId: number) {
   multiSelectMode.value = true
 }
 
-// Ctrl+A 全选，进入多选模式
+const { fileTabIndex, handleFileKey } = useFileNavigation(handleFileDblClick, undefined, () => gridColumns.value)
+
+// 快捷键只在文件区生效，弹窗和编辑器始终优先。
 function handleGlobalKeyDown(e: KeyboardEvent) {
+  const active = e.target as HTMLElement
+  if (!active.closest('.browser-view') || active.closest('input,textarea,select,[contenteditable="true"],[role="dialog"],.el-dialog,.el-overlay')) return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    fileStore.clearSelection(); multiSelectMode.value = false
+    fileContextMenuVisible.value = false; dirContextMenuVisible.value = false
+    return
+  }
+  if (e.key === 'Delete' && !e.repeat && fileStore.hasSelection && !fileStore.activeTab.queryError) {
+    e.preventDefault(); emit('delete-selected'); return
+  }
+  if (e.key === 'F2' && !e.repeat && fileStore.selectedCount === 1 && !fileStore.activeTab.queryError) {
+    e.preventDefault(); contextMenuTargetFile.value = fileStore.selectedFiles[0]; openRenameDialog(); return
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-    const active = document.activeElement
-    // 焦点在输入框时不拦截
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return
     e.preventDefault()
     fileStore.selectAll()
     multiSelectMode.value = true
@@ -1464,6 +1495,7 @@ const lassoStyle = computed(() => {
 })
 
 function handleGridMouseDown(e: MouseEvent) {
+  if (fileStore.activeTab.queryError || fileStore.activeTab.queryKey !== fileStore.activeTab.appliedQuery) return
   // 只响应左键在空白处的拖拽（不是在卡片上）
   if (e.button !== 0) return
   const target = e.target as HTMLElement
@@ -2080,18 +2112,33 @@ function closeFileContextMenu() {
 
 function openRenameDialog() {
   fileContextMenuVisible.value = false
+  if (fileStore.activeTab.queryError) return
   const file = contextMenuTargetFile.value
   if (!file) return
+  renameTarget.value = { ...file }
   renameNewName.value = file.name
   showRenameDialog.value = true
 }
 
+function focusRenameInput() {
+  const input = renameInput.value?.input
+  input?.focus()
+  const dot = renameNewName.value.lastIndexOf('.')
+  input?.setSelectionRange(0, dot > 0 ? dot : renameNewName.value.length)
+}
+
 async function confirmRename() {
-  const file = contextMenuTargetFile.value
-  if (!file || !renameNewName.value.trim()) return
+  const file = renameTarget.value
+  const name = renameNewName.value
+  if (renameSubmitting.value || !file || renameError.value) return
   renameSubmitting.value = true
   try {
-    await fileApi.rename(file.id, renameNewName.value.trim())
+    const extension = (value: string) => value.lastIndexOf('.') > 0 ? value.slice(value.lastIndexOf('.')).toLowerCase() : ''
+    if (extension(file.name) !== extension(name)) {
+      try { await ElMessageBox.confirm('更改扩展名可能导致文件无法正确打开，仍要更改吗？', '更改扩展名', { type: 'warning' }) }
+      catch { return }
+    }
+    await fileApi.rename(file.id, name)
     showRenameDialog.value = false
     ElMessage.success('重命名成功')
     await refreshFileList()
@@ -2268,27 +2315,10 @@ async function showInExplorer() {
 
 async function deleteContextMenuFiles() {
   fileContextMenuVisible.value = false
-  const ids = contextMenuTargetIds.value
-  if (!ids.length) return
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除选中的 ${ids.length} 个文件吗？文件将被移入回收站。`,
-      '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
-    )
-  } catch {
-    return
-  }
-  try {
-    for (const id of ids) {
-      await fileApi.delete(id)
-    }
-    ElMessage.success(`已删除 ${ids.length} 个文件`)
-    fileStore.clearSelection()
-    await refreshFileList()
-  } catch {
-    ElMessage.error('删除失败')
-  }
+  if (fileStore.activeTab.queryError) return
+  const ids = new Set(contextMenuTargetIds.value)
+  const targets = fileStore.files.filter(file => ids.has(file.id))
+  if (targets.length) emit('delete-selected', targets)
 }
 
 async function refreshFileList() {

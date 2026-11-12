@@ -95,7 +95,8 @@ function formatDate(timestamp: number | undefined): string {
 }
 
 .file-list-item.selected {
-  background: rgba(64, 158, 255, 0.1);
+  background: var(--color-accent-light);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 .icon {

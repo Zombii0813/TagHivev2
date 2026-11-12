@@ -9,14 +9,14 @@ class SearchQuery:
     """搜索查询对象 - 支持多种搜索条件组合
 
     Attributes:
-        text: 搜索文本，支持通配符和 FTS5 语法
+        text: 文件名的字面子串，百分号和下划线不解释为通配符
         root: 限制搜索路径前缀
         types: 文件类型元组，如 ('image', 'video')
         tags: 标签 ID 元组，如 (1, 2, 3)
         match_all_tags: 是否要求匹配所有标签（默认 OR）
         sort_by: 排序字段 ('name', 'size', 'type', 'created_at', 'updated_at', 'modified_at')
         sort_desc: 是否降序
-        use_fts: 是否使用 FTS5 全文搜索（优先级高于 LIKE）
+        use_fts: 是否使用 trigram 索引加速长词子串搜索（语义保持一致）
     """
     text: str | None = None
     root: str | None = None

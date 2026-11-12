@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..utils.file_names import validate_name
+
 from ..utils.paths import path_prefix, is_within
 
 import os
@@ -19,6 +21,7 @@ from sqlalchemy import select
 from ..db import get_session, Repo
 from ..db.models import File, Tag, FileTag
 from ..db.session import NATURAL_COLLATION, natural_sort_key
+from ..db.sorting import file_order
 from ..core.search import SearchQuery
 from ..core.indexer import build_file_meta
 from ..services.scan_service import ScanService
@@ -535,9 +538,10 @@ def rename_file(
     repo: Repo = Depends(get_repo),
 ):
     """重命名文件（磁盘 + 数据库）"""
-    new_name = payload.new_name.strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="New name cannot be empty")
+    try:
+        new_name = validate_name(payload.new_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     file = repo.get_file_by_id(file_id)
     if not file:
@@ -546,7 +550,7 @@ def rename_file(
     old_path = Path(file.path)
     new_path = old_path.parent / new_name
 
-    if new_path.exists():
+    if new_path.exists() and not (os.name == "nt" and old_path.name.casefold() == new_name.casefold() and old_path.samefile(new_path)):
         raise HTTPException(status_code=400, detail=f"File already exists: {new_name}")
 
     with filesystem_transaction(repo) as changes:
@@ -1064,25 +1068,12 @@ def get_folder_contents(
     count_stmt = select(func.count()).select_from(File).where(*base_where)
     total = repo.session.execute(count_stmt).scalar() or 0
 
-    # 排序列映射
-    sort_col_map = {
-        "name": File.name,
-        "size": File.size,
-        "modified_at": File.modified_at,
-        "duration": File.duration,
-    }
-    sort_col = sort_col_map.get(sort_by, File.name)
-    # name 为文本列，套用自然排序 collation，使数字按数值大小排序（1,2,...,10）
-    if sort_col is File.name:
-        sort_col = sort_col.collate(NATURAL_COLLATION)
-    order_expr = sa_desc(sort_col) if sort_desc else asc(sort_col)
-
     # 数据查询（LIMIT/OFFSET 在 SQL 层）
     data_stmt = (
         select(File)
         .options(selectinload(File.tags))
         .where(*base_where)
-        .order_by(order_expr)
+        .order_by(*file_order(sort_by, sort_desc))
         .offset(offset)
         .limit(limit)
     )
@@ -1150,27 +1141,13 @@ def _build_child_dirs(
     ).all()
     count_map: dict[str, int] = {pd: c for pd, c in count_rows}
 
-    # 3) 每个子目录（含深层）的封面文件 id：一次查询取回全部候选，Python 侧按目录归类取前 N
-    #    深层匹配用 path LIKE "<dir>/%"，命中 idx_files_path。
-    cover_map: dict[str, list[int]] = {p: [] for p in child_paths}
-    like_clauses = [path_prefix(File.path, p) for p in child_paths]
-    if like_clauses:
-        from sqlalchemy import or_
-
-        cover_rows = repo.session.execute(
-            select(File.id, File.path)
-            .where(File.type.in_(("image", "video")))
-            .where(or_(*like_clauses))
-            .order_by(File.path.collate(NATURAL_COLLATION))
-        ).all()
-        # 按最长前缀归属到对应子目录（子目录路径互不为前缀，直接前缀匹配即可）
-        for fid, fpath in cover_rows:
-            for p in child_paths:
-                if fpath.startswith(p + "/"):
-                    bucket = cover_map[p]
-                    if len(bucket) < _COVER_LIMIT:
-                        bucket.append(fid)
-                    break
+    # 3) 每个目录在 SQL 内限制为四张封面，避免物化所有深层媒体。
+    cover_map = {
+        path: list(repo.session.execute(select(File.id)
+                   .where(File.type.in_(("image", "video")), path_prefix(File.path, path))
+                   .order_by(File.path, File.id).limit(_COVER_LIMIT)).scalars())
+        for path in child_paths
+    }
 
     # 4) 批量查询用户自定义封面（优先于九宫格）
     custom_covers = repo.get_folder_covers(child_paths)
@@ -1239,12 +1216,10 @@ def create_folder(
 
     _ensure_path_within_root(parent_path, root_path)
 
-    folder_name = payload.name.strip()
-    if not folder_name:
-        raise HTTPException(status_code=400, detail="Folder name is required")
-
-    if folder_name in {".", ".."} or any(sep in folder_name for sep in ("/", "\\")):
-        raise HTTPException(status_code=400, detail="Invalid folder name")
+    try:
+        folder_name = validate_name(payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     target_path = parent_path / folder_name
     _ensure_path_within_root(target_path, root_path)

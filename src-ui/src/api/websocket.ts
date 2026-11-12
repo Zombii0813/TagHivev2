@@ -134,6 +134,8 @@ class WebSocketClient {
     }
   }
 
+  cancelScan(): void { this.socket?.emit('cancel_scan', {}) }
+
   isConnected(): boolean {
     return this.socket?.connected ?? false
   }

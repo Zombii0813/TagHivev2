@@ -95,8 +95,8 @@ class FileTag(Base):
 
     __tablename__ = "file_tags"
 
-    file_id = Column(Integer, ForeignKey("files.id"), primary_key=True)
-    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
+    file_id = Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), primary_key=True)
+    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
 
     # 索引优化 - 加速标签关联查询
     __table_args__ = (

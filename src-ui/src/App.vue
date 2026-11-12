@@ -15,17 +15,27 @@ const appStore = useAppStore()
 const fileStore = useFileStore()
 const tagStore = useTagStore()
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
-const refresh = () => {
-  if (refreshTimer) clearTimeout(refreshTimer)
+const changedPaths = new Set<string>()
+let refreshAll = false
+const refresh = (event?: { path?: string; destination?: string }) => {
+  if (!event?.path) refreshAll = true
+  else { changedPaths.add(event.path); if (event.destination) changedPaths.add(event.destination) }
+  if (refreshTimer) return
   refreshTimer = setTimeout(() => {
-    fileStore.markTabsDirty(fileStore.activeTabId)
-    void fileStore.reloadCurrentView()
-    void tagStore.loadTags(appStore.currentWorkspace || undefined)
-  }, 250)
+    refreshTimer = undefined
+    const paths = refreshAll ? undefined : [...changedPaths]
+    changedPaths.clear(); refreshAll = false
+    void fileStore.refreshChangedPaths(paths)
+    const root = appStore.currentWorkspace?.replace(/\\/g, '/').toLowerCase()
+    if (!paths || !root || paths.some(path => path.replace(/\\/g, '/').toLowerCase().startsWith(root + '/'))) {
+      void tagStore.loadTags(appStore.currentWorkspace || undefined)
+    }
+  }, 500)
 }
 const unsubscribe = [
-  wsClient.on('file_changed', refresh), wsClient.on('file_deleted', refresh),
-  wsClient.on('connected', refresh),
+  wsClient.on<{ path?: string; destination?: string }>('file_changed', refresh),
+  wsClient.on<{ path?: string; destination?: string }>('file_deleted', refresh),
+  wsClient.on('connected', () => refresh()),
 ]
 watch(() => [...appStore.workspaces], paths => {
   wsClient.subscribeWorkspaces(paths)

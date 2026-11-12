@@ -174,8 +174,37 @@ export const useFileStore = defineStore('files', () => {
       sort_desc: sortDesc.value,
     }
   }
+  /** 查询范围变化立即清除选择；刷新与排序保留当前操作范围。 */
+  function prepareQuery(tab: TabState, folder = false): boolean {
+    const q = composeQuery(tab)
+    const key = JSON.stringify([folder, q.root, q.roots, q.text, q.types, [...(q.tags ?? [])].sort(), q.match_all_tags])
+    const changed = key !== tab.queryKey
+    if (changed) {
+      tab.selectedIds.clear()
+      tab.selectedRecords.clear()
+      tab.activeId = null
+      tab.scrollTop = 0
+      tab.queryKey = key
+    }
+    tab.queryError = ''
+    return changed
+  }
+
   function hasFilters(tab: TabState) {
     return !!(tab.searchText || tab.searchType || tab.searchQuery.tags?.length)
+  }
+
+  /** 仅保留当前选择，刷新后仍能列出同范围内移出加载页的目标。 */
+  function rememberSelection(tab: TabState) {
+    const visible = new Map(tab.files.map(file => [file.id, file]))
+    tab.selectedRecords = new Map([...tab.selectedIds].flatMap(id => {
+      const file = visible.get(id) ?? tab.selectedRecords.get(id)
+      return file ? [[id, file] as const] : []
+    }))
+  }
+
+  function findSelectedRecord(tab: TabState, id: number) {
+    return tab.files.find(file => file.id === id) ?? tab.selectedRecords.get(id)
   }
 
   /** 有序的标签页列表，供标签栏渲染 */
@@ -340,13 +369,14 @@ export const useFileStore = defineStore('files', () => {
     tab.currentFolderPath = folderPath
     if (hasFilters(tab)) return search(undefined, tab.id)
 
+    const changed = !append && prepareQuery(tab, true)
+    const keepCount = changed ? 500 : Math.max(500, tab.files.length)
+    const keepScroll = tab.id === activeTabId.value ? scrollHooks?.capture() ?? tab.scrollTop : tab.scrollTop
     if (!append) {
       tab.folderContentsOffset = 0
-      tab.files = []
-      tab.childDirs = []
       // 换了目录，旧的滚动位置对新列表无意义；不清零会在切走再切回时
       // 把上一个目录的偏移恢复到这个目录上
-      tab.scrollTop = 0
+      if (changed) tab.scrollTop = 0
     }
 
     tab.currentFolderPath = folderPath
@@ -360,7 +390,7 @@ export const useFileStore = defineStore('files', () => {
       const result = await folderApi.getContents(
         folderPath,
         tab.folderContentsOffset,
-        500,
+        append ? 500 : keepCount,
         sortBy.value,
         sortDesc.value,
         wantDirs
@@ -370,6 +400,7 @@ export const useFileStore = defineStore('files', () => {
       if (append) {
         tab.files.push(...result.files)
       } else {
+        rememberSelection(tab)
         tab.files = result.files
       }
 
@@ -381,8 +412,19 @@ export const useFileStore = defineStore('files', () => {
       tab.hasMore = result.has_more
       tab.loaded = true
       tab.dirty = false
+      if (!tab.hasMore) {
+        const ids = new Set(tab.files.map(f => f.id))
+        tab.selectedIds = new Set([...tab.selectedIds].filter(id => ids.has(id)))
+        if (tab.activeId !== null && !ids.has(tab.activeId)) tab.activeId = _firstSelectedId(tab)
+      }
+      tab.appliedQuery = tab.queryKey
+      if (!changed && !append) {
+        tab.scrollTop = keepScroll
+        if (tab.id === activeTabId.value) { await nextTick(); scrollHooks?.restore(keepScroll) }
+      }
     } catch (error) {
       if (!isCurrent(tab, version)) return
+      tab.queryError = '目录加载失败，当前显示上次成功的结果'
       console.error('Failed to load folder contents:', error)
     } finally {
       if (isCurrent(tab, version)) tab.isLoading = false
@@ -444,6 +486,21 @@ export const useFileStore = defineStore('files', () => {
     }
   }
 
+  /** 只刷新路径范围有交集的标签页；未激活标签页惰性刷新。 */
+  async function refreshChangedPaths(paths?: string[]) {
+    const normalize = (path: string) => path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+    const within = (path: string, root: string) => path === root || path.startsWith(root + '/')
+    for (const tab of tabs.value.values()) {
+      const roots = tab.isGlobalView ? useAppStore().workspaces : [tab.workspace]
+      if (paths?.length && !paths.some(path => roots.some(root => {
+        const p = normalize(path), r = normalize(root)
+        return !r || within(p, r) || within(r, p)
+      }))) continue
+      tab.dirty = true
+    }
+    if (activeTab.value.dirty) await ensureTabLoaded(activeTabId.value)
+  }
+
   // 扫描状态
   const isScanning = ref(false)
   const scanProgress = ref(0)
@@ -453,19 +510,27 @@ export const useFileStore = defineStore('files', () => {
 
   // Getters
   const selectedFiles = computed(() => {
-    return files.value.filter(f => selectedIds.value.has(f.id))
+    const visible = new Map(files.value.map(file => [file.id, file]))
+    return [...selectedIds.value].flatMap(id => {
+      const file = visible.get(id) ?? activeTab.value.selectedRecords.get(id)
+      return file ? [file] : []
+    })
   })
 
   // 当前活动文件（最后点击的文件）；不存在时回退到首个选中项
   const activeFile = computed(() => {
     if (activeId.value !== null) {
-      const f = files.value.find(file => file.id === activeId.value)
+      const f = findSelectedRecord(activeTab.value, activeId.value)
       if (f) return f
     }
     return selectedFiles.value[0]
   })
 
   const selectedCount = computed(() => selectedIds.value.size)
+  const hiddenSelectedCount = computed(() => {
+    const loaded = new Set(files.value.map(file => file.id))
+    return [...selectedIds.value].filter(id => !loaded.has(id)).length
+  })
 
   const hasSelection = computed(() => selectedIds.value.size > 0)
 
@@ -494,23 +559,36 @@ export const useFileStore = defineStore('files', () => {
     // 故清空 explorer 的子目录卡片——与树窗/蜂巢过滤态只显示文件保持一致。
     // 取消过滤后经 reloadCurrentView → loadFolderContents 重新加载目录卡片。
     tab.childDirs = []
-    // 结果集整体更换，旧滚动位置无意义
-    tab.scrollTop = 0
+    const changed = prepareQuery(tab)
+    const keepScroll = tab.id === activeTabId.value ? scrollHooks?.capture() ?? tab.scrollTop : tab.scrollTop
+    const keepCount = changed ? 500 : Math.max(500, tab.files.length)
 
     const version = invalidateRequests(tab.id)
     tab.isLoading = true
     try {
       tab.searchQuery = composeQuery(tab)
-      const result = await fileApi.search(tab.searchQuery)
+      const result = await fileApi.search({ ...tab.searchQuery, limit: keepCount })
       if (!isCurrent(tab, version)) return
 
+      rememberSelection(tab)
       tab.files = result.files
       tab.totalCount = result.total
       tab.hasMore = result.has_more
       tab.loaded = true
       tab.dirty = false
+      if (!tab.hasMore) {
+        const ids = new Set(tab.files.map(f => f.id))
+        tab.selectedIds = new Set([...tab.selectedIds].filter(id => ids.has(id)))
+        if (tab.activeId !== null && !ids.has(tab.activeId)) tab.activeId = _firstSelectedId(tab)
+      }
+      tab.appliedQuery = tab.queryKey
+      if (!changed) {
+        tab.scrollTop = keepScroll
+        if (tab.id === activeTabId.value) { await nextTick(); scrollHooks?.restore(keepScroll) }
+      }
     } catch (error) {
       if (!isCurrent(tab, version)) return
+      tab.queryError = '搜索失败，当前显示上次成功的结果'
       console.error('Search failed:', error)
     } finally {
       if (isCurrent(tab, version)) tab.isLoading = false
@@ -538,6 +616,7 @@ export const useFileStore = defineStore('files', () => {
       tab.hasMore = result.has_more
     } catch (error) {
       if (!isCurrent(tab, version)) return
+      tab.queryError = '加载更多失败，请重试'
       console.error('Load more failed:', error)
     } finally {
       if (isCurrent(tab, version)) tab.isLoading = false
@@ -546,9 +625,11 @@ export const useFileStore = defineStore('files', () => {
 
   function selectFile(id: number, multi: boolean = false, tabId?: string) {
     const tab = getTab(tabId)
+    if (tab.queryError || tab.queryKey !== tab.appliedQuery) return
     if (multi) {
       if (tab.selectedIds.has(id)) {
         tab.selectedIds.delete(id)
+        tab.selectedRecords.delete(id)
         // 取消选中活动文件时，活动文件回退到其余选中项的首个
         if (tab.activeId === id) {
           tab.activeId = _firstSelectedId(tab)
@@ -559,6 +640,7 @@ export const useFileStore = defineStore('files', () => {
       }
     } else {
       tab.selectedIds.clear()
+      tab.selectedRecords.clear()
       tab.selectedIds.add(id)
       tab.activeId = id
     }
@@ -566,6 +648,7 @@ export const useFileStore = defineStore('files', () => {
 
   function selectRange(startId: number, endId: number, tabId?: string) {
     const tab = getTab(tabId)
+    if (tab.queryError || tab.queryKey !== tab.appliedQuery) return
     const startIndex = tab.files.findIndex(f => f.id === startId)
     const endIndex = tab.files.findIndex(f => f.id === endId)
 
@@ -584,12 +667,14 @@ export const useFileStore = defineStore('files', () => {
 
   function selectAll(tabId?: string) {
     const tab = getTab(tabId)
+    if (tab.queryError || tab.queryKey !== tab.appliedQuery) return
     tab.files.forEach(f => tab.selectedIds.add(f.id))
   }
 
   function clearSelection(tabId?: string) {
     const tab = getTab(tabId)
     tab.selectedIds.clear()
+    tab.selectedRecords.clear()
     tab.activeId = null
   }
 
@@ -978,7 +1063,7 @@ export const useFileStore = defineStore('files', () => {
 
   function updateFileTags(fileId: number, tagIds: number[]) {
     for (const tab of tabs.value.values()) {
-      const file = tab.files.find(f => f.id === fileId)
+      const file = findSelectedRecord(tab, fileId)
       if (file) {
         file.tag_ids = tagIds
       }
@@ -993,7 +1078,7 @@ export const useFileStore = defineStore('files', () => {
 
   function addTagsToFile(fileId: number, tagIds: number[]) {
     for (const tab of tabs.value.values()) {
-      const file = tab.files.find(f => f.id === fileId)
+      const file = findSelectedRecord(tab, fileId)
       if (file) {
         file.tag_ids = Array.from(new Set([...file.tag_ids, ...tagIds]))
       }
@@ -1008,7 +1093,7 @@ export const useFileStore = defineStore('files', () => {
 
   function removeTagFromAllFiles(tagId: number) {
     for (const tab of tabs.value.values()) {
-      tab.files.forEach(file => {
+      new Set([...tab.files, ...tab.selectedRecords.values()]).forEach(file => {
         const idx = file.tag_ids.indexOf(tagId)
         if (idx !== -1) {
           file.tag_ids.splice(idx, 1)
@@ -1020,7 +1105,7 @@ export const useFileStore = defineStore('files', () => {
   function removeTagFromFiles(fileIds: number[], tagId: number) {
     const idSet = new Set(fileIds)
     for (const tab of tabs.value.values()) {
-      tab.files.forEach(file => {
+      new Set([...tab.files, ...tab.selectedRecords.values()]).forEach(file => {
         if (!idSet.has(file.id)) return
         const idx = file.tag_ids.indexOf(tagId)
         if (idx !== -1) {
@@ -1033,9 +1118,10 @@ export const useFileStore = defineStore('files', () => {
   function removeFile(fileId: number) {
     for (const tab of tabs.value.values()) {
       const index = tab.files.findIndex(f => f.id === fileId)
-      if (index === -1) continue
-      tab.files.splice(index, 1)
+      if (index === -1 && !tab.selectedRecords.has(fileId)) continue
+      if (index !== -1) tab.files.splice(index, 1)
       tab.selectedIds.delete(fileId)
+      tab.selectedRecords.delete(fileId)
       if (tab.activeId === fileId) {
         tab.activeId = _firstSelectedId(tab)
       }
@@ -1099,6 +1185,7 @@ export const useFileStore = defineStore('files', () => {
     pruneInvalidTabs,
     setTabWorkspace,
     markTabsDirty,
+    refreshChangedPaths,
     refreshDirtyActiveTab,
     registerScrollHooks,
     captureTabScroll,
@@ -1121,6 +1208,7 @@ export const useFileStore = defineStore('files', () => {
     selectedFiles,
     activeFile,
     selectedCount,
+    hiddenSelectedCount,
     hasSelection,
     isAllSelected,
     isScanning,

@@ -68,7 +68,11 @@ async def lifespan(app: FastAPI):
     logger.info("TagHive Sidecar started successfully")
     yield
 
-    from app.api.websocket import active_watches
+    from app.api.websocket import active_watches, _scan_jobs
+    from app.api.media import cancel_probe
+    cancel_probe()
+    for job in list(_scan_jobs.values()):
+        job["cancel"].set()
     for service in list(active_watches.values()):
         await asyncio.to_thread(service.stop)
     active_watches.clear()

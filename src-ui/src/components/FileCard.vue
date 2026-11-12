@@ -13,7 +13,8 @@
             <Picture v-if="file.type === 'image'" />
             <VideoCamera v-else-if="file.type === 'video'" />
           </el-icon>
-          <div class="loading-spinner"></div>
+          <button v-if="imageError" type="button" @click.stop="retry">预览失败，重试</button>
+          <div v-else class="loading-spinner"></div>
         </div>
         <!-- 实际图片 -->
         <img
@@ -65,12 +66,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed } from 'vue'
+import { useThumbnail } from '../composables/useThumbnail'
 import { Document, VideoCamera, Headset, Folder, Picture } from '@element-plus/icons-vue'
 import { useTagStore } from '../stores/tags'
-import { thumbnailApi } from '../api/thumbnails'
-import { wsClient } from '../api/websocket'
-import type { FileSummary, ThumbnailReadyEvent } from '../types'
+import type { FileSummary } from '../types'
 
 const props = defineProps<{
   // 仅使用 FileSummary 字段（id/name/path/type/size/tag_ids）；
@@ -86,38 +86,10 @@ const emit = defineEmits<{
 }>()
 
 const tagStore = useTagStore()
-const imageLoaded = ref(false)
-const imageError = ref(false)
-// 用于在异步缩略图生成完成后强制刷新 <img src>
-const cacheBust = ref(0)
-
-const hasThumbnail = computed(() =>
-  props.file.type === 'image' || props.file.type === 'video'
-)
-
-const thumbnailUrl = computed(() => {
-  const base = thumbnailApi.getThumbnailUrl(props.file.id, 'medium') + `&v=${props.file.modified_at}-${props.file.size}`
-  return cacheBust.value > 0 ? `${base}&_t=${cacheBust.value}` : base
-})
-
-// 订阅缩略图就绪事件：当后端通知 path 匹配本卡片时，刷新 URL
-let unsubscribeThumbReady: (() => void) | null = null
-
-onMounted(() => {
-  unsubscribeThumbReady = wsClient.on<ThumbnailReadyEvent>('thumbnail_ready', (data) => {
-    if (!data.success) return
-    if (data.size !== 'medium') return
-    // 后端 file_path 与 file.path 都是 POSIX 形式
-    if (data.file_path === props.file.path) {
-      cacheBust.value = Date.now()
-      imageError.value = false
-    }
-  })
-})
-
-onUnmounted(() => {
-  unsubscribeThumbReady?.()
-})
+const { url: thumbnailUrl, status, onLoad: handleImageLoad, onError: handleImageError, retry } = useThumbnail(computed(() => props.file), 'medium')
+const imageLoaded = computed(() => status.value === 'ready')
+const imageError = computed(() => status.value === 'error')
+const hasThumbnail = computed(() => props.file.type === 'image' || props.file.type === 'video')
 
 // 计算缩略图尺寸（预留）
 computed(() => {
@@ -146,16 +118,6 @@ const thumbnailStyle = computed(() => {
   }
   return {}
 })
-
-function handleImageLoad() {
-  imageLoaded.value = true
-  imageError.value = false
-}
-
-function handleImageError() {
-  imageError.value = true
-  imageLoaded.value = false
-}
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -190,7 +152,7 @@ function getTagColor(tagId: number): string {
 }
 
 .file-card:hover {
-  transform: translateY(-4px) scale(1.02);
+  transform: none;
   border-color: var(--color-accent);
   box-shadow: var(--shadow-xl), var(--shadow-glow);
 }
@@ -199,7 +161,7 @@ function getTagColor(tagId: number): string {
   border-color: var(--color-accent);
   background: var(--color-accent-light);
   box-shadow: var(--shadow-glow);
-  transform: translateY(-2px);
+  transform: none;
 }
 
 .file-card.selected .thumbnail {

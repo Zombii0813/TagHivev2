@@ -2,11 +2,15 @@
   <div class="tabs-bar">
     <!-- 滚动容器：标签条与 + 按钮同处其中，+ 始终紧跟最后一个标签一起滚动 -->
     <div ref="scrollRef" class="tabs-scroll" @wheel="handleWheel">
-      <TransitionGroup name="tab" tag="div" class="tabs-strip">
+      <TransitionGroup name="tab" tag="div" class="tabs-strip" role="tablist" aria-label="浏览标签页">
         <div
           v-for="tab in fileStore.tabList"
           :key="tab.id"
           :data-tab-id="tab.id"
+          role="tab"
+          :aria-selected="tab.id === fileStore.activeTabId"
+          :tabindex="tab.id === fileStore.activeTabId ? 0 : -1"
+          @keydown="handleTabKey(tab.id, $event)"
           :class="[
             'tab-item',
             { active: tab.id === fileStore.activeTabId, 'drop-active': dropHoverTabId === tab.id },
@@ -26,6 +30,7 @@
             circle
             size="small"
             :title="'关闭标签页'"
+            :aria-label="`关闭 ${tabTitle(tab)}`"
             @click.stop="handleClose(tab.id)"
           >
             <el-icon><Close /></el-icon>
@@ -34,7 +39,10 @@
       </TransitionGroup>
 
       <!-- + 按钮同为标签页造型，取中性配色以示与工作区无关 -->
-      <div
+      <button
+        type="button"
+        aria-label="新建标签页"
+        :disabled="atMax"
         class="tab-add"
         :class="{ 'is-disabled': atMax }"
         :style="addStyle"
@@ -43,7 +51,7 @@
       >
         <span class="tab-shape" />
         <el-icon><Plus /></el-icon>
-      </div>
+      </button>
     </div>
   </div>
 </template>
@@ -108,6 +116,19 @@ function paletteVars(ws: string): Record<string, string> {
 
 function handleSwitch(tabId: string) {
   fileStore.switchTab(tabId)
+}
+
+async function handleTabKey(tabId: string, event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Delete', 'Enter', ' '].includes(event.key)) return
+  if ((event.target as HTMLElement).closest('button')) return
+  event.preventDefault()
+  if (event.key === 'Delete') { handleClose(tabId); return }
+  const tabs = fileStore.tabList
+  const index = tabs.findIndex(tab => tab.id === tabId)
+  const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : tabs[(index + (event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0) + tabs.length) % tabs.length]
+  await fileStore.switchTab(next.id)
+  await nextTick()
+  scrollRef.value?.querySelector<HTMLElement>(`[data-tab-id="${next.id}"]`)?.focus()
 }
 
 function handleClose(tabId: string) {

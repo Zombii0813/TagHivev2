@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..utils.thumbnail_render import fit_and_save
+
 from ..utils.thumbnail_cache import thumbnail_identity, atomic_image_save
 
 from dataclasses import dataclass, field
@@ -146,47 +148,8 @@ class ThumbnailService:
         Returns:
             缩略图 file:// URL，失败返回 None。
         """
-        try:
-            # 转换为 RGB（处理透明图片 / 非 RGB 帧）
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+        return fit_and_save(img, target, size, self._is_webp_supported())
 
-            # 获取目标尺寸（正方形）
-            target_size = THUMBNAIL_SIZES.get(size, THUMBNAIL_SIZES["medium"])
-            target_width, target_height = target_size
-
-            # 使用高质量缩放，保持原始宽高比
-            img.thumbnail((target_width * 2, target_height * 2), Image.Resampling.LANCZOS)
-
-            # 创建正方形画布，使用黑色背景填充
-            final_img = Image.new("RGB", target_size, (32, 32, 32))
-
-            # 计算居中位置
-            img_width, img_height = img.size
-            scale = min(target_width / img_width, target_height / img_height)
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-
-            # 高质量缩放
-            if new_width != img_width or new_height != img_height:
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-            # 粘贴到居中位置
-            offset_x = (target_width - new_width) // 2
-            offset_y = (target_height - new_height) // 2
-            final_img.paste(img, (offset_x, offset_y))
-
-            # 保存
-            if self._is_webp_supported():
-                atomic_image_save(final_img, target, "WEBP", quality=DEFAULT_QUALITY)
-            else:
-                atomic_image_save(final_img, target, "JPEG", quality=DEFAULT_QUALITY)
-
-            return f"file://{target}"
-
-        except Exception as e:
-            logger.error(f"Failed to fit and save thumbnail: {e}")
-            return None
 
     def _is_webp_supported(self) -> bool:
         """检查是否支持 WebP"""

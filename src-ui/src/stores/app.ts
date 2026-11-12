@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -15,8 +15,20 @@ export interface AppState {
 export const useAppStore = defineStore('app', () => {
   // State
   const theme = ref<AppState['theme']>('light')
-  const sidebarCollapsed = ref(false)
-  const detailPanelVisible = ref(true)
+  const readNumber = (key: string, fallback: number, min: number, max: number) => {
+    const raw = localStorage.getItem(key)
+    const value = raw === null ? fallback : Number(raw)
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
+  }
+  const sidebarCollapsed = ref(localStorage.getItem('taghive:sidebar-collapsed') === 'true')
+  const detailPanelVisible = ref(localStorage.getItem('taghive:detail-visible') === 'true')
+  const sidebarWidth = ref(readNumber('taghive:sidebar-width', 240, 200, 360))
+  const detailWidth = ref(readNumber('taghive:detail-width', 320, 280, 480))
+  const compactDensity = ref(localStorage.getItem('taghive:compact') === 'true')
+  watch([sidebarCollapsed, detailPanelVisible, sidebarWidth, detailWidth, compactDensity], values => {
+    const keys = ['sidebar-collapsed', 'detail-visible', 'sidebar-width', 'detail-width', 'compact']
+    values.forEach((v, index) => localStorage.setItem('taghive:' + keys[index], String(v)))
+  })
   const isLoading = ref(false)
 
   // Multi-workspace state
@@ -210,6 +222,9 @@ export const useAppStore = defineStore('app', () => {
   return {
     theme,
     sidebarCollapsed,
+    sidebarWidth,
+    detailWidth,
+    compactDensity,
     detailPanelVisible,
     isLoading,
     workspaces,

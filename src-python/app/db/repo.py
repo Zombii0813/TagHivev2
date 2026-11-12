@@ -24,6 +24,7 @@ from ..core.cursor_pagination import (
 )
 from .models import File, FileTag, FileSearch, Tag, FolderCover
 from .session import NATURAL_COLLATION
+from .sorting import file_order, SORT_COLUMNS
 
 # 批量操作默认批次大小
 DEFAULT_BATCH_SIZE = 500
@@ -188,6 +189,18 @@ class Repo:
             else:
                 to_insert.append(meta)
 
+        # 分批读取签名，未变化的文件不发 UPDATE，也不触发 FTS 写入。
+        unchanged = set()
+        for start in range(0, len(to_update), 500):
+            batch = to_update[start:start + 500]
+            existing = {row.path: row for row in self.session.execute(
+                select(File.path, File.name, File.ext, File.size, File.type, File.modified_at, File.parent_dir, File.hash)
+                .where(File.path.in_([m.path.as_posix() for m in batch])))}
+            for meta in batch:
+                row = existing.get(meta.path.as_posix())
+                if row and (row.name, row.ext, row.size, row.type, row.modified_at, row.parent_dir) == (meta.name, meta.ext, meta.size, meta.type, meta.modified_at, meta.path.parent.as_posix()) and (meta.sha256 is None or meta.sha256 == row.hash):
+                    unchanged.add(meta.path.as_posix())
+        to_update = [m for m in to_update if m.path.as_posix() not in unchanged]
         now = datetime.utcnow()
 
         # 批量插入 - 使用 INSERT ... ON CONFLICT DO UPDATE
@@ -248,9 +261,7 @@ class Repo:
                 idx = path_str.rfind("/")
                 parent_dir = path_str[:idx] if idx >= 0 else ""
                 # 内容是否变化：以库中现值与待写入值比较，决定是否清除媒体探测缓存
-                changed = (File.size != meta.size) | (
-                    File.modified_at != meta.modified_at
-                )
+                changed = File.size.is_distinct_from(meta.size) | File.modified_at.is_distinct_from(meta.modified_at)
                 self.session.execute(
                     update(File).where(File.path == path_str).values(
                         parent_dir=parent_dir,
@@ -258,7 +269,7 @@ class Repo:
                         ext=meta.ext,
                         size=meta.size,
                         type=meta.type,
-                        hash=meta.sha256,
+                        hash=func.coalesce(meta.sha256, File.hash),
                         modified_at=meta.modified_at,
                         # 扫描不探测（meta.duration 恒为 None）：内容未变则保留已探测时长
                         duration=case(
@@ -666,18 +677,16 @@ class Repo:
         """统一构造完整搜索条件，确保计数与分页范围一致。"""
         stmt = select(File)
 
-        # 文本搜索
+        # 始终使用字面子串语义；长词使用 trigram 在数据库内筛选 ID。
         if query.text:
-            if query.use_fts and self._has_fts5() and self._should_use_fts(query.text):
-                fts_ids = self._fts_search(query.text)
-                if fts_ids:
-                    stmt = stmt.where(File.id.in_(fts_ids))
-                else:
-                    term = f"%{query.text}%"
-                    stmt = stmt.where(File.name.ilike(term))
-            else:
-                term = f"%{query.text}%"
-                stmt = stmt.where(File.name.ilike(term))
+            term = query.text.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            stmt = stmt.where(File.name.ilike(f"%{term}%", escape="!"))
+            if query.use_fts and len(query.text) >= 3 and "\x00" not in query.text:
+                sql = self.session.execute(text("SELECT sql FROM sqlite_master WHERE name='files_fts'")).scalar() or ""
+                if "trigram" in sql.lower():
+                    phrase = '"' + query.text.replace('"', '""') + '"'
+                    ids = text("SELECT rowid FROM files_fts WHERE files_fts MATCH :substring").bindparams(substring=phrase).columns(rowid=File.id.type).subquery()
+                    stmt = stmt.where(File.id.in_(select(ids.c.rowid)))
 
         # 路径前缀过滤
         if query.root:
@@ -716,16 +725,8 @@ class Repo:
 
         stmt = self._search_statement(query)
 
-        # 排序
-        if query.sort_by:
-            sort_column = getattr(File, query.sort_by, File.name)
-            order_col = natural_order_column(sort_column)
-            if query.sort_desc:
-                stmt = stmt.order_by(order_col.desc())
-            else:
-                stmt = stmt.order_by(order_col.asc())
-        else:
-            stmt = stmt.order_by(File.name.collate(NATURAL_COLLATION).asc())
+        # 排序字段白名单及稳定的同值次序。
+        stmt = stmt.order_by(*file_order(query.sort_by, query.sort_desc))
 
         # 分页
         if limit is not None:
@@ -983,7 +984,7 @@ class Repo:
         stmt = self._search_statement(query)
 
         # 确定排序字段
-        sort_column = getattr(File, query.sort_by, File.name) if query.sort_by else File.name
+        sort_column = SORT_COLUMNS.get(query.sort_by, File.name)
         # 文本列启用自然排序 collation，与 order/游标比较保持一致
         collation = NATURAL_COLLATION if sort_column in (File.name, File.type) else None
 
@@ -1031,16 +1032,8 @@ class Repo:
         """
         stmt = self._search_statement(query)
 
-        # 排序
-        if query.sort_by:
-            sort_column = getattr(File, query.sort_by, File.name)
-            order_col = natural_order_column(sort_column)
-            if query.sort_desc:
-                stmt = stmt.order_by(order_col.desc())
-            else:
-                stmt = stmt.order_by(order_col.asc())
-        else:
-            stmt = stmt.order_by(File.name.collate(NATURAL_COLLATION).asc())
+        # 排序字段白名单及稳定的同值次序。
+        stmt = stmt.order_by(*file_order(query.sort_by, query.sort_desc))
 
         # 直接用 SQLAlchemy 2.x execute 分页，避免旧版 Query.count() 兼容问题
         stmt = stmt.offset(offset).limit(limit)

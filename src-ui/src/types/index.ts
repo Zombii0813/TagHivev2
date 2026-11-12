@@ -151,6 +151,9 @@ export interface ScanProgressEvent {
 }
 
 export interface ScanCompletedEvent {
+  task_id?: string
+  remaining?: number
+  cancelled?: boolean
   path: string
   total: number
 }

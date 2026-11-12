@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'density-compact': appStore.compactDensity }" :style="{ '--sidebar-width': appStore.sidebarWidth + 'px', '--detail-panel-width': appStore.detailWidth + 'px' }">
     <AppMenuBar @command="handleMenuCommand" />
     <div class="main-layout" @dragover="handleLayoutDragOver">
     <!-- 侧边栏 -->
@@ -88,15 +88,17 @@
       </div>
     </aside>
 
+    <div v-if="!appStore.sidebarCollapsed" class="panel-resizer" role="separator" tabindex="0" aria-label="调整侧栏宽度" aria-orientation="vertical" :aria-valuenow="appStore.sidebarWidth" :aria-valuemin="200" :aria-valuemax="360" @pointerdown="startResize('sidebar', $event)" @keydown="resizeKey('sidebar', $event)" @dblclick="appStore.sidebarWidth = 240" />
     <!-- 主内容区 -->
     <main class="main-content">
       <!-- 顶部工具栏 -->
-      <header ref="toolbarRef" class="toolbar">
+      <header ref="toolbarRef" class="toolbar" :class="{ compact: !toolbarWide }">
         <div class="toolbar-left">
           <el-button
             v-if="!isMobile"
             :icon="appStore.sidebarCollapsed ? Expand : Fold"
             circle
+            aria-label="展开或收起侧栏"
             @click="appStore.toggleSidebar()"
           />
           <SearchBar />
@@ -215,6 +217,7 @@
             </template>
             <div class="size-slider-panel">
               <span class="size-slider-label">卡片大小</span>
+              <el-switch v-model="appStore.compactDensity" active-text="紧凑密度" />
               <el-slider
                 :model-value="fileStore.gridItemSize"
                 :min="80"
@@ -263,12 +266,41 @@
 
       <!-- 浏览标签页栏 -->
       <BrowserTabsBar />
+      <DurationCoverage v-if="fileStore.sortBy === 'duration'" />
+      <div v-if="fileStore.activeTab.searchText || fileStore.activeTab.searchType || fileStore.activeTab.searchQuery.tags?.length" class="filter-summary">
+        <span>范围：{{ fileStore.activeTab.isGlobalView ? '全部工作区' : fileStore.currentFolderPath || appStore.currentWorkspace }}</span>
+        <span v-if="fileStore.activeTab.searchText">名称含 “{{ fileStore.activeTab.searchText }}”</span>
+        <span v-if="fileStore.activeTab.searchType">类型：{{ fileStore.activeTab.searchType }}</span>
+        <span v-if="fileStore.activeTab.searchQuery.tags?.length">{{ fileStore.activeTab.searchQuery.tags.length }} 个标签</span>
+        <el-button size="small" @click="clearFilters">清除筛选</el-button>
+      </div>
+          <div v-if="fileStore.selectedCount > 0" class="selection-toolbar" role="toolbar" aria-label="所选文件操作">
+            <span class="status-text">已选中 {{ fileStore.selectedCount }} 个 / 共 {{ fileStore.totalCount }} 个</span>
+            <span v-if="fileStore.hiddenSelectedCount" class="status-text">含 {{ fileStore.hiddenSelectedCount }} 项当前未显示</span>
+            <div class="status-bar-actions">
+              <el-button size="small" @click="batchOpsRef?.openAddTags()">
+                <el-icon><CollectionTag /></el-icon>
+                批量管理标签
+              </el-button>
+              <el-button size="small" type="danger" @click="batchOpsRef?.confirmDelete()">
+                <el-icon><Delete /></el-icon>
+                批量删除
+              </el-button>
+              <el-button size="small" @click="fileStore.selectAll()">全选已加载（{{ fileStore.files.length }}）</el-button>
+              <el-button size="small" @click="fileStore.clearSelection()">取消选择</el-button>
+            </div>
+          </div>
+
 
       <!-- 文件浏览器 -->
       <div class="content-area">
-        <BrowserView />
+        <BrowserView @delete-selected="batchOpsRef?.confirmDelete($event)" />
       </div>
 
+      <div v-if="fileStore.activeTab.queryError" class="query-error" role="alert">
+        {{ fileStore.activeTab.queryError }}
+        <el-button size="small" @click="fileStore.reloadCurrentView()">重试</el-button>
+      </div>
       <!-- 底部状态栏 -->
       <footer class="status-bar">
         <div class="status-bar-left">
@@ -276,6 +308,7 @@
           <div v-if="fileStore.isScanning" class="scan-progress-container">
             <el-icon class="loading-icon"><Loading /></el-icon>
             <span class="scan-text">扫描中</span>
+            <el-button size="small" @click="wsClient.cancelScan()">取消全部扫描</el-button>
             <el-progress
               :percentage="fileStore.scanProgress"
               :show-text="false"
@@ -292,29 +325,16 @@
           </span>
         </div>
         <div class="status-bar-right">
-          <template v-if="fileStore.selectedCount > 0">
-            <span class="status-text">已选中 {{ fileStore.selectedCount }} 个 / 共 {{ fileStore.totalCount }} 个</span>
-            <div class="status-bar-actions">
-              <el-button size="small" @click="batchOpsRef?.openAddTags()">
-                <el-icon><CollectionTag /></el-icon>
-                批量管理标签
-              </el-button>
-              <el-button size="small" type="danger" @click="batchOpsRef?.confirmDelete()">
-                <el-icon><Delete /></el-icon>
-                批量删除
-              </el-button>
-              <el-button size="small" @click="fileStore.clearSelection()">取消选择</el-button>
-            </div>
-          </template>
-          <span v-else class="status-text">共 {{ fileStore.totalCount }} 个文件</span>
+          <span class="status-text">已加载 {{ fileStore.files.length }} / 共 {{ fileStore.totalCount }} 个文件</span>
         </div>
       </footer>
     </main>
 
-    <!-- 详情面板（始终渲染，通过 CSS 动画控制展开/收起） -->
+    <!-- 隐藏详情时卸载组件，释放媒体流与播放器资源。 -->
+    <div v-if="!isMobile && appStore.detailPanelVisible && fileStore.hasSelection" class="panel-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整详情宽度" aria-orientation="vertical" :aria-valuenow="appStore.detailWidth" :aria-valuemin="280" :aria-valuemax="480" @pointerdown="startResize('detail', $event)" @keydown="resizeKey('detail', $event)" @dblclick="appStore.detailWidth = 320" />
     <DetailPanel
-      v-if="!isMobile"
-      :class="{ visible: appStore.detailPanelVisible }"
+      v-if="!isMobile && appStore.detailPanelVisible && fileStore.hasSelection"
+      class="visible"
     />
 
     <!-- 批量操作对话框 -->
@@ -370,6 +390,7 @@ import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import TagPanel from './TagPanel.vue'
+import DurationCoverage from '../components/DurationCoverage.vue'
 import SearchBar from '../components/SearchBar.vue'
 import BrowserTabsBar from '../components/BrowserTabsBar.vue'
 import { MAX_TABS } from '../stores/browserTabs'
@@ -442,7 +463,7 @@ const toolbarRef = ref<HTMLElement | null>(null)
 const toolbarWidth = ref(800)
 
 // 工具栏宽度 >= 720px 时显示完整按钮，否则折叠到 more 菜单
-const toolbarWide = computed(() => toolbarWidth.value >= 720)
+const toolbarWide = computed(() => toolbarWidth.value >= 840)
 
 // 检测是否为移动设备
 const isMobile = ref(false)
@@ -483,6 +504,35 @@ const sortOptions: Record<string, { field: string; desc: boolean; label: string 
   size_desc: { field: 'size', desc: true, label: '大小降序' },
   duration_asc: { field: 'duration', desc: false, label: '时长升序' },
   duration_desc: { field: 'duration', desc: true, label: '时长降序' },
+}
+
+function clearFilters() {
+  fileStore.activeTab.searchText = ''
+  fileStore.activeTab.searchType = ''
+  tagStore.clearSelection()
+  void fileStore.reloadCurrentView()
+}
+function changePanelWidth(panel: 'sidebar' | 'detail', value: number) {
+  if (panel === 'sidebar') appStore.sidebarWidth = Math.max(200, Math.min(360, value))
+  else appStore.detailWidth = Math.max(280, Math.min(480, value))
+}
+function resizeKey(panel: 'sidebar' | 'detail', event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const current = panel === 'sidebar' ? appStore.sidebarWidth : appStore.detailWidth
+  const direction = (event.key === 'ArrowRight' ? 1 : -1) * (panel === 'detail' ? -1 : 1)
+  changePanelWidth(panel, event.key === 'Home' ? 0 : event.key === 'End' ? 999 : current + direction * 16)
+}
+function startResize(panel: 'sidebar' | 'detail', event: PointerEvent) {
+  event.preventDefault()
+  const start = event.clientX
+  const width = panel === 'sidebar' ? appStore.sidebarWidth : appStore.detailWidth
+  const target = event.currentTarget as HTMLElement
+  target.setPointerCapture(event.pointerId)
+  const move = (e: PointerEvent) => changePanelWidth(panel, width + (e.clientX - start) * (panel === 'detail' ? -1 : 1))
+  const stop = () => { target.removeEventListener('pointermove', move); target.removeEventListener('lostpointercapture', stop) }
+  target.addEventListener('pointermove', move)
+  target.addEventListener('lostpointercapture', stop)
 }
 
 // 处理排序命令
@@ -562,6 +612,12 @@ function handleMenuCommand(command: string) {
       break
     case 'file:exit':
       window.close()
+      break
+    case 'edit:select-all':
+      fileStore.selectAll()
+      break
+    case 'edit:clear-selection':
+      fileStore.clearSelection()
       break
     case 'edit:focus-search': {
       const el = document.querySelector<HTMLInputElement>('.search-bar input')
@@ -776,60 +832,23 @@ function reloadCurrentFiles() {
   }
 }
 
-// 扫描事件处理 - 使用变量跟踪是否已显示提示
-let scanCompletedShown = false
-let scanErrorShown = false
-
-// 保存 wsClient.on 返回的取消订阅函数，便于卸载时清理
+// 每个完成事件都携带队列剩余数，所有工作区处理完才结束全局进度。
 const wsUnsubscribers: Array<() => void> = []
-
 onMounted(() => {
-  // 订阅扫描事件
   wsClient.connect()
-
-  wsUnsubscribers.push(
-    wsClient.on<ScanProgressEvent>('scan_progress', (data) => {
-      fileStore.updateScanProgress(data.count, data.total, data.percentage, data.current_file)
-    })
-  )
-
-  wsUnsubscribers.push(
-    wsClient.on<ScanCompletedEvent>('scan_completed', (data) => {
-      // 避免重复显示提示
-      if (scanCompletedShown) return
-      scanCompletedShown = true
-
-      fileStore.completeScanning()
-      ElMessage.success(`扫描完成，共 ${data.total} 个文件`)
-
-      // 扫描会改动全库数据，所有标签页的快照都可能过期。
-      // 但只重载当前标签页——其余标记为脏，等切过去时惰性重载：
-      // 此刻重载用户看不到，且 N 个标签页并发请求会把刚扫完的后端再打满。
-      fileStore.markTabsDirty(fileStore.activeTabId)
-      fileStore.reloadCurrentView()
-
-      // 重置标志，允许下次扫描显示提示
-      setTimeout(() => {
-        scanCompletedShown = false
-      }, 1000)
-    })
-  )
-
-  wsUnsubscribers.push(
-    wsClient.on<{ message: string }>('scan_error', (error) => {
-      // 避免重复显示提示
-      if (scanErrorShown) return
-      scanErrorShown = true
-
-      fileStore.resetScanning()
-      ElMessage.error(`扫描失败: ${error.message}`)
-
-      // 重置标志
-      setTimeout(() => {
-        scanErrorShown = false
-      }, 1000)
-    })
-  )
+  wsUnsubscribers.push(wsClient.on('scan_started', () => fileStore.startScanning()))
+  wsUnsubscribers.push(wsClient.on<ScanProgressEvent>('scan_progress', data => {
+    fileStore.updateScanProgress(data.count, data.total, data.percentage, `${data.path} · ${data.current_file ?? ''}`)
+  }))
+  wsUnsubscribers.push(wsClient.on<ScanCompletedEvent>('scan_completed', data => {
+    if (!data.remaining) fileStore.completeScanning()
+    ElMessage.success(`${data.cancelled ? '扫描已取消' : '扫描完成'}，处理 ${data.total} 个文件${data.remaining ? `，剩余 ${data.remaining} 个工作区` : ''}`)
+    void fileStore.refreshChangedPaths([data.path])
+  }))
+  wsUnsubscribers.push(wsClient.on<{ message: string; remaining?: number }>('scan_error', error => {
+    if (!error.remaining) fileStore.resetScanning()
+    ElMessage.error(`扫描失败: ${error.message}`)
+  }))
 })
 
 onUnmounted(() => {
@@ -1492,6 +1511,21 @@ function handleCollapsedTagClick(tagId: number) {
     display: none;
   }
 }
+
+.toolbar.compact { height: auto; min-height: var(--header-height); flex-wrap: wrap; padding: 8px 12px; }
+.toolbar.compact .toolbar-left { flex-basis: 100%; overflow: visible; }
+.toolbar.compact .toolbar-right { width: 100%; justify-content: flex-end; }
+.query-error { padding: 8px 16px; background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+@media (max-width: 1279px) {
+  .main-layout > :deep(.detail-panel.visible) { position: absolute; right: 0; top: 32px; bottom: 0; z-index: 30; width: min(380px, 80vw); box-shadow: var(--shadow-xl); }
+}
+
+.panel-resizer { width: 5px; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; }
+.panel-resizer:hover, .panel-resizer:focus-visible { background: var(--color-accent); outline: none; }
+.filter-summary, .selection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
+.filter-summary { color: var(--color-text-secondary); }
+.selection-toolbar { background: var(--color-accent-light); }
+@media (max-width: 1279px) { .detail-resizer { display: none; } }
 </style>
 
 <!-- 浏览模式下拉：teleport 到 body，需非 scoped 全局样式 -->

@@ -223,106 +223,81 @@ async def _handle_file_change(sid: str, file_path: Path, event_type: str, destin
         await sio.emit("error", {"message": str(exc)}, room=sid)
 
 
+_scan_queue_lock = asyncio.Lock()
+_scan_jobs = {}
+
+
+@sio.event
+async def cancel_scan(sid: str, data: dict):
+    """取消当前客户端的活动及排队扫描。"""
+    for job in list(_scan_jobs.values()):
+        if job["sid"] == sid and (not data.get("task_id") or job["id"] == data["task_id"]):
+            job["cancel"].set()
+
+
 @sio.event
 async def start_scan(sid: str, data: dict):
-    """开始扫描工作区"""
+    """将工作区扫描放入全局串行队列，合并进度并支持取消。"""
+    import threading
+    import uuid
     from ..services.scan_service import ScanService
 
-    workspace_path = data.get("path")
-    if not workspace_path:
-        await sio.emit("scan_error", {"message": "Workspace path required"}, room=sid)
+    path = Path(data.get("path") or "")
+    if not data.get("path") or not path.is_dir():
+        await sio.emit("scan_error", {"message": "工作区不可访问", "remaining": sum(j["sid"] == sid for j in _scan_jobs.values())}, room=sid)
         return
-
-    path = Path(workspace_path)
-    if not path.exists():
-        await sio.emit("scan_error", {"message": f"Path not found: {workspace_path}"}, room=sid)
+    key = str(path.resolve()).lower()
+    if any(job["key"] == key for job in _scan_jobs.values()) or len(_scan_jobs) >= 64:
+        await sio.emit("scan_error", {"message": "扫描已排队或队列已满", "remaining": sum(j["sid"] == sid for j in _scan_jobs.values())}, room=sid)
         return
+    task_id = uuid.uuid4().hex
+    job = {"id": task_id, "sid": sid, "key": key, "cancel": threading.Event()}
+    _scan_jobs[task_id] = job
+    loop = asyncio.get_running_loop()
+    latest = {}
+    done = asyncio.Event()
 
-    # 创建进度队列和事件
-    progress_queue: asyncio.Queue = asyncio.Queue()
-    scan_completed_event = asyncio.Event()
-    scan_result = {"total": 0, "error": None}
+    def on_progress(count, total, percentage, current_file):
+        """只保留最新进度，避免扫描线程产生无界消息队列。"""
+        payload = {"task_id": task_id, "count": count, "total": total, "percentage": percentage,
+                   "path": path.as_posix(), "current_file": current_file}
+        loop.call_soon_threadsafe(latest.update, payload)
+
+    def worker():
+        """使用独立会话执行可取消扫描。"""
+        with get_session() as session:
+            return ScanService(session).scan_workspace(path, on_progress=on_progress, cancel=job["cancel"])
 
     async def progress_sender():
-        """异步发送进度更新"""
-        while not scan_completed_event.is_set():
+        """限频发送最新任务进度。"""
+        while not done.is_set():
+            if latest:
+                payload = dict(latest)
+                latest.clear()
+                await sio.emit("scan_progress", payload, room=sid)
             try:
-                # 使用 timeout 避免阻塞
-                progress_data = await asyncio.wait_for(
-                    progress_queue.get(),
-                    timeout=0.1
-                )
-                await sio.emit("scan_progress", progress_data, room=sid)
+                await asyncio.wait_for(done.wait(), 0.15)
             except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                logger.error(f"Progress sender error: {e}")
+                pass
 
-    def scan_worker():
-        """在后台线程中执行扫描"""
-        session = get_session()
-        try:
-            service = ScanService(session)
-
-            def on_progress(count: int, total: int, percentage: int, current_file: str):
-                """同步进度回调，将数据放入队列"""
-                try:
-                    # 使用 asyncio.run_coroutine_threadsafe 在线程安全地将数据放入队列
-                    asyncio.run_coroutine_threadsafe(
-                        progress_queue.put({
-                            "count": count,
-                            "total": total,
-                            "percentage": percentage,
-                            "path": workspace_path,
-                            "current_file": current_file,
-                        }),
-                        loop
-                    )
-                except Exception as e:
-                    logger.error(f"Progress callback error: {e}")
-
-            total = service.scan_workspace(path, on_progress=on_progress)
-            scan_result["total"] = total
-        except Exception as e:
-            logger.error(f"Scan error: {e}")
-            scan_result["error"] = str(e)
-        finally:
-            session.close()
-            loop.call_soon_threadsafe(scan_completed_event.set)
-
-    # 获取当前事件循环
-    loop = asyncio.get_event_loop()
-
-    # 启动进度发送任务
-    progress_task = asyncio.create_task(progress_sender())
-
-    # 在后台线程中运行扫描
-    scan_task = asyncio.create_task(asyncio.to_thread(scan_worker))
-
-    await sio.emit("scan_started", {"path": workspace_path}, room=sid)
-
-    # 等待扫描完成
+    await sio.emit("scan_queued", {"task_id": task_id, "path": path.as_posix()}, room=sid)
+    sender = None
     try:
-        await scan_task
-
-        # 等待进度发送完成
-        await asyncio.sleep(0.5)  # 给进度发送一点时间
-        progress_task.cancel()
-        try:
-            await progress_task
-        except asyncio.CancelledError:
-            pass
-
-        if scan_result["error"]:
-            await sio.emit("scan_error", {"message": scan_result["error"]}, room=sid)
-        else:
+        async with _scan_queue_lock:
+            await sio.emit("scan_started", {"task_id": task_id, "path": path.as_posix()}, room=sid)
+            sender = asyncio.create_task(progress_sender())
+            total = await asyncio.to_thread(worker)
             from ..core.query_cache import get_query_cache
             get_query_cache().clear()
-            await broadcast_folder_tree_changed(workspace_path)
-            await sio.emit("scan_completed", {
-                "path": workspace_path,
-                "total": scan_result["total"],
-            }, room=sid)
-    except Exception as e:
-        logger.error(f"Scan task error: {e}")
-        await sio.emit("scan_error", {"message": str(e)}, room=sid)
+            await broadcast_folder_tree_changed(path.as_posix())
+        _scan_jobs.pop(task_id, None)
+        await sio.emit("scan_completed", {"task_id": task_id, "path": path.as_posix(), "total": total,
+                       "cancelled": job["cancel"].is_set(), "remaining": sum(j["sid"] == sid for j in _scan_jobs.values())}, room=sid)
+    except Exception as exc:
+        _scan_jobs.pop(task_id, None)
+        await sio.emit("scan_error", {"task_id": task_id, "message": str(exc), "remaining": sum(j["sid"] == sid for j in _scan_jobs.values())}, room=sid)
+    finally:
+        done.set()
+        if sender:
+            await sender
+        _scan_jobs.pop(task_id, None)
