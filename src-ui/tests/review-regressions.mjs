@@ -145,6 +145,51 @@ try {
     finally { console.warn = previousWarn }
     return { state, stop: () => scope.stop() }
   }
+  await test('background probe stays visible and cancellable after leaving duration sort', async () => {
+    const { apiClient } = await server.ssrLoadModule('/src/api/client.ts')
+    // 先加载组件，避免 Vite 自身的模块加载被测试用定时器替换影响。
+    await server.ssrLoadModule('/src/components/BackgroundTasks.vue')
+    const store = useFileStore()
+    const previous = { get: apiClient.get, post: apiClient.post, delete: apiClient.delete, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout }
+    const timers = new Map()
+    let timerId = 0, cancelled = 0, reloaded = 0, statusReads = 0, component
+    let job = { running: false, processed: 0, total: 0, failed: 0 }
+    store.sortBy = 'duration'
+    store.reloadCurrentView = async () => { reloaded++ }
+    apiClient.get = async () => { statusReads++; return { ...job } }
+    apiClient.post = async url => url === '/api/media/coverage'
+      ? { known: 4, probed: 4, total: 10 }
+      : (job = { running: true, processed: 1, total: 6, failed: 0 })
+    apiClient.delete = async () => { cancelled++; job = { ...job, running: false } }
+    globalThis.setTimeout = callback => { const id = ++timerId; timers.set(id, callback); return id }
+    globalThis.clearTimeout = id => timers.delete(id)
+    try {
+      component = await setupActions('/src/components/BackgroundTasks.vue')
+      const { state } = component
+      await state.refresh()
+      assert.equal(state.coverage.value.known, 4)
+      await state.start()
+      assert.equal(state.job.value.running, true)
+      store.sortBy = 'name'; await nextTick(); await state.refresh()
+      assert.equal(state.showDuration.value, true)
+      assert.match(state.summary.value, /补探测 1 \/ 6/)
+      assert.equal(timers.size, 1)
+      await state.cancel()
+      assert.equal(cancelled, 1); assert.equal(reloaded, 1)
+      assert.equal(state.showDuration.value, false)
+      for (const [id, callback] of [...timers]) { timers.delete(id); await callback() }
+      assert.equal(timers.size, 0)
+      const idleReads = statusReads
+      store.activeTab.searchText = 'ordinary search'; await nextTick()
+      assert.equal(statusReads, idleReads)
+      store.startScanning(); job.running = true; await state.refresh()
+      assert.match(state.summary.value, /任务 · 2/)
+    } finally {
+      component?.stop()
+      globalThis.setTimeout = previous.setTimeout; globalThis.clearTimeout = previous.clearTimeout
+      apiClient.get = previous.get; apiClient.post = previous.post; apiClient.delete = previous.delete
+    }
+  })
   const silentSuccess = ElMessage.success, silentWarning = ElMessage.warning
   ElMessage.success = () => {}; ElMessage.warning = () => {}
   await test('detail follows the last clicked file during multi-selection, including media and tags', async () => {

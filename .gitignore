@@ -71,8 +71,6 @@ htmlcov/
 taghive-sidecar.spec
 config.json
 
-docs/
-
 # Claude Code
 .claude/
 # Isolated review and regression runtime data

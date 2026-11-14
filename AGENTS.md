@@ -19,6 +19,12 @@ TagHive 是一款基于标签的桌面文件管理工具。
 - 标签按 `workspace` 字段隔离；不同工作目录可以同名标签。`parent_id` 支持父子层级，删除父标签时需考虑子标签处理（当前默认弹窗询问「全部删除/层级提升」）
 - 关闭主窗口时 Rust 端以非阻塞方式终止 sidecar（`taskkill /T /F` fire-and-forget，见 `src-tauri/src/sidecar.rs:stop`），窗口即时关闭；`src-python/app/utils/parent_watch.py` 的父进程监控作为兜底防止孤儿进程。新增的后台任务务必能被 taskkill/SIGTERM 强杀，或自行响应父进程退出
 
+## 界面布局文档
+
+- 修改界面前，先用浏览器打开 [界面布局说明](docs/ui-layout.html)，通过可点击布局图及模块表，按固定编号定位涉及区域。该 HTML 沿用原优化结果报告中的布局图、样式和完整模块说明。
+- 界面布局、显示条件或职责发生变化时，更新命名源 `scripts/ui_module_registry.py`，再从项目根目录运行 `src-python/.venv/Scripts/python.exe scripts/build_optimization_results.py`，同步生成 `docs/ui-layout.html` 和优化结果报告并校验源码锚点。
+- `docs/ui-layout.html` 为生成文档，不直接手改；现有模块编号不随位置调整而改变。
+
 ## 常用命令
 
 ### 一键启动

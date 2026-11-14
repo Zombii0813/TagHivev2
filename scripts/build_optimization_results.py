@@ -1,4 +1,4 @@
-"""生成分阶段优化结果 HTML，内嵌截图并保留验证边界。"""
+"""生成优化结果报告及独立的界面布局 HTML，保留原报告布局图与模块说明。"""
 
 import base64
 import hashlib
@@ -11,7 +11,7 @@ from ui_module_registry import MODULE_GROUPS, NAMING_RULES, REQUEST_EXAMPLES
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
 OUT = REPORTS / "taghive-optimization-results-2026-11-12.html"
-UI_DOC = ROOT / "UI-MODULES.md"
+UI_DOC = ROOT / "docs" / "ui-layout.html"
 
 # 编号沿用原报告；结果描述针对最终实施方案，未实测的验收条件单列。
 ITEMS = [
@@ -32,7 +32,7 @@ ITEMS = [
     ("R14", "B", "缩略图优先级与去重", "仅在有空闲 worker 时派发；按文件版本和尺寸去重、提升优先级；视口外 medium 排队请求淘汰，失败缓存 30 秒且有上限。", "阻塞 worker 测优先级、去重、视口淘汰、负缓存。未补做连续滚过 2000 项的就绪 P95。", "src-python/app/core/async_thumbnail.py", "def _process_queue"),
     ("R16", "B", "扫描串行、取消与跳过未变更", "未变化文件零 UPDATE；手动扫描全局串行、去重排队、UUID 标识、限频进度和 remaining 余量；支持取消并跳过过期索引清理。", "零 UPDATE、取消保留索引、队列串行/余量/取消测试。保留快速计数预遍历，尚未合并为单遍；未测 10 万真实文件首扫/重扫。", "src-python/app/api/websocket.py", "async def start_scan"),
     ("R18", "B", "刷新保留加载深度与滚动", "变更路径仅标脏相关工作区标签页，非活动页惰性刷新；500ms 合并事件，成功后替换结果，按已加载条数重新取数并恢复滚动。", "无关工作区不请求；1500 条加载深度及 7200px 滚动恢复回归。未改为逐行增量协议。", "src-ui/src/stores/files.ts", "async function refreshChangedPaths"),
-    ("L02", "B", "筛选、浏览与选择分层", "主工具栏按空间换行；内容区显示范围/关键词/类型/标签摘要及清除入口，选择操作放在文件区上方，底栏显示统计。", "三档布局与浏览模式切换检查；保留可见重扫和卡片大小入口，以两行布局解决拥挤。", "src-ui/src/views/MainLayout.vue", 'class="filter-summary"'),
+    ("L02", "B", "筛选与选择共用稳定上下文栏", "文件区上方常驻 40px 上下文栏，范围/筛选与选择操作原位切换；筛选详情保留在浮层，窄窗操作收进更多；时长覆盖与扫描并入底部任务入口。", "隔离浏览器在 600/1000/1280/1680px 四档宽度验证 32 种状态，文件区顶部和高度不变，上下文栏 40px、底栏 36px，无横向溢出；切换排序后补探测仍可取消的回归通过。", "src-ui/src/components/BrowserContextBar.vue", 'class="browser-context-bar"'),
     ("L03", "B", "侧栏偏好与窗口恢复", "可访问分隔条支持拖动、方向键和双击恢复；宽度/显隐持久化。路径可展开复制；窗口保存正常尺寸、位置、最大化，恢复时适配当前工作区和缩放。", "浏览器分隔条 240→224→240；Rust 检查和 3 个边界测试覆盖小屏、断开显示器及负坐标。原生重启、多屏及 125%/150% DPI 仍需实机验收。", "src-tauri/src/window_state.rs", "pub fn restore"),
     ("L04", "B", "多选时显示最后点选的文件详情", "按用户偏好，多选时右侧显示最后点选文件的预览、属性和标签；右侧标签编辑仅作用于该文件。上方操作条处理批量标签和删除，底栏保留加载量与总数。", "实际组件渲染和 actions 验证连续多选、媒体信息、旧请求丢弃及单文件标签保存；保留全部选择。", "src-ui/src/views/DetailPanel.vue", "const selectedFile"),
     ("L05", "B", "文件与标签页键盘操作", "标签页采用 tablist/tab、方向/Home/End/新增原生按钮；文件 roving focus、方向/Space/Enter，补齐 F2/Delete/Esc，快捷键避开输入框及弹窗。", "浏览器验证标签切换、方向键、F2、Delete 确认、Esc；未以读屏工具及长距离虚拟滚动完成整套验收。", "src-ui/src/composables/useFileNavigation.ts", "export function useFileNavigation"),
@@ -95,17 +95,16 @@ def card(item):
 
 
 def module_reference():
-    """从同一命名表生成布局图、HTML 索引及 Markdown 文档。
+    """从同一命名表生成原报告中的布局图及 HTML 模块索引。
 
     Returns:
-        HTML 模块章节、Markdown 文档及模块数量。
+        HTML 模块章节及模块数量。
 
     Raises:
         AssertionError: 编号、名称重复，父模块缺失或源码锚点失效。
     """
     modules = [row for _, rows in MODULE_GROUPS for row in rows]
     lookup = {row[0]: row for row in modules}
-    labels = {ident: f"{ident} {row[1]}" for ident, row in lookup.items()}
     assert len(lookup) == len(modules), "模块编号重复"
     assert len({row[1] for row in modules}) == len(modules), "模块名称重复"
     source_lines = {}
@@ -121,50 +120,21 @@ def module_reference():
         <div class="module-map-grip">{link('UI-12-01')}</div>
         <div class="module-map-center">
           <div>{link('UI-03')}<small>文件搜索 · 类型 · 排序 · 浏览模式 · 视图 · 密度</small></div>
-          <div>{link('UI-04')}</div><div class="conditional">{link('UI-05')} · 按需</div>
-          <div class="conditional">{link('UI-06')} · 按需</div><div class="conditional">{link('UI-07')} · 有选择时</div>
+          <div>{link('UI-04')}</div>
+          <div>{link('UI-06')} / {link('UI-07')}<small>共用固定 40px 上下文栏，按选择状态原位切换。</small></div>
           <div class="module-map-browser">{link('UI-08')}<p>{link('UI-08-01')} / {link('UI-08-02')}</p><p>{link('UI-08-05')} · {link('UI-08-06')}</p><p>{link('UI-08-07')} / {link('UI-08-08')}</p><small>路径与目录卡片用于资源管理器模式；导航窗按模式悬浮显示。</small></div>
-          <div class="conditional">{link('UI-10')} · 失败时</div><div>{link('UI-11')}</div>
+          <div class="conditional">{link('UI-10')} · 失败时</div><div>{link('UI-11')}<small>{link('UI-05')} · 与扫描共用任务入口</small></div>
         </div>
         <div class="module-map-grip">{link('UI-12-02')}</div>
         <div class="module-map-detail"><div>{link('UI-09')}</div>{link('UI-09-01')}{link('UI-09-02')}{link('UI-09-03')}<small>多选跟随最后点选文件；窄窗使用抽屉。</small></div>
       </div></div><figcaption>点击区域名称跳至模块索引。虚线区域按状态显示；布局图表示位置关系，浮动导航不占固定列。UI-12 为两侧面板调节条。</figcaption></figure>'''
-    markdown = [
-        "# TagHive 界面模块命名索引", "",
-        "命名版本：1 · 2026-11-12。后续修改可直接指定本页的固定编号或中文名称。", "",
-        "本页与 HTML 审查报告由 `scripts/ui_module_registry.py` 共用命名源数据生成。修改命名表后运行 `src-python/.venv/Scripts/python.exe scripts/build_optimization_results.py`，不要单独修改生成结果。源码行号为生成时定位。", "",
-        "## 使用约定", "", *[f"- {rule}" for rule in NAMING_RULES], "",
-        "## 布局位置速查", "", "```text",
-        labels["UI-01"],
-        f"├─ {labels['UI-02']}",
-        f"│  ├─ {labels['UI-02-01']}",
-        f"│  ├─ {labels['UI-02-02']}",
-        f"│  └─ {labels['UI-02-03']} / {labels['UI-02-08']}",
-        f"├─ {labels['UI-12-01']}",
-        "├─ 中央内容列（从上到下）",
-        f"│  ├─ {labels['UI-03']}",
-        f"│  ├─ {labels['UI-04']}",
-        f"│  ├─ {labels['UI-05']}（按需）",
-        f"│  ├─ {labels['UI-06']}（按需）",
-        f"│  ├─ {labels['UI-07']}（有选择时）",
-        f"│  ├─ {labels['UI-08']}",
-        f"│  ├─ {labels['UI-10']}（失败时）",
-        f"│  └─ {labels['UI-11']}",
-        f"├─ {labels['UI-12-02']}",
-        f"└─ {labels['UI-09']}（窄窗为抽屉）",
-        f"   ├─ {labels['UI-09-01']}",
-        f"   ├─ {labels['UI-09-02']}",
-        f"   └─ {labels['UI-09-03']}",
-        "```", "", "布局示意和完整条件请结合下表；并非所有区域同时出现。", "",
-    ]
     tables = []
     for title, rows in MODULE_GROUPS:
         table_rows = []
-        markdown.extend([f"## {title}", "", "| 编号 | 名称 | 位置、职责与显示条件 | 代码定位 |", "| --- | --- | --- | --- |"])
         for ident, name, purpose, visibility, refs in rows:
             if ident.startswith("UI-") and ident.count("-") == 2:
                 assert ident.rsplit("-", 1)[0] in lookup, f"缺少父模块：{ident}"
-            html_refs, md_refs = [], []
+            html_refs = []
             for path, needle in refs:
                 if path not in source_lines:
                     source_lines[path] = (ROOT / path).read_text(encoding="utf-8-sig").splitlines()
@@ -172,25 +142,21 @@ def module_reference():
                 assert matches, f"模块 {ident} 源码锚点失效：{path} / {needle}"
                 line = matches[0]
                 html_refs.append(f'<code>{esc(path)}:{line}</code><small>锚点：{esc(needle)}</small>')
-                md_refs.append(f'[{path}]({path}) L{line} · `{needle}`')
             table_rows.append(f'<tr id="{ident}"><td><code>{ident}</code></td><th scope="row">{esc(name)}</th><td>{esc(purpose)}<small>显示：{esc(visibility)}</small></td><td>{"<br>".join(html_refs)}</td></tr>')
-            markdown.append(f'| {ident} | {name} | {purpose}<br>显示：{visibility} | {"<br>".join(md_refs)} |')
         tables.append(f'<div class="module-group"><h3>{esc(title)}</h3><div class="table-scroll"><table class="module-table"><caption>{esc(title)} · 固定名称与代码定位</caption><thead><tr><th>编号</th><th>名称</th><th>位置、职责与显示条件</th><th>代码定位</th></tr></thead><tbody>{"".join(table_rows)}</tbody></table></div></div>')
-        markdown.append("")
-    markdown.extend(["## 需求表达示例", "", *[f"- {example}" for example in REQUEST_EXAMPLES], ""])
     rules = "".join(f'<li>{esc(rule)}</li>' for rule in NAMING_RULES)
     examples = "".join(f'<li>{esc(example)}</li>' for example in REQUEST_EXAMPLES)
     section = f'''<section id="modules" class="panel"><h2>界面模块命名与位置索引</h2><p>共 {len(modules)} 个区域、子模块及交互浮层，采用固定编号和中文名称。后续可直接指定模块名称或编号。</p>
       {layout}<h3>使用约定与名称区分</h3><ul>{rules}</ul>{''.join(tables)}
-      <h3>需求表达示例</h3><ul>{examples}</ul><p class="evidence">仓库索引：UI-MODULES.md。命名源：scripts/ui_module_registry.py；与本报告同时生成，源码路径和锚点在生成时校验。</p></section>'''
-    return section, "\n".join(markdown), len(modules)
+      <h3>需求表达示例</h3><ul>{examples}</ul><p class="evidence">独立界面布局说明：docs/ui-layout.html。命名源：scripts/ui_module_registry.py；与本报告同时生成，源码路径和锚点在生成时校验。</p></section>'''
+    return section, len(modules)
 
 
 def main():
     """生成 HTML 并检查编号完整性，不运行或修改应用数据。"""
     expected = {f"R{i:02}" for i in range(1, 20)} | {f"L{i:02}" for i in range(1, 7)}
     assert {item[0] for item in ITEMS} == expected and len(ITEMS) == 25
-    modules_html, modules_md, module_count = module_reference()
+    modules_html, module_count = module_reference()
     benchmark_path = REPORTS / "optimization-benchmark-2026-11-12.json"
     benchmark = json.loads(benchmark_path.read_text(encoding="utf-8")) if benchmark_path.exists() else None
     performance = '<p class="note">未找到基准 JSON，请先运行 scripts/benchmark_review.py。</p>'
@@ -211,22 +177,20 @@ def main():
         ("keyboard-delete.png", "最终快捷键补验：Delete 展示原目标名称清单；验证后取消，未删除样本。"),
     ])
     counts = {phase: sum(item[1] == phase for item in ITEMS) for phase in "ABC"}
-    body = TEMPLATE.replace("__CARDS__", "".join(card(item) for item in ITEMS))
+    body = TEMPLATE.replace("__STYLES__", DOCUMENT_STYLES).replace("__CARDS__", "".join(card(item) for item in ITEMS))
     body = body.replace("__MODULES__", modules_html)
     body = body.replace("__PERFORMANCE__", performance).replace("__SCREENSHOTS__", screenshots)
     for phase, count in counts.items():
         body = body.replace(f"__COUNT_{phase}__", str(count))
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(body, encoding="utf-8")
-    UI_DOC.write_text(modules_md, encoding="utf-8")
+    UI_DOC.parent.mkdir(parents=True, exist_ok=True)
+    UI_DOC.write_text(UI_TEMPLATE.replace("__STYLES__", DOCUMENT_STYLES).replace("__MODULES__", modules_html), encoding="utf-8")
     print(f"Generated {OUT} ({OUT.stat().st_size:,} bytes; 25 items)")
     print(f"Generated {UI_DOC} ({module_count} named modules)")
 
 
-TEMPLATE = r'''<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TagHive · 分阶段优化结果审查 · 2026-11-12</title>
-<style>
+DOCUMENT_STYLES = r'''
 :root{--bg:#f4f6fa;--ink:#1f2e42;--muted:#5a6879;--line:#dce3ed;--accent:#3154b5;--card:#fff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 system-ui,"Microsoft YaHei",sans-serif}a{color:var(--accent)}
 header{background:#132841;color:white;padding:44px max(24px,calc((100vw - 1120px)/2))}header p{max-width:900px;color:#c9d8eb}h1{font-size:32px;line-height:1.4;margin:8px 0 16px}h2{font-size:23px;margin:0 0 18px}h3{font-size:18px;margin:12px 0 6px}p{margin:8px 0}main{max-width:1168px;margin:auto;padding:28px 24px 60px}
@@ -237,7 +201,32 @@ nav{display:flex;gap:20px;flex-wrap:wrap;margin-top:20px}header a{color:#d5e2ff}
 @media(max-width:760px){h1{font-size:25px}.stats,.phases{grid-template-columns:repeat(2,1fr)}.phases .panel:last-child{grid-column:1/-1}.meta{flex-wrap:wrap}main{padding:20px 14px}article,.panel{padding:16px}}
 @media(max-width:760px){.module-table{min-width:720px}}
 @media print{body{background:white;font-size:11px}header{background:white;color:var(--ink);padding:12px}header p,header a{color:var(--muted)}main{padding:0;max-width:none}.controls,.review,nav,.print{display:none}article,figure{break-inside:avoid}.stats,.phases{gap:6px}section{margin:12px 0}details:not([open]){display:none}article[hidden]{display:block!important}}
-</style></head><body>
+'''
+
+
+UI_TEMPLATE = r'''<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TagHive · 界面布局说明</title>
+<style>__STYLES__</style></head><body>
+<header><span class="pill">界面布局 · 模块编号 v1</span><h1>TagHive 界面布局说明</h1>
+<p>迁移自 reports/taghive-optimization-results-2026-11-12.html 的界面模块章节，保留原有可点击布局图、模块说明、显示条件和代码定位。后续界面修改可直接指定模块编号及名称。</p>
+<nav><a href="#modules">布局图与模块索引</a><a href="#maintenance">后续修改与维护</a></nav></header>
+<main>__MODULES__
+<section id="maintenance" class="panel"><h2>后续修改与维护</h2>
+<ol><li>点击上方布局图定位区域，在模块表中确认职责、显示条件及源码锚点。</li>
+<li>描述需求时使用“编号 + 名称 + 目标行为 + 生效条件”，例如“UI-07 批量操作栏：窄窗时将删除放入更多菜单，保持固定栏高”。</li>
+<li>修改组件后，同步更新 <code>scripts/ui_module_registry.py</code> 中的位置、职责、显示条件及源码锚点。已有编号不随位置变化而改变，新增模块追加编号。</li>
+<li>从项目根目录运行以下命令，同步更新本页和优化结果报告；生成时会校验编号唯一性、父模块及源码锚点。</li></ol>
+<pre>src-python/.venv/Scripts/python.exe scripts/build_optimization_results.py</pre>
+<p>本页为生成文档，请修改命名源或生成脚本后重新生成。<code>docs/ui-layout.html</code> 纳入版本管理；完整优化结果报告仍输出到 <code>reports/taghive-optimization-results-2026-11-12.html</code>。</p>
+<p class="note">布局修改后检查长路径、筛选、单选/多选、窄窗菜单、详情抽屉及后台任务同时出现的状态。UI-06/07 共用 40px 上下文栏，底栏固定 36px；UI-05/06/07 的状态切换不应挤动文件区域。</p>
+</section></main><footer>TagHive · 界面布局与模块定位</footer></body></html>'''
+
+
+TEMPLATE = r'''<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TagHive · 分阶段优化结果审查 · 2026-11-12</title>
+<style>__STYLES__</style></head><body>
 <header><span class="pill">实施结果 · 2026-11-12</span><h1>TagHive 分阶段优化结果审查</h1><p>依据第二轮报告 R01–R19、L01–L06 完成三阶段核心改动。本文对照最终行为，保留性能取舍、测试证据及尚未实测的验收条件，并提供界面模块固定名称。原审查报告保持不变。</p><nav><a href="#phases">阶段结果</a><a href="#modules">界面模块命名</a><a href="#items">逐项审查</a><a href="#performance">容量数据</a><a href="#screenshots">布局证据</a><a href="#limits">验证边界</a><a href="#commits">提交建议</a></nav></header>
 <main><div class="stats"><div class="stat"><b>25 项</b><span>核心改动已实施</span></div><div class="stat"><b>108 + 15</b><span>Python / 前端回归通过</span></div><div class="stat"><b>3 项</b><span>Rust 窗口边界测试通过</span></div><div class="stat"><b>149 ms</b><span>100k 深页 P95（合成库）</span></div></div>
 <section id="phases"><h2>三个阶段的实施结果</h2><div class="phases"><div class="panel"><span class="pill">A · __COUNT_A__ 项</span><h3>正确性与可用性</h3><p>查询/选择隔离、异步快照、文件名、搜索语义、数据库迁移及缩略图修正；窄窗搜索恢复可用。</p></div><div class="panel"><span class="pill">B · __COUNT_B__ 项</span><h3>资源与操作流程</h3><p>队列上限与优先级、扫描串行取消、刷新位置保留、逐项删除和活动文件详情、侧栏及窗口偏好、键盘操作。</p></div><div class="panel"><span class="pill">C · __COUNT_C__ 项</span><h3>容量与视觉整理</h3><p>自然排序索引、稳定次序、封面限量、时长覆盖率与主动补探测，以及紧凑密度和减少动画。</p></div></div><p class="note">“已实施”表示下列最终方案已落地，不表示原报告每条建议及所有压力/实机验收均已完成。方案调整和验证缺口逐项列明；发布版本未变，代码未自动提交。</p></section>

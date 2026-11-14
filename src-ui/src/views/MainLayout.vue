@@ -266,31 +266,11 @@
 
       <!-- 浏览标签页栏 -->
       <BrowserTabsBar />
-      <DurationCoverage v-if="fileStore.sortBy === 'duration'" />
-      <div v-if="fileStore.activeTab.searchText || fileStore.activeTab.searchType || fileStore.activeTab.searchQuery.tags?.length" class="filter-summary">
-        <span>范围：{{ fileStore.activeTab.isGlobalView ? '全部工作区' : fileStore.currentFolderPath || appStore.currentWorkspace }}</span>
-        <span v-if="fileStore.activeTab.searchText">名称含 “{{ fileStore.activeTab.searchText }}”</span>
-        <span v-if="fileStore.activeTab.searchType">类型：{{ fileStore.activeTab.searchType }}</span>
-        <span v-if="fileStore.activeTab.searchQuery.tags?.length">{{ fileStore.activeTab.searchQuery.tags.length }} 个标签</span>
-        <el-button size="small" @click="clearFilters">清除筛选</el-button>
-      </div>
-          <div v-if="fileStore.selectedCount > 0" class="selection-toolbar" role="toolbar" aria-label="所选文件操作">
-            <span class="status-text">已选中 {{ fileStore.selectedCount }} 个 / 共 {{ fileStore.totalCount }} 个</span>
-            <span v-if="fileStore.hiddenSelectedCount" class="status-text">含 {{ fileStore.hiddenSelectedCount }} 项当前未显示</span>
-            <div class="status-bar-actions">
-              <el-button size="small" @click="batchOpsRef?.openAddTags()">
-                <el-icon><CollectionTag /></el-icon>
-                批量管理标签
-              </el-button>
-              <el-button size="small" type="danger" @click="batchOpsRef?.confirmDelete()">
-                <el-icon><Delete /></el-icon>
-                批量删除
-              </el-button>
-              <el-button size="small" @click="fileStore.selectAll()">全选已加载（{{ fileStore.files.length }}）</el-button>
-              <el-button size="small" @click="fileStore.clearSelection()">取消选择</el-button>
-            </div>
-          </div>
-
+      <BrowserContextBar
+        @clear-filters="clearFilters"
+        @manage-tags="batchOpsRef?.openAddTags()"
+        @delete-selected="batchOpsRef?.confirmDelete()"
+      />
 
       <!-- 文件浏览器 -->
       <div class="content-area">
@@ -304,28 +284,13 @@
       <!-- 底部状态栏 -->
       <footer class="status-bar">
         <div class="status-bar-left">
-          <!-- 扫描进度显示 -->
-          <div v-if="fileStore.isScanning" class="scan-progress-container">
-            <el-icon class="loading-icon"><Loading /></el-icon>
-            <span class="scan-text">扫描中</span>
-            <el-button size="small" @click="wsClient.cancelScan()">取消全部扫描</el-button>
-            <el-progress
-              :percentage="fileStore.scanProgress"
-              :show-text="false"
-              :stroke-width="4"
-              class="scan-progress-bar"
-            />
-            <span class="scan-count">{{ fileStore.scanCount }} / {{ fileStore.scanTotal }}</span>
-            <span v-if="fileStore.scanCurrentFile" class="scan-file" :title="fileStore.scanCurrentFile">
-              {{ truncateFileName(fileStore.scanCurrentFile) }}
-            </span>
-          </div>
-          <span v-else-if="fileStore.isLoading" class="status-text">
+          <BackgroundTasks />
+          <span v-if="fileStore.isLoading && !fileStore.isScanning" class="status-text loading-status">
             <el-icon class="loading-icon"><Loading /></el-icon> 加载中...
           </span>
         </div>
         <div class="status-bar-right">
-          <span class="status-text">已加载 {{ fileStore.files.length }} / 共 {{ fileStore.totalCount }} 个文件</span>
+          <span class="file-count" :title="`已加载 ${fileStore.files.length} / 共 ${fileStore.totalCount} 个文件`">已加载 {{ fileStore.files.length }} / 共 {{ fileStore.totalCount }} 个文件</span>
         </div>
       </footer>
     </main>
@@ -360,7 +325,6 @@
 <script setup lang="ts">
 import {
   CollectionTag,
-  Delete,
   Expand,
   Fold,
   Grid,
@@ -390,7 +354,8 @@ import { useAppStore } from '../stores/app'
 import { useFileStore } from '../stores/files'
 import { useTagStore } from '../stores/tags'
 import TagPanel from './TagPanel.vue'
-import DurationCoverage from '../components/DurationCoverage.vue'
+import BackgroundTasks from '../components/BackgroundTasks.vue'
+import BrowserContextBar from '../components/BrowserContextBar.vue'
 import SearchBar from '../components/SearchBar.vue'
 import BrowserTabsBar from '../components/BrowserTabsBar.vue'
 import { MAX_TABS } from '../stores/browserTabs'
@@ -856,14 +821,6 @@ onUnmounted(() => {
   for (const off of wsUnsubscribers) off()
   wsUnsubscribers.length = 0
 })
-
-// 截断文件名显示
-const truncateFileName = (path: string, maxLength: number = 30): string => {
-  if (path.length <= maxLength) return path
-  const fileName = path.split('/').pop() || path.split('\\').pop() || path
-  if (fileName.length <= maxLength) return fileName
-  return fileName.substring(0, maxLength - 3) + '...'
-}
 
 // 浏览模式选项：下拉横向图标选择（value 与 store 的 BrowseMode 一致）
 const browseModeOptions = [
@@ -1395,6 +1352,7 @@ function handleCollapsedTagClick(tagId: number) {
 /* ===== 内容区 ===== */
 .content-area {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
@@ -1422,22 +1380,20 @@ function handleCollapsedTagClick(tagId: number) {
   gap: 8px;
   flex: 1 1 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .status-bar-right {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 65%;
 }
 
-.status-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
+.file-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loading-status { flex-shrink: 0; }
 
 .status-text {
   display: flex;
@@ -1455,61 +1411,12 @@ function handleCollapsedTagClick(tagId: number) {
   to { transform: rotate(360deg); }
 }
 
-.scan-progress-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.scan-text {
-  white-space: nowrap;
-  color: var(--color-accent);
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.scan-progress-bar {
-  width: 100px;
-  flex-shrink: 0;
-}
-
-.scan-count {
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  flex-shrink: 0;
-}
-
-.scan-file {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* 占据剩余空间并允许压缩到 0；右侧按钮组宽度变化时不会再撑高状态栏 */
-  flex: 1 1 0;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  opacity: 0.8;
-}
-
 @media (max-width: 768px) {
   .status-bar {
     padding: 0 8px;
     font-size: 11px;
   }
 
-  .scan-progress-bar {
-    width: 60px;
-  }
-}
-
-@media (max-width: 480px) {
-  .scan-file {
-    display: none;
-  }
 }
 
 .toolbar.compact { height: auto; min-height: var(--header-height); flex-wrap: wrap; padding: 8px 12px; }
@@ -1522,9 +1429,6 @@ function handleCollapsedTagClick(tagId: number) {
 
 .panel-resizer { width: 5px; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; }
 .panel-resizer:hover, .panel-resizer:focus-visible { background: var(--color-accent); outline: none; }
-.filter-summary, .selection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
-.filter-summary { color: var(--color-text-secondary); }
-.selection-toolbar { background: var(--color-accent-light); }
 @media (max-width: 1279px) { .detail-resizer { display: none; } }
 </style>
 
