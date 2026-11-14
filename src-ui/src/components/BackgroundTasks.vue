@@ -1,5 +1,7 @@
 <template>
+  <Transition name="th-fade">
   <div v-if="store.isScanning || showDuration" class="background-tasks">
+    <!-- 任务入口随任务开始/结束淡入淡出（外层 Transition），避免状态栏左侧内容突然出现或消失 -->
     <el-popover placement="top-start" trigger="click" :width="340">
       <template #reference>
         <el-button class="task-entry" size="small" text :title="summary" :aria-label="`查看后台任务：${summary}`">
@@ -33,6 +35,7 @@
       </div>
     </el-popover>
   </div>
+  </Transition>
 </template>
 
 <script setup lang="ts">

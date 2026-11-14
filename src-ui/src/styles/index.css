@@ -50,6 +50,15 @@ body.taghive-lasso-active * {
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
+
+  /* 动效令牌：全应用统一的时长与缓动，新增过渡优先引用这里而不是写死数值 */
+  --motion-fast: 140ms;   /* 悬停、按压等即时反馈，以及退场 */
+  --motion-base: 220ms;   /* 局部内容切换 */
+  --motion-slow: 320ms;   /* 面板、抽屉等大块区域的进场 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);       /* 进场：快启慢停 */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);            /* 退场：慢启快走 */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);    /* 原地变化（宽度、颜色） */
+  --ease-spring: cubic-bezier(0.34, 1.32, 0.64, 1); /* 轻微回弹，仅用于小元素 */
 }
 
 /* 暗色主题 */
@@ -381,6 +390,45 @@ body.taghive-lasso-active * {
 .density-compact .file-card .tags-indicator { margin-top: 2px; min-height: 4px; }
 .density-compact .file-card { border-radius: 8px; box-shadow: none; }
 [role="option"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
+/* ===== 通用动效 =====
+ * th-* 关键帧只写 from：终点取元素自身样式，结束后不残留任何属性，
+ * 因此不会与内联 transform / opacity（如标签拖拽排序）互相覆盖。
+ * 位移使用独立的 translate 属性，同样是为了不占用 transform。 */
+@keyframes th-fade-in { from { opacity: 0; } }
+@keyframes th-rise-in { from { opacity: 0; translate: 0 6px; } }
+@keyframes th-drop-in { from { opacity: 0; translate: 0 -4px; } }
+@keyframes th-slide-in-left { from { opacity: 0; translate: -8px 0; } }
+@keyframes th-pop-in { from { opacity: 0; scale: 0.6; } }
+
+/* <Transition name="th-fade">：按需出现的小块内容淡入淡出 */
+.th-fade-enter-active { transition: opacity var(--motion-base) var(--ease-out); }
+.th-fade-leave-active { transition: opacity var(--motion-fast) var(--ease-in); }
+.th-fade-enter-from,
+.th-fade-leave-to { opacity: 0; }
+
+/* 弹窗与确认框：由下方轻微上浮并放大到位，替换 Element Plus 默认的自上而下 20px 位移。
+ * 退场时长须与遮罩一致，否则内容动画先结束会在遮罩淡出期间弹回原位。 */
+@keyframes th-dialog-in { from { opacity: 0; transform: translateY(12px) scale(0.97); } }
+@keyframes th-dialog-out { to { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.el-overlay.dialog-fade-enter-active .el-overlay-dialog,
+.el-overlay.fade-in-linear-enter-active .el-overlay-message-box {
+  animation: th-dialog-in var(--motion-slow) var(--ease-out);
+}
+.el-overlay.dialog-fade-leave-active { animation-duration: 180ms; }
+.el-overlay.fade-in-linear-leave-active { transition-duration: 180ms; }
+.el-overlay.dialog-fade-leave-active .el-overlay-dialog,
+.el-overlay.fade-in-linear-leave-active .el-overlay-message-box {
+  animation: th-dialog-out 180ms var(--ease-in) both;
+}
+
+/* 主题切换：整页交叉淡化（由 utils/motion.ts 的 runViewTransition 触发） */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: var(--ease-standard);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

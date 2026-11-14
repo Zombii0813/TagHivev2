@@ -146,7 +146,13 @@ function getTagColor(tagId: number): string {
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 只过渡视觉属性：transition: all 会把宽高也带上，拖动卡片大小滑块时卡片会滞后；
+     悬停/选中反馈也从 0.3s 收紧，跟手感更好 */
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-out);
   box-sizing: border-box;
   box-shadow: var(--shadow-sm);
 }
@@ -178,7 +184,8 @@ function getTagColor(tagId: number): string {
   border-radius: var(--radius-md);
   overflow: hidden;
   flex-shrink: 0;
-  transition: all 0.3s ease;
+  /* 仅过渡选中描边；宽高由卡片大小滑块实时驱动，不参与过渡 */
+  transition: box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .image-container {
@@ -349,5 +356,7 @@ function getTagColor(tagId: number): string {
 .check-icon {
   width: 12px;
   height: 12px;
+  /* 勾选时对勾带轻微回弹弹出 */
+  animation: th-pop-in var(--motion-base) var(--ease-spring);
 }
 </style>

@@ -1,18 +1,21 @@
 <template>
   <div class="browser-context-bar" :class="{ 'has-selection': fileStore.hasSelection }" :role="fileStore.hasSelection ? 'toolbar' : 'region'" :aria-label="fileStore.hasSelection ? '所选文件操作' : '当前范围与筛选'">
-    <div v-if="fileStore.hasSelection" class="selection-toolbar">
-      <div class="context-description" :title="selectionSummary">
-        <span class="selection-count">已选 {{ fileStore.selectedCount }} 项</span>
-        <span class="selection-total">/ 共 {{ fileStore.totalCount }} 项</span>
-        <span v-if="fileStore.hiddenSelectedCount" class="hidden-selection">含 {{ fileStore.hiddenSelectedCount }} 项未显示</span>
+    <!-- 选择态与筛选摘要原位互换：旧内容先上移淡出，新内容自下方滑入；栏高固定且裁剪溢出 -->
+    <Transition name="context-swap" mode="out-in">
+      <div v-if="fileStore.hasSelection" class="selection-toolbar">
+        <div class="context-description" :title="selectionSummary">
+          <span class="selection-count">已选 {{ fileStore.selectedCount }} 项</span>
+          <span class="selection-total">/ 共 {{ fileStore.totalCount }} 项</span>
+          <span v-if="fileStore.hiddenSelectedCount" class="hidden-selection">含 {{ fileStore.hiddenSelectedCount }} 项未显示</span>
+        </div>
       </div>
-    </div>
-    <div v-else class="filter-summary">
-      <span class="scope-text" :title="`范围：${scopeLabel}`">范围：{{ scopeLabel }}</span>
-      <span v-for="filter in filters" :key="filter.label" class="filter-chip" :title="`${filter.label}：${filter.value}`">
-        {{ filter.label }}：{{ filter.value }}
-      </span>
-    </div>
+      <div v-else class="filter-summary">
+        <span class="scope-text" :title="`范围：${scopeLabel}`">范围：{{ scopeLabel }}</span>
+        <span v-for="filter in filters" :key="filter.label" class="filter-chip" :title="`${filter.label}：${filter.value}`">
+          {{ filter.label }}：{{ filter.value }}
+        </span>
+      </div>
+    </Transition>
 
     <el-popover v-if="filters.length" placement="bottom-end" trigger="click" :width="320">
       <template #reference>
@@ -100,8 +103,20 @@ const selectionSummary = computed(() => `已选 ${fileStore.selectedCount} 项 /
   font-size: 12px;
   color: var(--color-text-secondary);
   overflow: hidden;
+  transition: background-color var(--motion-base) var(--ease-standard);
 }
 .browser-context-bar.has-selection { background: var(--color-accent-light); }
+
+/* 选择态 ↔ 筛选摘要互换（out-in）：退场要短，避免点选文件后计数出现得拖沓 */
+.context-swap-enter-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+.context-swap-leave-active { transition: opacity 90ms var(--ease-in), transform 90ms var(--ease-in); }
+.context-swap-enter-from { opacity: 0; transform: translateY(8px); }
+.context-swap-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* 右侧操作区随选择态出现时自右侧滑入 */
+@keyframes context-actions-in { from { opacity: 0; translate: 12px 0; } }
+.context-actions,
+.clear-filters-action { animation: context-actions-in var(--motion-base) var(--ease-out); }
 .filter-summary, .selection-toolbar, .context-description {
   display: flex;
   align-items: center;

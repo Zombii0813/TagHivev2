@@ -730,6 +730,7 @@ import { useTagStore } from '../stores/tags'
 import FileScrollerArea from '../components/FileScrollerArea.vue'
 import { useFileNavigation } from '../composables/useFileNavigation'
 import { fileNameError } from '../utils/fileNames'
+import { fadeInElement } from '../utils/motion'
 import FileCard from '../components/FileCard.vue'
 import FolderCard from '../components/FolderCard.vue'
 import HoneycombTree from '../components/HoneycombTree.vue'
@@ -1003,10 +1004,22 @@ const gridCellStyle = computed(() => ({
   width: `${gridItemWidth.value}px`
 }))
 
+// 容器宽度单次变化达到该值即视为「突变」（详情栏停靠/收起至少 285px，窗口最大化/还原同理）
+const WIDTH_JUMP_THRESHOLD = 120
+
 // 监听容器宽度变化
 function updateContainerWidth() {
-  if (scrollerRef.value) {
-    containerWidth.value = scrollerRef.value.clientWidth
+  const el = scrollerRef.value
+  if (!el) return
+  const previous = containerWidth.value
+  const next = el.clientWidth
+  containerWidth.value = next
+  // 网格按列数定宽并整行居中，宽度突变会让它换列并整体平移一次。
+  // 用一次淡入盖住这一帧的跳变；拖动窗口或调节条时的逐帧小幅变化不触发，避免持续闪烁。
+  // 列表视图只是行宽拉伸，没有跳变，不需要处理。
+  const isGrid = fileStore.viewMode === 'grid' || fileStore.browseMode === 'explorer'
+  if (isGrid && previous > 0 && Math.abs(next - previous) >= WIDTH_JUMP_THRESHOLD) {
+    fadeInElement(el)
   }
 }
 
@@ -1395,6 +1408,18 @@ watch(() => fileStore.browseMode, async (newMode) => {
     resizeObserver.observe(scrollerRef.value)
   }
 })
+
+// 文件区内容被整体替换（切换标签页 / 目录 / 排序 / 筛选 / 视图）时做一次淡入。
+// 以「首项标识」作为替换信号：触底追加只改变列表尾部，不会触发；
+// 滚动容器本身不重建（保留虚拟列表实例与滚动位置），因此用 JS 动画而非 key 重挂载。
+const contentSignature = computed(() => [
+  fileStore.activeTabId,
+  fileStore.browseMode,
+  fileStore.viewMode,
+  fileStore.files[0]?.id ?? '',
+  fileStore.childDirs[0]?.path ?? '',
+].join('|'))
+watch(contentSignature, () => fadeInElement(scrollerRef.value), { flush: 'post' })
 
 // 当选中数量归零时，自动退出多选模式
 watch(() => fileStore.selectedCount, (count) => {
@@ -2454,6 +2479,7 @@ async function handleExternalDrop(event: DragEvent) {
   font-weight: 600;
   pointer-events: none;
   z-index: 10;
+  animation: th-fade-in var(--motion-fast) var(--ease-out);
 }
 
 .empty-state {
@@ -2492,6 +2518,8 @@ async function handleExternalDrop(event: DragEvent) {
 .explorer-breadcrumb .crumb {
   display: inline-flex;
   align-items: center;
+  /* 进入下一级目录时，新增的路径段自左侧滑入（已有路径段按 path 复用，不重放） */
+  animation: th-slide-in-left var(--motion-base) var(--ease-out);
 }
 
 .crumb-label {
@@ -2555,6 +2583,7 @@ async function handleExternalDrop(event: DragEvent) {
   min-height: 240px;
   color: var(--color-text-tertiary);
   font-size: 14px;
+  animation: th-rise-in var(--motion-slow) var(--ease-out);
 }
 
 .explorer-sentinel {

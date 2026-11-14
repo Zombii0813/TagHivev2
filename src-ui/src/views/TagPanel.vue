@@ -129,9 +129,9 @@
             class="tag-expand-btn"
             @click.stop="tagStore.toggleExpand(node.tag.id)"
           >
-            <el-icon :size="10">
-              <ArrowDown v-if="tagStore.expandedTagIds.has(node.tag.id)" />
-              <ArrowRight v-else />
+            <!-- 单个箭头按展开状态旋转，代替两个图标互相替换 -->
+            <el-icon :size="10" class="tag-expand-icon" :class="{ expanded: tagStore.expandedTagIds.has(node.tag.id) }">
+              <ArrowRight />
             </el-icon>
           </span>
           <span v-else-if="!isManageMode && node.depth > 0" class="tag-child-indent"></span>
@@ -360,7 +360,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Plus, Close, Edit, Delete, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
+import { Plus, Close, Edit, Delete, ArrowRight, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTagStore } from '../stores/tags'
 import { useFileStore } from '../stores/files'
@@ -872,6 +872,7 @@ function handleManagePointerDown(tagId: number, event: PointerEvent) {
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.22);
     transition: none;
+    animation: none;
     transform: scale(1.03);
   `
   document.body.appendChild(ghost)
@@ -1354,6 +1355,9 @@ async function confirmDeleteTag() {
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.2s ease;
+  /* 条目出现（展开父标签、搜索结果变化、切换工作区）时自左侧滑入。
+     关键帧只有 from 且不保留结束态，不会覆盖管理模式拖拽排序写入的内联 transform/opacity。 */
+  animation: th-slide-in-left var(--motion-base) var(--ease-out);
 }
 
 .tag-item.manage-item {
@@ -1446,6 +1450,21 @@ async function confirmDeleteTag() {
 .tag-expand-btn:hover {
   background-color: var(--color-bg-tertiary);
   color: var(--color-text-primary);
+}
+
+.tag-expand-icon {
+  transition: transform var(--motion-base) var(--ease-out);
+}
+
+.tag-expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+/* 普通模式与管理模式切换时，各自的工具行自上方落入 */
+.tag-search,
+.tag-filter-mode,
+.manage-hint {
+  animation: th-drop-in var(--motion-base) var(--ease-out);
 }
 
 .tag-child-indent {

@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell" :class="{ 'density-compact': appStore.compactDensity }" :style="{ '--sidebar-width': appStore.sidebarWidth + 'px', '--detail-panel-width': appStore.detailWidth + 'px' }">
+  <div class="app-shell" :class="{ 'density-compact': appStore.compactDensity, 'is-resizing': resizing }" :style="{ '--sidebar-width': appStore.sidebarWidth + 'px', '--detail-panel-width': appStore.detailWidth + 'px' }">
     <AppMenuBar @command="handleMenuCommand" />
     <div class="main-layout" @dragover="handleLayoutDragOver">
     <!-- 侧边栏 -->
@@ -12,6 +12,7 @@
       </div>
 
       <!-- 工作区管理面板 -->
+      <Transition name="th-fade">
       <div class="workspace-panel" v-show="!appStore.sidebarCollapsed">
         <!-- 全局视图按钮 -->
         <div
@@ -25,7 +26,8 @@
           <span class="workspace-name">全局视图</span>
         </div>
 
-        <!-- 工作区列表 -->
+        <!-- 工作区列表：增删时条目展开/收起，其余条目随高度变化自然让位 -->
+        <TransitionGroup name="ws-item" tag="div" class="workspace-list">
         <div
           v-for="ws in appStore.workspaces"
           :key="ws"
@@ -50,6 +52,7 @@
             :title="'移除工作区'"
           />
         </div>
+        </TransitionGroup>
 
         <!-- 添加工作区按钮 -->
         <div class="workspace-add" @click="handleAddWorkspace" :title="'添加工作区'">
@@ -57,6 +60,7 @@
           <span>添加工作区</span>
         </div>
       </div>
+      </Transition>
 
       <div class="sidebar-content">
         <TagPanel />
@@ -277,17 +281,21 @@
         <BrowserView @delete-selected="batchOpsRef?.confirmDelete($event)" />
       </div>
 
-      <div v-if="fileStore.activeTab.queryError" class="query-error" role="alert">
-        {{ fileStore.activeTab.queryError }}
-        <el-button size="small" @click="fileStore.reloadCurrentView()">重试</el-button>
-      </div>
+      <Transition name="bar-expand">
+        <div v-if="fileStore.activeTab.queryError" class="query-error" role="alert">
+          {{ fileStore.activeTab.queryError }}
+          <el-button size="small" @click="fileStore.reloadCurrentView()">重试</el-button>
+        </div>
+      </Transition>
       <!-- 底部状态栏 -->
       <footer class="status-bar">
         <div class="status-bar-left">
           <BackgroundTasks />
-          <span v-if="fileStore.isLoading && !fileStore.isScanning" class="status-text loading-status">
-            <el-icon class="loading-icon"><Loading /></el-icon> 加载中...
-          </span>
+          <Transition name="th-fade">
+            <span v-if="fileStore.isLoading && !fileStore.isScanning" class="status-text loading-status">
+              <el-icon class="loading-icon"><Loading /></el-icon> 加载中...
+            </span>
+          </Transition>
         </div>
         <div class="status-bar-right">
           <span class="file-count" :title="`已加载 ${fileStore.files.length} / 共 ${fileStore.totalCount} 个文件`">已加载 {{ fileStore.files.length }} / 共 {{ fileStore.totalCount }} 个文件</span>
@@ -295,12 +303,15 @@
       </footer>
     </main>
 
-    <!-- 隐藏详情时卸载组件，释放媒体流与播放器资源。 -->
-    <div v-if="!isMobile && appStore.detailPanelVisible && fileStore.hasSelection" class="panel-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整详情宽度" aria-orientation="vertical" :aria-valuenow="appStore.detailWidth" :aria-valuemin="280" :aria-valuemax="480" @pointerdown="startResize('detail', $event)" @keydown="resizeKey('detail', $event)" @dblclick="appStore.detailWidth = 320" />
-    <DetailPanel
-      v-if="!isMobile && appStore.detailPanelVisible && fileStore.hasSelection"
-      class="visible"
-    />
+    <!-- 隐藏详情时卸载组件，释放媒体流与播放器资源。
+         调节条与面板同处一个停靠容器，进出场动画作用在容器上：
+         只做位移滑入/滑出，中列宽度在过程中只变化一次（见 .detail-slide-* 样式说明）。 -->
+    <Transition name="detail-slide">
+      <div v-if="detailShown" class="detail-dock">
+        <div class="panel-resizer detail-resizer" role="separator" tabindex="0" aria-label="调整详情宽度" aria-orientation="vertical" :aria-valuenow="appStore.detailWidth" :aria-valuemin="280" :aria-valuemax="480" @pointerdown="startResize('detail', $event)" @keydown="resizeKey('detail', $event)" @dblclick="appStore.detailWidth = 320" />
+        <DetailPanel class="visible" />
+      </div>
+    </Transition>
 
     <!-- 批量操作对话框 -->
     <BatchOperations ref="batchOpsRef" />
@@ -433,6 +444,12 @@ const toolbarWide = computed(() => toolbarWidth.value >= 840)
 // 检测是否为移动设备
 const isMobile = ref(false)
 
+// 详情栏是否显示：启用详情、有选择且非移动宽度
+const detailShown = computed(() => !isMobile.value && appStore.detailPanelVisible && fileStore.hasSelection)
+
+// 是否正在拖动面板调节条：期间关闭面板宽度过渡，保证宽度紧跟指针
+const resizing = ref(false)
+
 // 计算属性：根据屏幕宽度判断是否为移动设备
 const checkIsMobile = () => {
   isMobile.value = window.innerWidth < 768
@@ -494,8 +511,9 @@ function startResize(panel: 'sidebar' | 'detail', event: PointerEvent) {
   const width = panel === 'sidebar' ? appStore.sidebarWidth : appStore.detailWidth
   const target = event.currentTarget as HTMLElement
   target.setPointerCapture(event.pointerId)
+  resizing.value = true
   const move = (e: PointerEvent) => changePanelWidth(panel, width + (e.clientX - start) * (panel === 'detail' ? -1 : 1))
-  const stop = () => { target.removeEventListener('pointermove', move); target.removeEventListener('lostpointercapture', stop) }
+  const stop = () => { resizing.value = false; target.removeEventListener('pointermove', move); target.removeEventListener('lostpointercapture', stop) }
   target.addEventListener('pointermove', move)
   target.addEventListener('lostpointercapture', stop)
 }
@@ -881,6 +899,8 @@ function handleCollapsedTagClick(tagId: number) {
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
+  /* 详情停靠容器（抽屉形态与退场浮层）的定位基准，使其上缘紧贴菜单栏下方 */
+  position: relative;
 }
 
 /* ===== 工作区管理面板 ===== */
@@ -925,6 +945,38 @@ function handleCollapsedTagClick(tagId: number) {
   outline: 2px dashed var(--color-accent);
   outline-offset: -2px;
   background: var(--color-bg-secondary);
+}
+
+/* 工作区列表：TransitionGroup 的容器，沿用面板的纵向间距 */
+.workspace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 增删工作区：条目自左滑入并撑开高度 / 收起高度并淡出，相邻条目随之平滑让位 */
+.ws-item-enter-active,
+.ws-item-leave-active {
+  overflow: hidden;
+  transition:
+    max-height var(--motion-base) var(--ease-out),
+    padding var(--motion-base) var(--ease-out),
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+}
+
+.ws-item-enter-from,
+.ws-item-leave-to {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+.ws-item-enter-to,
+.ws-item-leave-from {
+  max-height: 40px;
 }
 
 .workspace-global {
@@ -1026,6 +1078,17 @@ function handleCollapsedTagClick(tagId: number) {
 
 .sidebar.collapsed {
   width: 56px;
+}
+
+/* 拖动调节条期间关闭宽度过渡：否则面板会滞后于指针 0.3s，拖起来发黏 */
+.app-shell.is-resizing .sidebar,
+.app-shell.is-resizing .detail-dock {
+  transition: none;
+}
+
+.app-shell.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar-header {
@@ -1327,6 +1390,13 @@ function handleCollapsedTagClick(tagId: number) {
   transform: translateY(-2px);
 }
 
+/* 按压反馈：按下瞬间回落并轻微收缩，松开后回到悬停的上浮态 */
+.toolbar :deep(.el-button:active),
+.view-mode-group :deep(.el-button.active:active) {
+  transform: translateY(0) scale(0.96);
+  transition-duration: 60ms;
+}
+
 /* 卡片大小滑块 */
 .size-slider-panel {
   display: flex;
@@ -1422,12 +1492,70 @@ function handleCollapsedTagClick(tagId: number) {
 .toolbar.compact { height: auto; min-height: var(--header-height); flex-wrap: wrap; padding: 8px 12px; }
 .toolbar.compact .toolbar-left { flex-basis: 100%; overflow: visible; }
 .toolbar.compact .toolbar-right { width: 100%; justify-content: flex-end; }
-.query-error { padding: 8px 16px; background: var(--color-bg-tertiary); color: var(--color-text-primary); }
-@media (max-width: 1279px) {
-  .main-layout > :deep(.detail-panel.visible) { position: absolute; right: 0; top: 32px; bottom: 0; z-index: 30; width: min(380px, 80vw); box-shadow: var(--shadow-xl); }
+.query-error { padding: 8px 16px; background: var(--color-bg-tertiary); color: var(--color-text-primary); flex-shrink: 0; }
+
+/* 查询提示栏：出现/消失时纵向展开/收起，文件区随之平滑让位而不是跳变 */
+.bar-expand-enter-active,
+.bar-expand-leave-active {
+  overflow: hidden;
+  transition:
+    max-height var(--motion-base) var(--ease-out),
+    padding var(--motion-base) var(--ease-out),
+    opacity var(--motion-base) var(--ease-out);
+}
+.bar-expand-enter-from,
+.bar-expand-leave-to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; }
+.bar-expand-enter-to,
+.bar-expand-leave-from { max-height: 72px; }
+
+/* ===== 详情停靠容器（UI-09 文件详情栏 + UI-12-02 详情宽度调节条） =====
+ * 宽度写在容器上而不是依赖内部面板：DetailPanel 为异步组件，首次打开时
+ * 面板尚未加载完成，容器也要先占好位，滑入过程才不会中途跳宽。 */
+.detail-dock {
+  display: flex;
+  flex-shrink: 0;
+  width: calc(var(--detail-panel-width) + 5px);
+  min-height: 0;
+  background: var(--color-bg-secondary);
+  /* 双击调节条恢复默认宽度、键盘步进时平滑过渡；指针拖动期间由 .is-resizing 关闭 */
+  transition: width var(--motion-base) var(--ease-standard);
+}
+.detail-dock :deep(.detail-panel.visible) { flex: 1 1 0; width: auto; min-width: 0; }
+
+/* 进出场只做位移，中列宽度在整个过程中只变化一次：
+ * - 进场：容器从第一帧起就占满最终宽度，中列一次性收窄，面板再滑入让出的空位；
+ * - 退场：容器脱离布局浮在右缘，中列一次性展开，面板在其上方滑出。
+ * 不能让中列宽度随动画逐帧变化：文件网格按列数定宽并整行居中，
+ * 连续变宽会让网格每帧重新居中（左右漂移），换列的那一帧整行宽度突变（瞬移）。
+ * 仅剩的那一次换列由 BrowserView 的文件区淡入盖住。 */
+.detail-slide-enter-active {
+  transition: transform var(--motion-slow) var(--ease-out), opacity var(--motion-base) var(--ease-out);
+}
+.detail-slide-leave-active {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 30;
+  transition: transform var(--motion-base) var(--ease-in), opacity var(--motion-base) var(--ease-in);
+}
+.detail-slide-enter-from,
+.detail-slide-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
 }
 
-.panel-resizer { width: 5px; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; }
+/* 抽屉形态：始终浮在中列之上，不参与布局 */
+@media (max-width: 1279px) {
+  .detail-dock { position: absolute; right: 0; top: 0; bottom: 0; z-index: 30; width: min(380px, 80vw); box-shadow: var(--shadow-xl); }
+  .detail-slide-enter-from,
+  .detail-slide-leave-to {
+    /* 多移出 24px，让投影一并离开视口 */
+    transform: translateX(calc(100% + 24px));
+  }
+}
+
+.panel-resizer { width: 5px; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; transition: background-color var(--motion-fast) ease; }
 .panel-resizer:hover, .panel-resizer:focus-visible { background: var(--color-accent); outline: none; }
 @media (max-width: 1279px) { .detail-resizer { display: none; } }
 </style>

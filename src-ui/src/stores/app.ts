@@ -1,6 +1,7 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
+import { runViewTransition } from '../utils/motion'
 
 export interface AppState {
   theme: 'light' | 'dark'
@@ -55,7 +56,12 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function toggleTheme() {
-    setTheme(theme.value === 'light' ? 'dark' : 'light')
+    const next = theme.value === 'light' ? 'dark' : 'light'
+    // 整页交叉淡化到新主题；等一次 nextTick 让依赖主题的图标/配色随新画面一起截取
+    runViewTransition(async () => {
+      setTheme(next)
+      await nextTick()
+    })
   }
 
   function toggleSidebar() {

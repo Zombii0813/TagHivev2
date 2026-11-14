@@ -39,8 +39,8 @@
         </div>
       </div>
 
-      <!-- 文件信息 -->
-      <div class="info">
+      <!-- 文件信息：以文件 id 为 key，切换活动文件时重放一次轻量的浮现动画 -->
+      <div class="info" :key="`info-${selectedFile.id}`">
         <!-- 文件名即「打开文件」入口：与下方路径点击打开目录形成一组对称操作，
              不占额外纵向空间，也避免与视频播放器控件区域争抢点击 -->
         <h3
@@ -103,7 +103,7 @@
       </div>
 
       <!-- 标签管理 -->
-      <div class="tags-section">
+      <div class="tags-section" :key="`tags-${selectedFile.id}`">
         <div class="section-header">
           <h4>标签</h4>
         </div>
@@ -464,7 +464,9 @@ async function saveTags() {
 
 <style scoped>
 .detail-panel {
-  /* 默认折叠（宽度为 0），通过 .visible 展开 */
+  /* 默认折叠（宽度为 0），通过 .visible 展开。
+     进出场滑动由 MainLayout 的 .detail-dock 容器负责，这里不再对宽度做过渡：
+     宽度过渡会让拖动调节条时面板滞后于指针。 */
   width: 0;
   flex-shrink: 0;
   border-left: 0px solid var(--color-border);
@@ -472,8 +474,6 @@ async function saveTags() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-              border-left-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .detail-panel.visible {
@@ -487,6 +487,25 @@ async function saveTags() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 内容浮现：面板滑入时属性区、标签区依次跟进；切换活动文件时（两者按文件 id 重建）
+   重放同一动画。起点保留部分不透明度，方向键连续切换文件时不至于整块闪烁。 */
+@keyframes detail-content-in {
+  from { opacity: 0.25; translate: 0 6px; }
+}
+
+.info,
+.tags-section {
+  animation: detail-content-in var(--motion-base) var(--ease-out) backwards;
+}
+
+.info { animation-delay: 30ms; }
+.tags-section { animation-delay: 80ms; }
+
+/* 图标预览（非图片/视频）出现时轻微弹出 */
+.icon-preview {
+  animation: th-pop-in var(--motion-base) var(--ease-spring);
 }
 
 .preview {
